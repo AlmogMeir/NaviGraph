@@ -1,0 +1,131 @@
+# NaviGraph Configuration - Basic Maze Example
+
+# Debug
+verbose: false
+
+# Data paths (relative to this config file)
+stream_path: ./data  # Directory containing video files
+keypoint_detection_file_path: ./data  # Directory containing .h5 files
+map_path: ./resources/maze_map.png
+
+# Output
+experiment_output_path: ./output
+
+# Running Mode
+system_running_mode: 'analyze'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations like 'calibrate&analyze'
+
+# Calibration parameters
+calibrator_parameters:
+  points_capture_parameters:
+    radius: 9
+    color: (208, 224, 64)  # Turquoise
+    thickness: 3
+
+  map_test_parameters:
+    radius: 9
+    color: (255, 0, 255)  # Pink
+    thickness: 3
+
+  registration_method: 'homography&ransac'  # Options: 'affine', 'homography', 'homography&ransac'
+  save_transform_matrix: true
+  path_to_save_calibration_files: ./data
+  pre_calculated_transform_matrix_path: ./data/calibration/transform_matrix.npy
+
+# Map settings
+map_settings:
+  segment_length: 86  # pixels
+  origin: (47, 40)  # top-left corner
+  grid_size: (17, 17)
+  pixel_to_meter: 2279.4117647058824
+
+# Location tracking settings
+location_settings:
+  bodypart: 'Nose'  # Which bodypart to track
+  likelihood: 0.3  # Confidence threshold
+
+# Graph visualization
+graph:
+  height: 7  # Binary tree height
+  draw:
+    with_labels: true
+    font_weight: 'bold'
+    node_size: 1000
+    font_size: 15
+  options:
+    static_node_color: '#C9D6E8'
+    static_edge_color: 'k'
+    dynamic_node_color: '#FF0000'
+    dynamic_edge_color: '#FF0000'
+    history_node_color: '#8b0000'
+    history_edge_color: '#8b0000'
+    dynamic_reward_node_color: '#7CFC00'
+    dynamic_reward_edge_color: '#7CFC00'
+    history_reward_node_color: '#228B22'
+    history_reward_edge_color: '#228B22'
+    edge_width: 10
+
+# Important tile IDs
+reward_tile_id: 273  # Tile ID for reward location
+learning_start_tile_id: 145  # Starting tile for learning sessions
+
+# Analysis metrics
+analyze:
+  metrics:
+    time_to_reward: 
+      func_name: 'time_a_to_b'
+      args: 
+        a: 145  # learning_start_tile_id
+        b: 273  # reward_tile_id
+    
+    velocity_to_reward:
+      func_name: 'velocity_a_to_b'
+      args:
+        a: 145
+        b: 273
+    
+    exploration_percentage:
+      func_name: 'exploration_percentage'
+    
+    topological_distance_to_reward:
+      func_name: 'num_nodes_in_path'
+      args:
+        a: 145
+        b: 273
+        min_frame_rep: 5
+    
+    exploration_to_reward:
+      func_name: 'num_nodes_in_path'
+      args:
+        a: 145
+        b: 273
+        mode: 'exploration'
+    
+    eureka_path_length:
+      func_name: 'shortest_path_from_a_to_b'
+      args:
+        a: 145
+        b: 273
+        levels: [5, 6]
+        strikes: 2
+
+  save_as_csv: true
+  save_as_pkl: true
+  save_raw_data_as_pkl: true
+
+# Visualization settings
+visualization:
+  show_visualization: true
+  record_visualization: false
+  fps: null  # Use original video FPS
+  resize: [800, 450]
+  
+  draw_map:
+    show: true
+    method: 'on_top'
+    frame_location: 'bottom_right'
+  
+  draw_tree:
+    show: false  # Tree visualization is computationally expensive
+    resize_factor: 1.0
+    method: 'side_by_side'
+    show_tree_only: false
