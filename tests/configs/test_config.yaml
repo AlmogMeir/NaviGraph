@@ -2,10 +2,10 @@
 verbose: False
 
 # General I/O
-project_local_data_path: &project_local_data_path '../demo_data'
+project_local_data_path: &project_local_data_path '../../examples/basic_maze/data'
 stream_path: *project_local_data_path # Folder path
 keypoint_detection_file_path: *project_local_data_path # Only .h5 files are supported, folder path
-map_path: '${project_local_data_path}/maze_map.png'
+map_path: '../../examples/basic_maze/resources/maze_map.png'
 
 # Running Mode
 system_running_mode: 'analyze' # Either 'calibrate', 'test', 'visualize', 'analyze' or a combination ex: 'calibrate&analyze'
@@ -26,7 +26,7 @@ calibrator_parameters:
   registration_method: 'homography&ransac'  # Either 'affine', 'homography', 'homography&ransac'
   save_transform_matrix: True
   path_to_save_calibration_files: *project_local_data_path
-  pre_calculated_transform_matrix_path: '${project_local_data_path}/calibration_files/transform_matrix.npy'
+  pre_calculated_transform_matrix_path: '../../examples/basic_maze/data/calibration/transform_matrix.npy'
 
 # Calculate for every new experiment
 map_settings:
