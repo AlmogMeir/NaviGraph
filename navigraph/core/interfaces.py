@@ -16,6 +16,14 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING, Type, TypeVar
 import pandas as pd
 from loguru import logger
 
+# Import standardized exceptions
+from .exceptions import (
+    DataSourceIntegrationError,
+    DataSourcePrerequisiteError, 
+    SharedResourceError,
+    VisualizationError
+)
+
 if TYPE_CHECKING:
     from .session import Session
 
@@ -25,25 +33,8 @@ Logger = type(logger)
 # Type variable for factory methods
 T = TypeVar('T')
 
-
-class NavigraphPluginError(Exception):
-    """Base exception for all NaviGraph plugin errors."""
-    pass
-
-
-class DataSourceIntegrationError(NavigraphPluginError):
-    """Raised when data source integration fails."""
-    pass
-
-
-class PluginPrerequisiteError(NavigraphPluginError):
-    """Raised when plugin prerequisites are not met."""
-    pass
-
-
-class SharedResourceError(NavigraphPluginError):
-    """Raised when shared resource operations fail."""
-    pass
+# Legacy aliases for backward compatibility
+PluginPrerequisiteError = DataSourcePrerequisiteError
 
 
 class IDataSource(ABC):

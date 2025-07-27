@@ -21,15 +21,15 @@ from loguru import logger
 # Type alias for logger
 Logger = type(logger)
 
-from .interfaces import NavigraphPluginError
+from .exceptions import NavigraphError
 
 
-class SessionDiscoveryError(NavigraphPluginError):
+class SessionDiscoveryError(NavigraphError):
     """Raised when session discovery fails."""
     pass
 
 
-class FileDiscoveryError(NavigraphPluginError):
+class FileDiscoveryError(NavigraphError):
     """Raised when file discovery encounters issues."""
     pass
 

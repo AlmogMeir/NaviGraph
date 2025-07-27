@@ -15,14 +15,17 @@ from loguru import logger
 # Type alias for logger
 Logger = type(logger)
 
-from .interfaces import IDataSource, DataSourceIntegrationError, PluginPrerequisiteError
+from .interfaces import IDataSource
+from .exceptions import (
+    DataSourceIntegrationError,
+    DataSourcePrerequisiteError,
+    SessionInitializationError
+)
 from .registry import PluginRegistry, registry
 from .file_discovery import FileDiscoveryEngine
 
 
-class SessionInitializationError(Exception):
-    """Raised when session initialization fails."""
-    pass
+# SessionInitializationError now imported from exceptions module
 
 
 class Session:
@@ -586,7 +589,7 @@ class Session:
             if not ds_instance.validate_session_prerequisites(current_dataframe, self.shared_resources):
                 error_message = f"Prerequisites not met for data source '{ds_name}'"
                 self.logger.error(error_message)
-                raise PluginPrerequisiteError(error_message)
+                raise DataSourcePrerequisiteError(error_message)
             
             # Add discovered file path to configuration
             if ds_name in self._discovered_file_paths:

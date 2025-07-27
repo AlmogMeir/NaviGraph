@@ -21,24 +21,16 @@ from loguru import logger
 Logger = type(logger)
 
 from .interfaces import (
-    IDataSource, ISharedResource, IAnalyzer, IVisualizer, IGraphProvider,
-    NavigraphPluginError
+    IDataSource, ISharedResource, IAnalyzer, IVisualizer, IGraphProvider
+)
+from .exceptions import (
+    PluginRegistrationError,
+    PluginNotFoundError,
+    PluginValidationError
 )
 
 
-class PluginRegistrationError(NavigraphPluginError):
-    """Raised when plugin registration fails."""
-    pass
-
-
-class PluginNotFoundError(NavigraphPluginError):
-    """Raised when requested plugin is not found."""
-    pass
-
-
-class PluginValidationError(NavigraphPluginError):
-    """Raised when plugin validation fails."""
-    pass
+# Exception classes are now imported from exceptions module
 
 
 class PluginRegistry:
