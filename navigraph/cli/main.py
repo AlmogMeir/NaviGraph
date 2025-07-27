@@ -57,6 +57,9 @@ def run(config_path: Path, mode: tuple, output: Optional[Path]):
         # Load configuration (preserving Hydra compatibility)
         config = OmegaConf.load(config_path)
         
+        # Add config directory for relative path resolution
+        config._config_dir = str(config_path.parent)
+        
         # Override mode if specified
         if mode:
             mode_string = '&'.join(mode)  # Join with & as in original system

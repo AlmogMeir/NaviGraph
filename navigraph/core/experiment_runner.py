@@ -57,8 +57,13 @@ class ExperimentRunner:
         self.config = config
         self.system_mode = config.get(SYSTEM_RUNNING_MODE_KEY, DEFAULT_RUNNING_MODE)
         
-        # Setup logging
+        # Resolve relative paths using config directory
+        config_dir = getattr(config, '_config_dir', None)
+        
+        # Setup logging with resolved output path
         output_path = config.get(OUTPUT_PATH, '.')
+        if config_dir and not os.path.isabs(output_path):
+            output_path = os.path.join(config_dir, output_path)
         if not os.path.exists(output_path):
             os.makedirs(output_path, exist_ok=True)
             
@@ -69,8 +74,10 @@ class ExperimentRunner:
         if config.get('verbose', False):
             logger.info("Verbose logging enabled")
         
-        # Initialize components
+        # Initialize components with resolved stream path
         stream_path = config.get(STREAM_PATH, '.')
+        if config_dir and not os.path.isabs(stream_path):
+            stream_path = os.path.join(config_dir, stream_path)
         self.file_discovery = FileDiscoveryEngine(stream_path, logger)
         self.sessions: List[Session] = []
         self.shared_resources: Dict[str, Any] = {}
@@ -94,11 +101,26 @@ class ExperimentRunner:
             if not stream_path or not detection_path:
                 raise ValueError("stream_path and keypoint_detection_file_path required in configuration")
             
+            # Resolve relative paths using config directory
+            config_dir = getattr(self.config, '_config_dir', None)
+            logger.debug(f"Config directory: {config_dir}")
+            logger.debug(f"Original stream_path: {stream_path}")
+            logger.debug(f"Original detection_path: {detection_path}")
+            
+            if config_dir:
+                if not os.path.isabs(stream_path):
+                    stream_path = os.path.join(config_dir, stream_path)
+                if not os.path.isabs(detection_path):
+                    detection_path = os.path.join(config_dir, detection_path)
+            
+            logger.debug(f"Resolved stream_path: {stream_path}")
+            logger.debug(f"Resolved detection_path: {detection_path}")
+            
             # Validate paths exist
             if not os.path.isdir(stream_path):
-                raise ValueError(f"Stream path does not exist: {stream_path}")
+                raise ValueError(f"Experiment directory does not exist: {stream_path}. Make sure the path is correct and accessible.")
             if not os.path.isdir(detection_path):
-                raise ValueError(f"Detection path does not exist: {detection_path}")
+                raise ValueError(f"Detection directory does not exist: {detection_path}. Make sure the path is correct and accessible.")
             
             # Find video files (preserving original logic)
             input_streams = []
@@ -161,24 +183,33 @@ class ExperimentRunner:
             # Initialize map provider
             if 'map_path' in self.config and 'map_settings' in self.config:
                 map_provider_class = registry.get_shared_resource_plugin('map_provider')
-                map_provider = map_provider_class()
+                
+                # Resolve relative map path
+                map_path = str(self.config.map_path)
+                if not os.path.isabs(map_path):
+                    # If config has a source path, resolve relative to config directory
+                    config_dir = getattr(self.config, '_config_dir', None)
+                    if config_dir:
+                        map_path = os.path.join(config_dir, map_path)
                 
                 map_config = {
-                    'map_path': self.config.map_path,
+                    'map_path': map_path,
                     'map_settings': dict(self.config.map_settings)
                 }
                 
-                map_provider.initialize_resource(map_config, logger)
+                # Use new factory pattern
+                map_provider = map_provider_class.from_config(map_config, logger)
                 self.shared_resources['maze_map'] = map_provider
                 logger.info("✓ Map provider initialized")
             
             # Initialize graph provider
             if 'graph' in self.config:
                 graph_provider_class = registry.get_shared_resource_plugin('graph_provider')
-                graph_provider = graph_provider_class()
                 
                 graph_config = dict(self.config.graph)
-                graph_provider.initialize_resource(graph_config, logger)
+                
+                # Use new factory pattern
+                graph_provider = graph_provider_class.from_config(graph_config, logger)
                 self.shared_resources['graph'] = graph_provider
                 logger.info("✓ Graph provider initialized")
             
@@ -186,14 +217,21 @@ class ExperimentRunner:
             calibration_config = self.config.get('calibrator_parameters', {})
             if calibration_config:
                 calibration_provider_class = registry.get_shared_resource_plugin('calibration_provider')
-                calibration_provider = calibration_provider_class()
+                
+                # Resolve relative calibration matrix path
+                matrix_path = calibration_config.get('pre_calculated_transform_matrix_path')
+                if matrix_path and not os.path.isabs(matrix_path):
+                    config_dir = getattr(self.config, '_config_dir', None)
+                    if config_dir:
+                        matrix_path = os.path.join(config_dir, matrix_path)
                 
                 calib_resource_config = {
-                    'pre_calculated_transform_matrix_path': calibration_config.get('pre_calculated_transform_matrix_path'),
+                    'pre_calculated_transform_matrix_path': matrix_path,
                     'transform_matrix': calibration_config.get('transform_matrix')
                 }
                 
-                calibration_provider.initialize_resource(calib_resource_config, logger)
+                # Use new factory pattern
+                calibration_provider = calibration_provider_class.from_config(calib_resource_config, logger)
                 self.shared_resources['calibration'] = calibration_provider
                 logger.info("✓ Calibration provider initialized")
             
@@ -214,10 +252,9 @@ class ExperimentRunner:
         try:
             for i, session_files in enumerate(discovered_sessions):
                 try:
-                    # Create session configuration
+                    # Create session configuration  
                     session_config = {
                         'data_sources': self._get_data_source_config(session_files),
-                        'shared_resources': self.shared_resources,
                         'session_settings': dict(self.config.get('location_settings', {})),
                         'analyze': dict(self.config.get('analyze', {})),
                         'reward_tile_id': self.config.get('reward_tile_id'),
@@ -226,6 +263,9 @@ class ExperimentRunner:
                     
                     # Create session
                     session = Session(session_config, logger)
+                    
+                    # Manually set the shared resources (they're already instantiated)
+                    session.shared_resources = self.shared_resources
                     self.sessions.append(session)
                     
                     logger.info(f"✓ Created session {i+1}/{len(discovered_sessions)}")
@@ -265,9 +305,9 @@ class ExperimentRunner:
                 # Run each analyzer plugin
                 for analyzer_name in available_analyzers:
                     try:
-                        # Get analyzer class and instantiate
+                        # Get analyzer class and instantiate using factory pattern
                         analyzer_class = registry.get_analyzer_plugin(analyzer_name)
-                        analyzer = analyzer_class()
+                        analyzer = analyzer_class.from_config({}, logger)
                         
                         # Run analysis
                         result = analyzer.analyze_session(session)
@@ -448,23 +488,34 @@ class ExperimentRunner:
         # DeepLabCut data source (if H5 file found)
         if 'h5_file' in session_files:
             data_sources.append({
-                'plugin_name': 'deeplabcut',
+                'name': 'deeplabcut',
+                'type': 'deeplabcut',
+                'required': True,
                 'discovered_file_path': session_files['h5_file'],
-                'bodypart': self.config.get('location_settings', {}).get('bodypart', 'nose'),
-                'likelihood_threshold': self.config.get('location_settings', {}).get('likelihood', 0.3)
+                'config': {
+                    'bodypart': self.config.get('location_settings', {}).get('bodypart', 'nose'),
+                    'likelihood_threshold': self.config.get('location_settings', {}).get('likelihood', 0.3)
+                }
             })
         
         # Map integration (if map provider available)
         if 'maze_map' in self.shared_resources:
             data_sources.append({
-                'plugin_name': 'map_integration'
+                'name': 'map_integration',
+                'type': 'map_integration',
+                'required': True,
+                'config': {}
             })
         
         # Graph integration (if graph provider available)
         if 'graph' in self.shared_resources:
             data_sources.append({
-                'plugin_name': 'graph_integration',
-                'reward_tile_id': self.config.get('reward_tile_id')
+                'name': 'graph_integration',
+                'type': 'graph_integration',
+                'required': False,
+                'config': {
+                    'reward_tile_id': self.config.get('reward_tile_id')
+                }
             })
         
         return data_sources

@@ -41,12 +41,18 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
         """Factory method to create calibration provider from configuration."""
         instance = cls(config, logger_instance)
         instance.initialize()
+        instance.initialize_resource()
         return instance
     
     def _validate_config(self) -> None:
         """Validate calibration provider configuration."""
         # No required config keys - calibration path can be provided later
         pass
+    
+    @property
+    def resource_type(self) -> str:
+        """Type identifier for this resource."""
+        return "calibration"
     
     def get_required_config_keys(self) -> list:
         """Return required configuration keys."""
@@ -92,7 +98,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
                     f"Transformation matrix must be 3x3, got shape: {self._transformation_matrix.shape}"
                 )
             
-            self._calibration_config = resource_config.copy()
+            self._calibration_config = self.config.copy()
             
             # Initialize point capture utility for interactive calibration
             self._point_capture_utility = PointCapture(self._calibration_config)
