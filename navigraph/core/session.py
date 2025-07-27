@@ -43,7 +43,13 @@ class Session:
         self.session_id = session_identifier or session_configuration.get('session_id', 'unknown_session')
         self.config = session_configuration
         self.shared_resources = session_configuration.get('shared_resources', {})
-        self.file_discovery = file_discovery_engine or FileDiscoveryEngine()
+        # Use provided file discovery engine or create a minimal one
+        if file_discovery_engine:
+            self.file_discovery = file_discovery_engine
+        else:
+            # Create minimal file discovery if not provided
+            experiment_path = session_configuration.get('experiment_path', '.')
+            self.file_discovery = FileDiscoveryEngine(experiment_path, logger_instance)
         self.registry = plugin_registry or registry  # Use global registry if not provided
         self.logger = logger_instance
         

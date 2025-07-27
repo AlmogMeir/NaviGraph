@@ -46,6 +46,16 @@ class SpatialMetricsAnalyzer(BasePlugin, IAnalyzer):
     plugin architecture.
     """
     
+    @property
+    def required_columns(self) -> List[str]:
+        """Required DataFrame columns for this analyzer."""
+        return ['tile_id']  # Minimum requirement for spatial analysis
+    
+    @property
+    def analyzer_type(self) -> str:
+        """Type of analyzer: supports both session and cross-session analysis."""
+        return 'both'
+    
     @classmethod
     def from_config(cls, config: Dict[str, Any], logger_instance = None):
         """Factory method to create spatial metrics analyzer from configuration."""
