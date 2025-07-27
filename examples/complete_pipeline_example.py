@@ -98,18 +98,25 @@ def create_mock_experiment_data(experiment_path: Path, num_sessions: int = 3):
         
         print(f"  Created {session_id}: {n_frames} frames")
     
-    # Create mock maze map configuration
-    map_config = {
-        "segment_length": 100,
-        "origin": [0, 0],
-        "grid_size": [4, 4],
-        "pixel_to_meter": 100.0
-    }
+    # Create mock maze map image (4x4 grid, 100px per tile)
+    import cv2
+    map_height, map_width = 400, 400  # 4x4 grid with 100px tiles
+    map_image = np.ones((map_height, map_width, 3), dtype=np.uint8) * 255  # White background
     
-    # Save configuration
-    import json
-    with open(shared_resources_path / "maze_config.json", 'w') as f:
-        json.dump(map_config, f, indent=2)
+    # Draw grid lines
+    for i in range(5):  # 5 lines for 4x4 grid
+        x = i * 100
+        y = i * 100
+        cv2.line(map_image, (x, 0), (x, map_height), (0, 0, 0), 2)  # Vertical lines
+        cv2.line(map_image, (0, y), (map_width, y), (0, 0, 0), 2)   # Horizontal lines
+    
+    # Add some colored tiles for visual interest
+    cv2.rectangle(map_image, (0, 0), (100, 100), (255, 0, 0), -1)      # Red bottom-left
+    cv2.rectangle(map_image, (300, 300), (400, 400), (0, 255, 0), -1)  # Green top-right
+    
+    # Save map image
+    map_image_path = shared_resources_path / "maze_map.png"
+    cv2.imwrite(str(map_image_path), map_image)
     
     print("Mock experiment data created successfully!")
 
@@ -149,14 +156,20 @@ def create_experiment_configuration():
                 'name': 'maze_map',
                 'type': 'map_provider',
                 'config': {
-                    'map_path': 'shared_resources/maze_config.json'
+                    'map_path': 'shared_resources/maze_map.png',
+                    'map_settings': {
+                        'segment_length': 100,
+                        'origin': [0, 0],
+                        'grid_size': [4, 4],
+                        'pixel_to_meter': 100.0
+                    }
                 }
             },
             {
                 'name': 'graph',
                 'type': 'graph_provider', 
                 'config': {
-                    'tree_height': 3
+                    'height': 3
                 }
             }
         ],
@@ -228,6 +241,7 @@ def demonstrate_basic_pipeline(experiment_path: Path):
         # Create session configuration
         session_config = config.copy()
         session_config['session_id'] = session_folder
+        session_config['experiment_path'] = str(experiment_path)  # Add experiment path for file discovery
         
         # Add discovered file paths to data source configs
         for ds_config in session_config['data_sources']:
@@ -263,10 +277,10 @@ def demonstrate_analysis(sessions, config):
         return None
     
     # Create experiment runner
-    runner = ExperimentRunner(
-        experiment_config=config,
-        sessions=sessions
-    )
+    from omegaconf import DictConfig
+    experiment_config = DictConfig(config)
+    runner = ExperimentRunner(experiment_config)
+    runner.sessions = sessions  # Manually set sessions for example
     
     try:
         # Run analysis

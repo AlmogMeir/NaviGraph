@@ -16,7 +16,8 @@ import time
 # Import from local utils module
 from .utils import a_to_b, count_unique_type_specific_objects, Condition
 
-from ...core.interfaces import IAnalyzer
+from ...core.interfaces import IAnalyzer, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_analyzer_plugin
 from ...core.types import AnalysisResult, AnalysisMetadata
 from ...core.utils import compute_configuration_hash
@@ -39,7 +40,7 @@ condition = Condition(column_name=TREE_POSITION,
 
 
 @register_analyzer_plugin("exploration_metrics")
-class ExplorationMetricsAnalyzer(IAnalyzer):
+class ExplorationMetricsAnalyzer(BasePlugin, IAnalyzer):
     """Provides exploration analysis metrics: exploration patterns and node visits.
     
     This analyzer wraps the original exploration_percentage and avg_node_time methods,
@@ -57,9 +58,16 @@ class ExplorationMetricsAnalyzer(IAnalyzer):
         return 'both'
     
     @classmethod
-    def from_config(cls, config: Dict[str, Any], logger_instance=None):
+    def from_config(cls, config: Dict[str, Any], logger_instance: Logger = None):
         """Factory method to create exploration metrics analyzer from configuration."""
-        return cls()
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate exploration metrics analyzer configuration."""
+        # No required config keys for this analyzer
+        pass
     
     def analyze_session(self, session) -> AnalysisResult:
         """Analyze a single session for exploration metrics.

@@ -14,12 +14,13 @@ import numpy as np
 from typing import Dict, Any, List, Union, Tuple
 from pathlib import Path
 
-from ...core.interfaces import IDataSource, DataSourceIntegrationError
+from ...core.interfaces import IDataSource, DataSourceIntegrationError, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_data_source_plugin
 
 
 @register_data_source_plugin("graph_integration")
-class GraphIntegrationDataSource(IDataSource):
+class GraphIntegrationDataSource(BasePlugin, IDataSource):
     """Integrates graph-based spatial navigation data - requires tile_id from spatial sources.
     
     This plugin converts tile IDs to graph positions (nodes, edges) using the existing
@@ -32,6 +33,40 @@ class GraphIntegrationDataSource(IDataSource):
     - graph_edge: Specific graph edge tuple if position is an edge (None otherwise)
     - path_to_reward: Shortest path from current position to reward (if reward configured)
     """
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance: Logger = None):
+        """Factory method to create graph integration data source from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate graph integration configuration."""
+        # No required config keys for this plugin - uses shared resources
+        pass
+    
+    def get_provided_column_names(self) -> List[str]:
+        """Return column names this data source provides."""
+        return ['tree_position', 'graph_node', 'graph_edge', 'path_to_reward']
+    
+    def validate_session_prerequisites(
+        self, 
+        current_dataframe: pd.DataFrame, 
+        shared_resources: Dict[str, Any]
+    ) -> bool:
+        """Validate that prerequisites are met for graph integration."""
+        # Check for required tile_id column
+        if 'tile_id' not in current_dataframe.columns:
+            self.logger.error("Graph integration requires 'tile_id' column from map integration")
+            return False
+        
+        # Check for required shared resources
+        if 'graph' not in shared_resources:
+            self.logger.error("Graph integration requires 'graph' shared resource")
+            return False
+            
+        return True
     
     def integrate_data_into_session(
         self,

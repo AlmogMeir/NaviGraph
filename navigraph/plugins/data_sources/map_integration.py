@@ -14,12 +14,13 @@ import cv2
 from typing import Dict, Any, List
 from pathlib import Path
 
-from ...core.interfaces import IDataSource, DataSourceIntegrationError
+from ...core.interfaces import IDataSource, DataSourceIntegrationError, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_data_source_plugin
 
 
 @register_data_source_plugin("map_integration")
-class MapIntegrationDataSource(IDataSource):
+class MapIntegrationDataSource(BasePlugin, IDataSource):
     """Integrates spatial map data - requires keypoints and calibration.
     
     This plugin converts image coordinates from keypoint data to map coordinates
@@ -31,6 +32,42 @@ class MapIntegrationDataSource(IDataSource):
     - tile_id: Integer identifier of the spatial tile/region  
     - tile_bbox: Bounding box coordinates of the tile
     """
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance: Logger = None):
+        """Factory method to create map integration data source from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate map integration configuration."""
+        # No required config keys for this plugin - uses shared resources
+        pass
+    
+    def get_provided_column_names(self) -> List[str]:
+        """Return column names this data source provides."""
+        return ['map_x', 'map_y', 'tile_id', 'tile_bbox']
+    
+    def validate_session_prerequisites(
+        self, 
+        current_dataframe: pd.DataFrame, 
+        shared_resources: Dict[str, Any]
+    ) -> bool:
+        """Validate that prerequisites are met for map integration."""
+        # Check for required keypoint columns
+        required_columns = ['keypoints_x', 'keypoints_y']
+        for col in required_columns:
+            if col not in current_dataframe.columns:
+                self.logger.error(f"Map integration requires '{col}' column from previous data sources")
+                return False
+        
+        # Check for required shared resources
+        if 'maze_map' not in shared_resources:
+            self.logger.error("Map integration requires 'maze_map' shared resource")
+            return False
+            
+        return True
     
     def integrate_data_into_session(
         self,

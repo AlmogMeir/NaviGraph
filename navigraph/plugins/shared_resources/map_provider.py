@@ -71,6 +71,11 @@ class MapProviderResource(BasePlugin, ISharedResource):
                     "Map provider requires 'map_path' in configuration"
                 )
             
+            # Resolve relative paths using experiment path
+            if not os.path.isabs(map_path):
+                experiment_path = resource_config.get('experiment_path', '.')
+                map_path = os.path.join(experiment_path, map_path)
+            
             # Load map image
             if not os.path.isfile(map_path):
                 raise SharedResourceError(

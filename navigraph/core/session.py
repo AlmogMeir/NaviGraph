@@ -42,7 +42,41 @@ class Session:
         """Initialize session with data source orchestration."""
         self.session_id = session_identifier or session_configuration.get('session_id', 'unknown_session')
         self.config = session_configuration
-        self.shared_resources = session_configuration.get('shared_resources', {})
+        
+        # Set up basic attributes first
+        self.registry = plugin_registry or registry  # Use global registry if not provided
+        self.logger = logger_instance
+        
+        # Initialize shared resources from configuration
+        shared_resources_config = session_configuration.get('shared_resources', [])
+        self.shared_resources = {}
+        if isinstance(shared_resources_config, list):
+            # Process shared resources configuration list and instantiate plugins
+            for resource_config in shared_resources_config:
+                resource_name = resource_config.get('name')
+                resource_type = resource_config.get('type')
+                if resource_name and resource_type:
+                    try:
+                        # Get plugin class from registry and instantiate
+                        resource_class = self.registry.get_shared_resource_plugin(resource_type)
+                        
+                        # Add experiment path to resource config for path resolution
+                        resource_config_with_path = resource_config.get('config', {}).copy()
+                        resource_config_with_path['experiment_path'] = session_configuration.get('experiment_path', '.')
+                        
+                        resource_instance = resource_class.from_config(
+                            resource_config_with_path, 
+                            logger_instance
+                        )
+                        self.shared_resources[resource_name] = resource_instance
+                        self.logger.debug(f"Initialized shared resource: {resource_name} ({resource_type})")
+                    except Exception as e:
+                        self.logger.error(f"Failed to initialize shared resource '{resource_name}': {e}")
+                        # Don't fail session creation, just skip this resource
+        elif isinstance(shared_resources_config, dict):
+            # Legacy support - assume it's already instantiated resources
+            self.shared_resources = shared_resources_config
+        
         # Use provided file discovery engine or create a minimal one
         if file_discovery_engine:
             self.file_discovery = file_discovery_engine
@@ -50,8 +84,6 @@ class Session:
             # Create minimal file discovery if not provided
             experiment_path = session_configuration.get('experiment_path', '.')
             self.file_discovery = FileDiscoveryEngine(experiment_path, logger_instance)
-        self.registry = plugin_registry or registry  # Use global registry if not provided
-        self.logger = logger_instance
         
         # Lazy-loaded data - populated on first access
         self._integrated_dataframe: Optional[pd.DataFrame] = None
@@ -595,7 +627,8 @@ class Session:
             if not ds_instance.validate_session_prerequisites(current_dataframe, self.shared_resources):
                 error_message = f"Prerequisites not met for data source '{ds_name}'"
                 self.logger.error(error_message)
-                raise DataSourcePrerequisiteError(error_message)
+                # TODO: Get specific missing requirements from data source
+                raise DataSourcePrerequisiteError(ds_name, ["Requirements validation failed"])
             
             # Add discovered file path to configuration
             if ds_name in self._discovered_file_paths:

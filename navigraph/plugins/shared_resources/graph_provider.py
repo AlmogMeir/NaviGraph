@@ -80,7 +80,7 @@ class GraphProviderResource(BasePlugin, ISharedResource):
             # Get graph statistics
             n_nodes = len(self._graph_instance.tree.nodes())
             n_edges = len(self._graph_instance.tree.edges())
-            height = resource_config.get('height', getattr(graph_config.graph, 'height', 'Unknown'))
+            height = getattr(graph_config.graph, 'height', 'Unknown')
             
             self.logger.info(
                 f"✓ Graph provider initialized: {n_nodes} nodes, {n_edges} edges, "
@@ -158,9 +158,14 @@ class GraphProviderResource(BasePlugin, ISharedResource):
         class MockGraphConfig:
             def __init__(self, config_dict):
                 self.verbose = config_dict.get('verbose', False)
+                self._config_dict = config_dict  # Store original dict for .get() method
                 
                 # Create graph sub-config
                 self.graph = MockGraphSubConfig(config_dict)
+            
+            def get(self, key, default=None):
+                """Dictionary-like get method for compatibility."""
+                return self._config_dict.get(key, default)
         
         class MockGraphSubConfig:
             def __init__(self, config_dict):

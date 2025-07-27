@@ -13,13 +13,14 @@ from pathlib import Path
 import os
 import cv2
 
-from ...core.interfaces import ISharedResource, SharedResourceError  
+from ...core.interfaces import ISharedResource, SharedResourceError, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_shared_resource_plugin
 from .calibrator_utils import PointCapture
 
 
 @register_shared_resource_plugin("calibration_provider")
-class CalibrationProviderResource(ISharedResource):
+class CalibrationProviderResource(BasePlugin, ISharedResource):
     """Provides camera calibration and coordinate transformation utilities.
     
     This shared resource loads and manages camera calibration data needed for
@@ -27,39 +28,47 @@ class CalibrationProviderResource(ISharedResource):
     It preserves the existing calibration logic from the MapLabeler class.
     """
     
-    def __init__(self):
-        """Initialize empty calibration provider."""
+    def __init__(self, config: Optional[Dict[str, Any]] = None, logger_instance: Optional[Logger] = None):
+        """Initialize calibration provider."""
+        super().__init__(config, logger_instance)
         self._transformation_matrix = None
         self._calibration_config = None
-        self._initialized = False
         self._transform_matrix_path = None
         self._point_capture_utility = None
     
-    def initialize_resource(
-        self, 
-        resource_config: Dict[str, Any], 
-        logger
-    ) -> None:
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance: Logger = None):
+        """Factory method to create calibration provider from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate calibration provider configuration."""
+        # No required config keys - calibration path can be provided later
+        pass
+    
+    def get_required_config_keys(self) -> list:
+        """Return required configuration keys."""
+        return []  # Optional configuration
+    
+    def initialize_resource(self) -> None:
         """Initialize calibration provider with configuration.
         
-        Args:
-            resource_config: Configuration containing calibration parameters
-            logger: Logger for initialization messages
-            
         Raises:
             SharedResourceError: If initialization fails
         """
         try:
-            logger.info("Initializing calibration provider resource")
+            self.logger.info("Initializing calibration provider resource")
             
-            # Get transformation matrix
-            transform_matrix = resource_config.get('transform_matrix')
-            pre_calculated_path = resource_config.get('pre_calculated_transform_matrix_path')
+            # Get transformation matrix from config
+            transform_matrix = self.config.get('transform_matrix')
+            pre_calculated_path = self.config.get('pre_calculated_transform_matrix_path')
             
             if transform_matrix is not None:
                 # Use provided transformation matrix
                 self._transformation_matrix = np.array(transform_matrix)
-                logger.info("Using provided transformation matrix")
+                self.logger.info("Using provided transformation matrix")
                 
             elif pre_calculated_path is not None:
                 # Load from file (preserving existing logic)
@@ -69,7 +78,7 @@ class CalibrationProviderResource(ISharedResource):
                     )
                 
                 self._transformation_matrix = np.load(pre_calculated_path)
-                logger.info(f"Loaded transformation matrix from: {Path(pre_calculated_path).name}")
+                self.logger.info(f"Loaded transformation matrix from: {Path(pre_calculated_path).name}")
                 
             else:
                 raise SharedResourceError(
@@ -90,7 +99,7 @@ class CalibrationProviderResource(ISharedResource):
             
             self._initialized = True
             
-            logger.info(
+            self.logger.info(
                 f"✓ Calibration provider initialized: 3x3 transformation matrix loaded"
             )
             
@@ -99,9 +108,9 @@ class CalibrationProviderResource(ISharedResource):
                 f"Failed to initialize calibration provider: {str(e)}"
             ) from e
     
-    def cleanup_resource(self, logger) -> None:
+    def cleanup_resource(self) -> None:
         """Clean up calibration provider resources."""
-        logger.debug("Cleaning up calibration provider resource")
+        self.logger.debug("Cleaning up calibration provider resource")
         self._transformation_matrix = None
         self._calibration_config = None
         self._transform_matrix_path = None

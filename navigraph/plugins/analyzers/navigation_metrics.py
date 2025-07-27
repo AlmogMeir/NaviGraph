@@ -16,7 +16,8 @@ import time
 # Import from local utils module
 from .utils import a_to_b, count_unique_type_specific_objects, count_node_visits_eliminating_sequences, Condition
 
-from ...core.interfaces import IAnalyzer
+from ...core.interfaces import IAnalyzer, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_analyzer_plugin
 from ...core.types import AnalysisResult, AnalysisMetadata
 from ...core.utils import compute_configuration_hash
@@ -38,12 +39,34 @@ condition = Condition(column_name=TREE_POSITION,
 
 
 @register_analyzer_plugin("navigation_metrics")
-class NavigationMetricsAnalyzer(IAnalyzer):
+class NavigationMetricsAnalyzer(BasePlugin, IAnalyzer):
     """Provides navigation analysis metrics: path lengths and shortest path analysis.
     
     This analyzer wraps the original num_nodes_in_path and shortest_path_from_a_to_b methods,
     preserving all existing functionality while integrating with the new plugin architecture.
     """
+    
+    @property
+    def required_columns(self) -> List[str]:
+        """Required DataFrame columns for this analyzer."""
+        return ['tile_id', 'tree_position']  # Required for navigation analysis
+    
+    @property
+    def analyzer_type(self) -> str:
+        """Type of analyzer: supports both session and cross-session analysis."""
+        return 'both'
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance: Logger = None):
+        """Factory method to create navigation metrics analyzer from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate navigation metrics analyzer configuration."""
+        # No required config keys for this analyzer
+        pass
     
     def analyze_session(self, session) -> AnalysisResult:
         """Analyze a single session for navigation metrics.
