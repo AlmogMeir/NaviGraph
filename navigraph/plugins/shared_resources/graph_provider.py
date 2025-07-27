@@ -11,12 +11,13 @@ from typing import Dict, Any
 from .graph_module import Graph
 from .graph_dictionary import graph_dict
 
-from ...core.interfaces import ISharedResource, SharedResourceError  
+from ...core.interfaces import ISharedResource, SharedResourceError, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_shared_resource_plugin
 
 
 @register_shared_resource_plugin("graph_provider")
-class GraphProviderResource(ISharedResource):
+class GraphProviderResource(BasePlugin, ISharedResource):
     """Provides graph instance and spatial navigation utilities.
     
     This shared resource initializes the graph instance needed for spatial
@@ -24,16 +25,35 @@ class GraphProviderResource(ISharedResource):
     with the new plugin architecture.
     """
     
-    def __init__(self):
+    def __init__(self, config = None, logger_instance = None):
         """Initialize empty graph provider."""
+        super().__init__(config, logger_instance)
         self._graph_instance = None
         self._graph_config = None
-        self._initialized = False
+        self._resource_initialized = False
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance = None):
+        """Factory method to create graph provider from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        instance.initialize_resource(config, instance.logger)
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate graph provider configuration."""
+        # graph settings are optional - using defaults if not provided
+        pass
+    
+    @property
+    def resource_type(self) -> str:
+        """Type identifier for this resource."""
+        return "graph"
     
     def initialize_resource(
         self, 
         resource_config: Dict[str, Any], 
-        logger
+        logger: Logger
     ) -> None:
         """Initialize graph provider with configuration.
         
@@ -45,7 +65,7 @@ class GraphProviderResource(ISharedResource):
             SharedResourceError: If initialization fails
         """
         try:
-            logger.info("Initializing graph provider resource")
+            self.logger.info("Initializing graph provider resource")
             
             # Create a mock configuration for the Graph class
             # The original Graph class expects an OmegaConf DictConfig
@@ -55,14 +75,14 @@ class GraphProviderResource(ISharedResource):
             self._graph_instance = Graph(graph_config)
             self._graph_config = graph_config
             
-            self._initialized = True
+            self._resource_initialized = True
             
             # Get graph statistics
             n_nodes = len(self._graph_instance.tree.nodes())
             n_edges = len(self._graph_instance.tree.edges())
             height = resource_config.get('height', getattr(graph_config.graph, 'height', 'Unknown'))
             
-            logger.info(
+            self.logger.info(
                 f"✓ Graph provider initialized: {n_nodes} nodes, {n_edges} edges, "
                 f"height={height}"
             )
@@ -72,16 +92,16 @@ class GraphProviderResource(ISharedResource):
                 f"Failed to initialize graph provider: {str(e)}"
             ) from e
     
-    def cleanup_resource(self, logger) -> None:
+    def cleanup_resource(self, logger: Logger) -> None:
         """Clean up graph provider resources."""
-        logger.debug("Cleaning up graph provider resource")
+        self.logger.debug("Cleaning up graph provider resource")
         self._graph_instance = None
         self._graph_config = None
-        self._initialized = False
+        self._resource_initialized = False
     
     def is_initialized(self) -> bool:
         """Check if graph provider is initialized."""
-        return self._initialized
+        return self._resource_initialized
     
     def get_required_config_keys(self) -> list:
         """Return required configuration keys."""
@@ -96,7 +116,7 @@ class GraphProviderResource(ISharedResource):
         Raises:
             SharedResourceError: If not initialized
         """
-        if not self._initialized:
+        if not self._resource_initialized:
             raise SharedResourceError("Graph provider not initialized")
         return self._graph_instance
     
@@ -109,7 +129,7 @@ class GraphProviderResource(ISharedResource):
         Raises:
             SharedResourceError: If not initialized
         """
-        if not self._initialized:
+        if not self._resource_initialized:
             raise SharedResourceError("Graph provider not initialized")
         return self._graph_config
     
@@ -119,7 +139,7 @@ class GraphProviderResource(ISharedResource):
         Returns:
             Dictionary mapping tile IDs to graph positions
         """
-        if not self._initialized:
+        if not self._resource_initialized:
             raise SharedResourceError("Graph provider not initialized")
         return graph_dict
     

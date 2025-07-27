@@ -8,5 +8,6 @@ and shared resources.
 from . import data_sources
 from . import shared_resources
 from . import analyzers
+from . import visualizers
 
-__all__ = ["data_sources", "shared_resources", "analyzers"]
+__all__ = ["data_sources", "shared_resources", "analyzers", "visualizers"]

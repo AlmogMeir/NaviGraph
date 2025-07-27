@@ -53,6 +53,7 @@ class PluginRegistry:
         self._shared_resources: Dict[str, Type[ISharedResource]] = {}
         self._analyzers: Dict[str, Type[IAnalyzer]] = {}
         self._visualizers: Dict[str, Type[IVisualizer]] = {}
+        self._visualizers: Dict[str, Type[IVisualizer]] = {}
         self._graph_providers: Dict[str, Type[IGraphProvider]] = {}
         
         self.logger.debug("Initialized empty plugin registry")
@@ -180,6 +181,54 @@ class PluginRegistry:
             )
         
         return self._analyzers[plugin_name]
+    
+    def register_visualizer_plugin(self, plugin_name: str, plugin_class: Type[IVisualizer]) -> None:
+        """Register a visualizer plugin.
+        
+        Args:
+            plugin_name: Unique name for the visualizer plugin
+            plugin_class: Class implementing IVisualizer interface
+            
+        Raises:
+            PluginRegistrationError: If registration fails
+        """
+        self._validate_plugin_name(plugin_name)
+        self._validate_visualizer_interface(plugin_name, plugin_class)
+        
+        if plugin_name in self._visualizers:
+            self.logger.warning(f"Overriding existing visualizer plugin: {plugin_name}")
+        
+        self._visualizers[plugin_name] = plugin_class
+        self.logger.info(f"Registered visualizer plugin: {plugin_name}")
+    
+    def get_visualizer_plugin(self, plugin_name: str) -> Type[IVisualizer]:
+        """Get a visualizer plugin by name.
+        
+        Args:
+            plugin_name: Name of the visualizer plugin
+            
+        Returns:
+            Visualizer plugin class
+            
+        Raises:
+            PluginNotFoundError: If plugin not found
+        """
+        if plugin_name not in self._visualizers:
+            available_plugins = list(self._visualizers.keys())
+            raise PluginNotFoundError(
+                f"Visualizer plugin '{plugin_name}' not found. "
+                f"Available visualizer plugins: {available_plugins}"
+            )
+        
+        return self._visualizers[plugin_name]
+    
+    def list_visualizer_plugins(self) -> List[str]:
+        """List all registered visualizer plugins.
+        
+        Returns:
+            List of visualizer plugin names
+        """
+        return list(self._visualizers.keys())
 
     def _validate_data_source_interface(self, plugin_name: str, plugin_class: Type) -> None:
         """Validate that plugin class properly implements IDataSource interface."""
@@ -225,6 +274,22 @@ class PluginRegistry:
                 f"Make sure your class definition includes: class {plugin_class.__name__}(IAnalyzer)"
             )
     
+    def _validate_visualizer_interface(self, plugin_name: str, plugin_class: Type) -> None:
+        """Validate that plugin class properly implements IVisualizer interface."""
+        required_methods = {
+            'visualize': 'Visualization method missing',
+            'supported_formats': 'Supported formats property missing'
+        }
+        
+        self._validate_interface_methods(plugin_name, plugin_class, required_methods, "IVisualizer")
+        
+        # Validate it's actually a subclass of IVisualizer
+        if not issubclass(plugin_class, IVisualizer):
+            raise PluginValidationError(
+                f"Plugin '{plugin_name}' must inherit from IVisualizer. "
+                f"Make sure your class definition includes: class {plugin_class.__name__}(IVisualizer)"
+            )
+    
     def _validate_interface_methods(self, plugin_name: str, plugin_class: Type, 
                                    required_methods: Dict[str, str], interface_name: str) -> None:
         """Generic method to validate required methods exist on plugin class."""
@@ -264,6 +329,14 @@ def register_analyzer_plugin(plugin_name: str):
     """Decorator to register analyzer plugins."""
     def decorator(plugin_class):
         registry.register_analyzer_plugin(plugin_name, plugin_class)
+        return plugin_class
+    return decorator
+
+
+def register_visualizer_plugin(plugin_name: str):
+    """Decorator to register visualizer plugins."""
+    def decorator(plugin_class):
+        registry.register_visualizer_plugin(plugin_name, plugin_class)
         return plugin_class
     return decorator
 

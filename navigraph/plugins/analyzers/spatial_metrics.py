@@ -14,7 +14,8 @@ from functools import partial
 # Import from local utils module
 from .utils import a_to_b, count_unique_type_specific_objects, Condition
 
-from ...core.interfaces import IAnalyzer
+from ...core.interfaces import IAnalyzer, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_analyzer_plugin
 
 # Constants from original SessionAnalyzer
@@ -33,13 +34,25 @@ condition = Condition(column_name=TREE_POSITION,
 
 
 @register_analyzer_plugin("spatial_metrics")
-class SpatialMetricsAnalyzer(IAnalyzer):
+class SpatialMetricsAnalyzer(BasePlugin, IAnalyzer):
     """Provides spatial analysis metrics: time and velocity between locations.
     
     This analyzer wraps the original time_a_to_b and velocity_a_to_b methods,
     preserving all existing functionality while integrating with the new
     plugin architecture.
     """
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance = None):
+        """Factory method to create spatial metrics analyzer from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate spatial metrics analyzer configuration."""
+        # No required config keys for this analyzer
+        pass
     
     def analyze_session(self, session) -> Dict[str, Any]:
         """Analyze a single session for spatial metrics.

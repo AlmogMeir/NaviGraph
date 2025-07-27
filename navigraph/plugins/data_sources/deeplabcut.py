@@ -10,20 +10,35 @@ from typing import Dict, Any, List
 import os
 from pathlib import Path
 
-from ...core.interfaces import IDataSource, DataSourceIntegrationError
+from ...core.interfaces import IDataSource, DataSourceIntegrationError, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_data_source_plugin
 
 
 @register_data_source_plugin("deeplabcut")
-class DeepLabCutDataSource(IDataSource):
+class DeepLabCutDataSource(BasePlugin, IDataSource):
     """DeepLabCut keypoint data source - establishes primary temporal index."""
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance = None):
+        """Factory method to create DeepLabCut data source from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate DeepLabCut-specific configuration."""
+        # bodypart is optional, defaults to 'nose'
+        # likelihood_threshold is optional, defaults to 0.3
+        # No required config keys for this plugin
+        pass
     
     def integrate_data_into_session(
         self,
         current_dataframe: pd.DataFrame,
         session_config: Dict[str, Any],
         shared_resources: Dict[str, Any],
-        logger
+        logger: Logger
     ) -> pd.DataFrame:
         """Load DeepLabCut data and establish frame index structure."""
         h5_file_path = session_config.get('discovered_file_path')
@@ -36,18 +51,18 @@ class DeepLabCutDataSource(IDataSource):
         target_bodypart = session_config.get('bodypart', 'nose')
         likelihood_threshold = session_config.get('likelihood_threshold', 0.3)
         
-        logger.info(f"Loading DeepLabCut data from: {Path(h5_file_path).name}")
+        self.logger.info(f"Loading DeepLabCut data from: {Path(h5_file_path).name}")
         
         try:
             # Load DeepLabCut HDF5 file
             dlc_dataframe = pd.read_hdf(h5_file_path)
             
             # Extract session information (preserving existing logic)
-            session_metadata = self._extract_session_metadata(dlc_dataframe, logger)
+            session_metadata = self._extract_session_metadata(dlc_dataframe, self.logger)
             
             # Extract single bodypart data (existing behavior)
             processed_data = self._extract_single_bodypart_data(
-                dlc_dataframe, session_metadata, target_bodypart, likelihood_threshold, logger
+                dlc_dataframe, session_metadata, target_bodypart, likelihood_threshold, self.logger
             )
             
             # Create or merge with existing dataframe
@@ -55,16 +70,16 @@ class DeepLabCutDataSource(IDataSource):
                 # First data source - establish frame index (existing behavior)
                 integrated_dataframe = processed_data.copy()
                 integrated_dataframe.index.name = 'frame_number'
-                logger.info("Established primary frame index from DeepLabCut data")
+                self.logger.info("Established primary frame index from DeepLabCut data")
             else:
                 # This shouldn't happen if DeepLabCut is first, but handle gracefully
-                logger.warning("DeepLabCut data source is not first - this may cause issues")
+                self.logger.warning("DeepLabCut data source is not first - this may cause issues")
                 for column_name, column_data in processed_data.items():
                     current_dataframe[column_name] = column_data
                 integrated_dataframe = current_dataframe
             
             # Log success
-            logger.info(f"DeepLabCut integration complete: {len(processed_data.columns)} columns, {len(integrated_dataframe)} frames")
+            self.logger.info(f"DeepLabCut integration complete: {len(processed_data.columns)} columns, {len(integrated_dataframe)} frames")
             
             return integrated_dataframe
             
@@ -108,7 +123,7 @@ class DeepLabCutDataSource(IDataSource):
                 session_id = 'unknown_session'
                 bodyparts = ['unknown_bodypart']
                 coordinates = ['x', 'y', 'likelihood']
-                logger.warning("DeepLabCut file has unexpected column structure")
+                self.logger.warning("DeepLabCut file has unexpected column structure")
             
             metadata = {
                 'session_id': session_id,
@@ -118,7 +133,7 @@ class DeepLabCutDataSource(IDataSource):
                 'n_bodyparts': len(bodyparts)
             }
             
-            logger.debug(f"DeepLabCut metadata: {len(bodyparts)} bodyparts, {len(dlc_dataframe)} frames")
+            self.logger.debug(f"DeepLabCut metadata: {len(bodyparts)} bodyparts, {len(dlc_dataframe)} frames")
             
             return metadata
             
@@ -150,7 +165,7 @@ class DeepLabCutDataSource(IDataSource):
                 
                 if bodypart_matches:
                     actual_bodypart = bodypart_matches[0]
-                    logger.warning(f"Bodypart '{target_bodypart}' not found, using '{actual_bodypart}' instead")
+                    self.logger.warning(f"Bodypart '{target_bodypart}' not found, using '{actual_bodypart}' instead")
                 else:
                     raise DataSourceIntegrationError(
                         f"Bodypart '{target_bodypart}' not found in DeepLabCut data. "
@@ -163,7 +178,7 @@ class DeepLabCutDataSource(IDataSource):
             if isinstance(session_id, list):
                 # Multiple sessions - this is complex, use first one
                 session_id = session_id[0]
-                logger.warning(f"Multiple sessions in file, using: {session_id}")
+                self.logger.warning(f"Multiple sessions in file, using: {session_id}")
             
             bodypart_data = dlc_dataframe[session_id][actual_bodypart]
             
@@ -187,14 +202,14 @@ class DeepLabCutDataSource(IDataSource):
                 valid_frames = likelihood_mask.sum()
                 total_frames = len(likelihood_mask)
                 
-                logger.info(
+                self.logger.info(
                     f"Applied likelihood threshold {likelihood_threshold}: "
                     f"{valid_frames}/{total_frames} frames retained "
                     f"({valid_frames/total_frames*100:.1f}%)"
                 )
             else:
                 filtered_columns = keypoint_columns
-                logger.info("No likelihood filtering applied")
+                self.logger.info("No likelihood filtering applied")
             
             return pd.DataFrame(filtered_columns)
             

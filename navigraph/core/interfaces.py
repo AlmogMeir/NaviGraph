@@ -12,7 +12,7 @@ Key Design Principles:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, TYPE_CHECKING
+from typing import Dict, Any, List, Optional, TYPE_CHECKING, Type, TypeVar
 import pandas as pd
 from loguru import logger
 
@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 # Type alias for logger
 Logger = type(logger)
+
+# Type variable for factory methods
+T = TypeVar('T')
 
 
 class NavigraphPluginError(Exception):
@@ -62,10 +65,36 @@ class IDataSource(ABC):
     Example usage:
         @register_data_source_plugin("deeplabcut")
         class DeepLabCutSource(IDataSource):
+            @classmethod
+            def from_config(cls, config, logger=None):
+                return cls(config, logger)
+            
             def integrate_data_into_session(self, current_df, config, resources, logger):
                 # Load keypoint data and add columns
                 return updated_dataframe
     """
+    
+    @classmethod
+    @abstractmethod
+    def from_config(cls: Type[T], config: Dict[str, Any], logger: Optional[Logger] = None) -> T:
+        """Factory method to create data source instance from configuration.
+        
+        This method provides a clean way to instantiate data sources with
+        validated configuration. It should handle any complex initialization
+        logic and return a fully configured instance.
+        
+        Args:
+            config: Configuration dictionary for this data source
+            logger: Optional logger instance
+            
+        Returns:
+            Configured data source instance
+            
+        Raises:
+            ValueError: If configuration is invalid
+            FileNotFoundError: If required files are missing
+        """
+        pass
     
     @abstractmethod
     def integrate_data_into_session(
@@ -194,16 +223,39 @@ class ISharedResource(ABC):
     Example usage:
         @register_shared_resource_plugin("map_provider")
         class MapProvider(ISharedResource):
-            def initialize(self, config):
-                self.map_image = cv2.imread(config['map_path'])
+            @classmethod
+            def from_config(cls, config, logger=None):
+                instance = cls()
+                instance.initialize_resource(config, logger)
+                return instance
                 
-            def get_resource(self):
-                return self.map_labeler
+            def initialize_resource(self, config, logger):
+                self.map_image = cv2.imread(config['map_path'])
     """
     
+    @classmethod
+    @abstractmethod  
+    def from_config(cls: Type[T], config: Dict[str, Any], logger: Optional[Logger] = None) -> T:
+        """Factory method to create shared resource from configuration.
+        
+        Args:
+            config: Configuration for this shared resource
+            logger: Optional logger instance
+            
+        Returns:
+            Configured shared resource instance
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        pass
+    
     @abstractmethod
-    def initialize(self, config: Dict[str, Any], logger: Logger) -> None:
+    def initialize_resource(self, config: Dict[str, Any], logger: Logger) -> None:
         """Initialize the shared resource from configuration.
+        
+        Note: This method name changed from 'initialize' to 'initialize_resource'
+        to avoid confusion with BasePlugin.initialize().
         
         Args:
             config: Configuration dictionary with resource parameters.
@@ -216,11 +268,32 @@ class ISharedResource(ABC):
         pass
     
     @abstractmethod
-    def get_resource(self) -> Any:
-        """Get the initialized resource object.
+    def cleanup_resource(self, logger: Logger) -> None:
+        """Clean up the shared resource.
+        
+        This method is called when the resource is no longer needed.
+        Use it to release memory, close files, etc.
+        
+        Args:
+            logger: Logger instance for debugging.
+        """
+        pass
+    
+    @abstractmethod
+    def is_initialized(self) -> bool:
+        """Check if the resource is initialized and ready to use.
         
         Returns:
-            The resource object that will be used by sessions.
+            True if resource is initialized, False otherwise.
+        """
+        pass
+    
+    @abstractmethod
+    def get_required_config_keys(self) -> List[str]:
+        """Get list of required configuration keys.
+        
+        Returns:
+            List of configuration keys that must be present.
         """
         pass
     
@@ -247,11 +320,32 @@ class IAnalyzer(ABC):
     Example usage:
         @register_analyzer_plugin("spatial_metrics")
         class SpatialAnalyzer(IAnalyzer):
+            @classmethod
+            def from_config(cls, config, logger=None):
+                return cls(config, logger)
+                
             def analyze_session(self, session):
                 df = session.get_integrated_dataframe()
                 graph = session.get_graph_structure()
                 return {'time_to_reward': calculate_time(df)}
     """
+    
+    @classmethod
+    @abstractmethod
+    def from_config(cls: Type[T], config: Dict[str, Any], logger: Optional[Logger] = None) -> T:
+        """Factory method to create analyzer instance from configuration.
+        
+        Args:
+            config: Configuration dictionary for this analyzer
+            logger: Optional logger instance
+            
+        Returns:
+            Configured analyzer instance
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        pass
     
     @abstractmethod
     def analyze_session(self, session: "Session") -> Dict[str, Any]:
@@ -342,6 +436,23 @@ class IVisualizer(ABC):
     Visualizers create plots, animations, and other visual outputs from
     session data and analysis results.
     """
+    
+    @classmethod
+    @abstractmethod
+    def from_config(cls: Type[T], config: Dict[str, Any], logger: Optional[Logger] = None) -> T:
+        """Factory method to create visualizer instance from configuration.
+        
+        Args:
+            config: Configuration dictionary for this visualizer
+            logger: Optional logger instance
+            
+        Returns:
+            Configured visualizer instance
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        pass
     
     @abstractmethod
     def visualize(

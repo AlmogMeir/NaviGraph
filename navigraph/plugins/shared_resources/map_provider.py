@@ -11,12 +11,13 @@ from typing import Dict, Any
 from pathlib import Path
 import os
 
-from ...core.interfaces import ISharedResource, SharedResourceError  
+from ...core.interfaces import ISharedResource, SharedResourceError, Logger
+from ...core.base_plugin import BasePlugin
 from ...core.registry import register_shared_resource_plugin
 
 
 @register_shared_resource_plugin("map_provider")
-class MapProviderResource(ISharedResource):
+class MapProviderResource(BasePlugin, ISharedResource):
     """Provides maze map and spatial transformation utilities.
     
     This shared resource initializes the maze map image and configuration
@@ -24,16 +25,32 @@ class MapProviderResource(ISharedResource):
     the existing MapLabeler initialization logic.
     """
     
-    def __init__(self):
+    def __init__(self, config = None, logger_instance = None):
         """Initialize empty map provider."""
+        super().__init__(config, logger_instance)
         self._map_image = None
         self._map_config = None
-        self._initialized = False
+        self._resource_initialized = False
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any], logger_instance = None):
+        """Factory method to create map provider from configuration."""
+        instance = cls(config, logger_instance)
+        instance.initialize()
+        instance.initialize_resource(config, instance.logger)
+        return instance
+    
+    def _validate_config(self) -> None:
+        """Validate map provider configuration."""
+        required_keys = self.get_required_config_keys()
+        for key in required_keys:
+            if key not in self.config:
+                raise ValueError(f"Missing required config key: {key}")
     
     def initialize_resource(
         self, 
         resource_config: Dict[str, Any], 
-        logger
+        logger: Logger
     ) -> None:
         """Initialize map provider with configuration.
         
@@ -45,7 +62,7 @@ class MapProviderResource(ISharedResource):
             SharedResourceError: If initialization fails
         """
         try:
-            logger.info("Initializing map provider resource")
+            self.logger.info("Initializing map provider resource")
             
             # Get map image path
             map_path = resource_config.get('map_path')
@@ -76,9 +93,9 @@ class MapProviderResource(ISharedResource):
             # Parse map configuration (preserving existing structure)
             self._map_config = self._parse_map_settings(map_settings)
             
-            self._initialized = True
+            self._resource_initialized = True
             
-            logger.info(
+            self.logger.info(
                 f"✓ Map provider initialized: {Path(map_path).name} "
                 f"({self._map_image.shape[1]}x{self._map_image.shape[0]}) "
                 f"with {self._map_config['grid_size'][0]}x{self._map_config['grid_size'][1]} grid"
@@ -89,20 +106,25 @@ class MapProviderResource(ISharedResource):
                 f"Failed to initialize map provider: {str(e)}"
             ) from e
     
-    def cleanup_resource(self, logger) -> None:
+    def cleanup_resource(self, logger: Logger) -> None:
         """Clean up map provider resources."""
-        logger.debug("Cleaning up map provider resource")
+        self.logger.debug("Cleaning up map provider resource")
         self._map_image = None
         self._map_config = None
-        self._initialized = False
+        self._resource_initialized = False
     
     def is_initialized(self) -> bool:
         """Check if map provider is initialized."""
-        return self._initialized
+        return self._resource_initialized
     
     def get_required_config_keys(self) -> list:
         """Return required configuration keys."""
         return ['map_path', 'map_settings']
+    
+    @property
+    def resource_type(self) -> str:
+        """Type identifier for this resource."""
+        return "maze_map"
     
     def get_map_image(self) -> np.ndarray:
         """Get the loaded map image.
@@ -113,7 +135,7 @@ class MapProviderResource(ISharedResource):
         Raises:
             SharedResourceError: If not initialized
         """
-        if not self._initialized:
+        if not self._resource_initialized:
             raise SharedResourceError("Map provider not initialized")
         return self._map_image
     
@@ -126,7 +148,7 @@ class MapProviderResource(ISharedResource):
         Raises:
             SharedResourceError: If not initialized
         """
-        if not self._initialized:
+        if not self._resource_initialized:
             raise SharedResourceError("Map provider not initialized")
         return self._map_config.copy()
     
@@ -136,7 +158,7 @@ class MapProviderResource(ISharedResource):
         Returns:
             Dictionary with width, height
         """
-        if not self._initialized:
+        if not self._resource_initialized:
             raise SharedResourceError("Map provider not initialized")
         
         height, width = self._map_image.shape[:2]
