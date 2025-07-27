@@ -1,7 +1,6 @@
-"""Enhanced Session class for NaviGraph.
+"""Session class for NaviGraph.
 
-This module provides the core Session class that orchestrates multi-source data
-integration in configuration-specified order.
+Core session that orchestrates multi-source data integration.
 """
 
 from typing import Dict, List, Any, Optional, Tuple, Union
@@ -17,15 +16,13 @@ Logger = type(logger)
 
 from .interfaces import IDataSource
 from .exceptions import (
-    DataSourceIntegrationError,
-    DataSourcePrerequisiteError,
-    SessionInitializationError
+    DataSourceError,
+    NavigraphError
 )
 from .registry import PluginRegistry, registry
 from .file_discovery import FileDiscoveryEngine
 
 
-# SessionInitializationError now imported from exceptions module
 
 
 class Session:
@@ -110,7 +107,7 @@ class Session:
             self._initialize_session()
             self.logger.info(f"Initialized session: {self.session_id}")
         except Exception as e:
-            raise SessionInitializationError(
+            raise NavigraphError(
                 f"Failed to initialize session {self.session_id}: {str(e)}"
             ) from e
     
@@ -552,7 +549,7 @@ class Session:
     def _discover_session_files(self) -> None:
         """Discover files for this session using configured patterns."""
         if 'data_sources' not in self.config:
-            raise SessionInitializationError(
+            raise NavigraphError(
                 f"No data sources configured for session {self.session_id}. "
                 f"Make sure your configuration includes a 'data_sources' section."
             )
@@ -601,14 +598,14 @@ class Session:
                 
                 # Check if this is a required data source
                 if ds_config.get('required', True):
-                    raise SessionInitializationError(error_msg) from e
+                    raise NavigraphError(error_msg) from e
                 else:
                     self.logger.warning(f"Skipping optional data source: {ds_name}")
     
     def _integrate_all_data_sources(self) -> pd.DataFrame:
         """Sequentially integrate all data sources in configuration order."""
         if not self.data_source_instances:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 f"No data sources available for integration in session {self.session_id}"
             )
         
@@ -652,7 +649,7 @@ class Session:
                     f"Data source '{ds_name}' integration failed for session {self.session_id}: {str(e)}"
                 )
                 self.logger.error(error_message)
-                raise DataSourceIntegrationError(error_message) from e
+                raise DataSourceError(error_message) from e
         
         self._integrated_dataframe = current_dataframe
         

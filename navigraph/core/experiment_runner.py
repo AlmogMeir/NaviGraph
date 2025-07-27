@@ -1,9 +1,7 @@
-"""Experiment runner for NaviGraph plugin system.
+"""Experiment runner for NaviGraph.
 
-This module provides the main orchestration for running experiments with the new
-plugin architecture. It replaces the original Manager class while preserving
-all existing functionality and adding modern features like structured logging,
-progress tracking, and comprehensive error handling.
+Orchestrates experiment execution: session discovery, data integration, 
+analysis, and result output.
 """
 
 import os
@@ -19,10 +17,8 @@ from .file_discovery import FileDiscoveryEngine
 from .registry import registry
 from ..plugins import data_sources, shared_resources, analyzers
 
-# Import original components for backward compatibility (calibrator now migrated)
-# from calibrator.maze_calibrator import MazeCalibrator - MIGRATED TO PLUGIN
 
-# Constants from original Manager
+# Configuration constants
 DEFAULT_RUNNING_MODE = 'analyze'
 STREAM_PATH = 'stream_path'
 DETECTION_PATH = 'keypoint_detection_file_path'
@@ -38,15 +34,7 @@ SUPPORTED_VIDEO_FORMATS = ['*.mp4', '*.avi']
 
 
 class ExperimentRunner:
-    """Modern experiment runner with plugin architecture support.
-    
-    This class orchestrates the entire experiment pipeline:
-    1. File discovery and session detection
-    2. Shared resource initialization
-    3. Session data integration via plugins
-    4. Analysis execution via analyzer plugins
-    5. Result aggregation and output
-    """
+    """Orchestrates experiment execution: discovery, integration, analysis, output."""
     
     def __init__(self, config: DictConfig):
         """Initialize experiment runner with configuration.

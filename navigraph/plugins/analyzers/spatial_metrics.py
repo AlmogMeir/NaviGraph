@@ -1,8 +1,6 @@
 """Spatial metrics analyzer plugin for NaviGraph.
 
-This plugin wraps the spatial analysis functionality from the original SessionAnalyzer,
-preserving all existing behavior while adapting to the new plugin architecture.
-It provides time and velocity measurements between spatial locations.
+Computes time and velocity measurements between spatial locations.
 """
 
 from typing import Dict, Any, List
@@ -63,10 +61,6 @@ class SpatialMetricsAnalyzer(BasePlugin, IAnalyzer):
         instance.initialize()
         return instance
     
-    def _validate_config(self) -> None:
-        """Validate spatial metrics analyzer configuration."""
-        # No required config keys for this analyzer
-        pass
     
     def analyze_session(self, session) -> AnalysisResult:
         """Analyze a single session for spatial metrics.

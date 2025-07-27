@@ -1,10 +1,7 @@
 """Calibration provider shared resource for NaviGraph.
 
-This plugin provides camera calibration and coordinate transformation utilities,
-making transformation matrices available to data sources that need to convert
+Provides camera calibration and coordinate transformation matrices for converting
 between image coordinates and spatial coordinates.
-
-Includes full MazeCalibrator functionality migrated from calibrator/maze_calibrator.py.
 """
 
 import numpy as np
@@ -13,7 +10,8 @@ from pathlib import Path
 import os
 import cv2
 
-from ...core.interfaces import ISharedResource, SharedResourceError, Logger
+from ...core.interfaces import ISharedResource, Logger
+from ...core.exceptions import NavigraphError
 from ...core.base_plugin import BasePlugin
 from ...core.registry import register_shared_resource_plugin
 from .calibrator_utils import PointCapture
@@ -62,7 +60,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
         """Initialize calibration provider with configuration.
         
         Raises:
-            SharedResourceError: If initialization fails
+            NavigraphError: If initialization fails
         """
         try:
             self.logger.info("Initializing calibration provider resource")
@@ -79,7 +77,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             elif pre_calculated_path is not None:
                 # Load from file (preserving existing logic)
                 if not os.path.isfile(pre_calculated_path):
-                    raise SharedResourceError(
+                    raise NavigraphError(
                         f"Calibration file not found at path: {pre_calculated_path}"
                     )
                 
@@ -87,14 +85,14 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
                 self.logger.info(f"Loaded transformation matrix from: {Path(pre_calculated_path).name}")
                 
             else:
-                raise SharedResourceError(
+                raise NavigraphError(
                     "Calibration provider requires either 'transform_matrix' or "
                     "'pre_calculated_transform_matrix_path' in configuration"
                 )
             
             # Validate transformation matrix
             if self._transformation_matrix.shape != (3, 3):
-                raise SharedResourceError(
+                raise NavigraphError(
                     f"Transformation matrix must be 3x3, got shape: {self._transformation_matrix.shape}"
                 )
             
@@ -110,7 +108,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             )
             
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Failed to initialize calibration provider: {str(e)}"
             ) from e
     
@@ -138,10 +136,10 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             3x3 transformation matrix for coordinate conversion
             
         Raises:
-            SharedResourceError: If not initialized
+            NavigraphError: If not initialized
         """
         if not self._initialized:
-            raise SharedResourceError("Calibration provider not initialized")
+            raise NavigraphError("Calibration provider not initialized")
         return self._transformation_matrix.copy()
     
     def get_calibration_configuration(self) -> Dict[str, Any]:
@@ -151,10 +149,10 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             Dictionary with calibration settings
             
         Raises:
-            SharedResourceError: If not initialized
+            NavigraphError: If not initialized
         """
         if not self._initialized:
-            raise SharedResourceError("Calibration provider not initialized")
+            raise NavigraphError("Calibration provider not initialized")
         return self._calibration_config.copy()
     
     def transform_coordinates(self, points: np.ndarray) -> np.ndarray:
@@ -167,10 +165,10 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             Transformed points array
             
         Raises:
-            SharedResourceError: If not initialized or invalid input
+            NavigraphError: If not initialized or invalid input
         """
         if not self._initialized:
-            raise SharedResourceError("Calibration provider not initialized")
+            raise NavigraphError("Calibration provider not initialized")
         
         try:
             # Ensure points are in the right format
@@ -179,15 +177,15 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             if points_array.ndim == 1:
                 # Single point (x, y)
                 if len(points_array) != 2:
-                    raise SharedResourceError("Single point must have 2 coordinates (x, y)")
+                    raise NavigraphError("Single point must have 2 coordinates (x, y)")
                 points_array = points_array.reshape(1, 1, 2)
             elif points_array.ndim == 2:
                 # Multiple points
                 if points_array.shape[1] != 2:
-                    raise SharedResourceError("Points must have 2 coordinates per point (x, y)")
+                    raise NavigraphError("Points must have 2 coordinates per point (x, y)")
                 points_array = points_array.reshape(-1, 1, 2)
             else:
-                raise SharedResourceError("Points array must be 1D or 2D")
+                raise NavigraphError("Points array must be 1D or 2D")
             
             # Apply perspective transformation (preserving existing cv2 logic)
             import cv2
@@ -200,7 +198,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
                 return transformed.reshape(-1, 2).astype(int)
                 
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Coordinate transformation failed: {str(e)}"
             ) from e
     
@@ -214,16 +212,16 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             Tuple of (points_array, frame_shape)
             
         Raises:
-            SharedResourceError: If video cannot be loaded or point capture fails
+            NavigraphError: If video cannot be loaded or point capture fails
         """
         try:
             cap = cv2.VideoCapture(video_path)
             if not cap:
-                raise SharedResourceError(f"Problem loading video path: {video_path}")
+                raise NavigraphError(f"Problem loading video path: {video_path}")
             
             ret, frame = cap.read()
             if not ret:
-                raise SharedResourceError(f"Problem reading frame from: {video_path}")
+                raise NavigraphError(f"Problem reading frame from: {video_path}")
             
             cap.release()
             
@@ -234,7 +232,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             return points_captured, frame.shape
             
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Point capture failed: {str(e)}"
             ) from e
     
@@ -255,7 +253,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             Calculated transformation matrix
             
         Raises:
-            SharedResourceError: If calibration process fails
+            NavigraphError: If calibration process fails
         """
         try:
             # Capture points from video and map
@@ -289,7 +287,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
                 )
             
             else:
-                raise SharedResourceError(f'Registration method not supported: {registration_method}')
+                raise NavigraphError(f'Registration method not supported: {registration_method}')
             
             print(f'Calculated transform matrix: {self._transformation_matrix}')
             
@@ -306,7 +304,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             return self._transformation_matrix
             
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Transform matrix calculation failed: {str(e)}"
             ) from e
     
@@ -326,22 +324,22 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
             full_config: Full experiment configuration
             
         Raises:
-            SharedResourceError: If testing fails
+            NavigraphError: If testing fails
         """
         try:
             # Load map image
             map_img = cv2.imread(map_path)
             if map_img is None:
-                raise SharedResourceError(f"Could not load map image: {map_path}")
+                raise NavigraphError(f"Could not load map image: {map_path}")
             
             # Load video
             cap = cv2.VideoCapture(video_path)
             if not cap:
-                raise SharedResourceError(f"Problem loading video path: {video_path}")
+                raise NavigraphError(f"Problem loading video path: {video_path}")
             
             ret, frame = cap.read()
             if not ret:
-                raise SharedResourceError(f"Problem reading frame from: {video_path}")
+                raise NavigraphError(f"Problem reading frame from: {video_path}")
             
             cap.release()
             
@@ -350,7 +348,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
                 matrix = matrix_path_or_array
             else:
                 if not os.path.isfile(matrix_path_or_array):
-                    raise SharedResourceError(f"Matrix file not found: {matrix_path_or_array}")
+                    raise NavigraphError(f"Matrix file not found: {matrix_path_or_array}")
                 matrix = np.load(matrix_path_or_array)
             
             print("Hello, Maze-Master. Please choose new points to test. Press 'Enter' when done:")
@@ -396,7 +394,7 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
                     break
                     
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Calibration test failed: {str(e)}"
             ) from e
     

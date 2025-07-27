@@ -1,7 +1,7 @@
 """DeepLabCut data source plugin for NaviGraph.
 
-This plugin wraps the current DeepLabCut functionality as a data source plugin,
-preserving all existing behavior while adapting to the new plugin architecture.
+Loads keypoint detection data from DeepLabCut .h5 files and establishes
+the primary temporal index for session data integration.
 """
 
 import pandas as pd
@@ -10,7 +10,8 @@ from typing import Dict, Any, List
 import os
 from pathlib import Path
 
-from ...core.interfaces import IDataSource, DataSourceIntegrationError, Logger
+from ...core.interfaces import IDataSource, Logger
+from ...core.exceptions import DataSourceError
 from ...core.base_plugin import BasePlugin
 from ...core.registry import register_data_source_plugin
 
@@ -26,12 +27,6 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
         instance.initialize()
         return instance
     
-    def _validate_config(self) -> None:
-        """Validate DeepLabCut-specific configuration."""
-        # bodypart is optional, defaults to 'nose'
-        # likelihood_threshold is optional, defaults to 0.3
-        # No required config keys for this plugin
-        pass
     
     def integrate_data_into_session(
         self,
@@ -43,7 +38,7 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
         """Load DeepLabCut data and establish frame index structure."""
         h5_file_path = session_config.get('discovered_file_path')
         if not h5_file_path:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 "DeepLabCut H5 file path not provided. Make sure file discovery "
                 "found a matching .h5 file for this session."
             )
@@ -84,7 +79,7 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
             return integrated_dataframe
             
         except Exception as e:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 f"Failed to load DeepLabCut data from {h5_file_path}: {str(e)}"
             ) from e
     
@@ -138,7 +133,7 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
             return metadata
             
         except Exception as e:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 f"Failed to extract session metadata from DeepLabCut file: {str(e)}"
             ) from e
     
@@ -167,7 +162,7 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
                     actual_bodypart = bodypart_matches[0]
                     self.logger.warning(f"Bodypart '{target_bodypart}' not found, using '{actual_bodypart}' instead")
                 else:
-                    raise DataSourceIntegrationError(
+                    raise DataSourceError(
                         f"Bodypart '{target_bodypart}' not found in DeepLabCut data. "
                         f"Available bodyparts: {available_bodyparts}"
                     )
@@ -214,6 +209,6 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
             return pd.DataFrame(filtered_columns)
             
         except Exception as e:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 f"Failed to extract bodypart '{target_bodypart}' from DeepLabCut data: {str(e)}"
             ) from e

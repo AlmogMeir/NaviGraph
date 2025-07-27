@@ -1,12 +1,7 @@
 """Graph integration plugin for NaviGraph.
 
-This plugin wraps the current Graph functionality as a data source plugin,
-preserving all existing behavior while adapting to the new plugin architecture.
-It maps tile IDs from spatial data to graph nodes and edges.
-
-The plugin requires tile_id data from previous data sources (typically map_integration)
-and uses the graph configuration and tile-to-graph dictionary to determine
-graph positions for spatial navigation analysis.
+Maps tile IDs from spatial data to graph nodes and edges for topological analysis.
+Requires tile_id data from previous data sources and graph configuration.
 """
 
 import pandas as pd
@@ -14,7 +9,8 @@ import numpy as np
 from typing import Dict, Any, List, Union, Tuple
 from pathlib import Path
 
-from ...core.interfaces import IDataSource, DataSourceIntegrationError, Logger
+from ...core.interfaces import IDataSource, Logger
+from ...core.exceptions import DataSourceError
 from ...core.base_plugin import BasePlugin
 from ...core.registry import register_data_source_plugin
 
@@ -90,7 +86,7 @@ class GraphIntegrationDataSource(BasePlugin, IDataSource):
             DataFrame with added graph columns (tree_position, graph_node, etc.)
             
         Raises:
-            DataSourceIntegrationError: If prerequisites not met or processing fails
+            DataSourceError: If prerequisites not met or processing fails
         """
         logger.info("Starting graph integration - mapping tiles to graph positions")
         
@@ -98,14 +94,14 @@ class GraphIntegrationDataSource(BasePlugin, IDataSource):
             # Get required resources
             graph_provider = shared_resources.get('graph')
             if not graph_provider:
-                raise DataSourceIntegrationError(
+                raise DataSourceError(
                     "Graph integration requires 'graph' shared resource. "
                     "Make sure graph_provider is configured in shared_resources."
                 )
             
             # Check for tile_id column from previous data source
             if 'tile_id' not in current_dataframe.columns:
-                raise DataSourceIntegrationError(
+                raise DataSourceError(
                     "Graph integration requires 'tile_id' column from previous data sources. "
                     "Make sure map_integration or equivalent is configured before graph_integration."
                 )
@@ -132,7 +128,7 @@ class GraphIntegrationDataSource(BasePlugin, IDataSource):
             return current_dataframe
             
         except Exception as e:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 f"Graph integration failed: {str(e)}"
             ) from e
     

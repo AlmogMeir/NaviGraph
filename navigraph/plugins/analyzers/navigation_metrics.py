@@ -1,8 +1,6 @@
 """Navigation metrics analyzer plugin for NaviGraph.
 
-This plugin wraps the navigation analysis functionality from the original SessionAnalyzer,
-preserving all existing behavior while adapting to the new plugin architecture.
-It provides path analysis and graph-based navigation measurements.
+Computes path analysis and graph-based navigation measurements.
 """
 
 from typing import Dict, Any, List

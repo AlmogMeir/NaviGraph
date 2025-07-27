@@ -1,9 +1,4 @@
-"""Main CLI module for NaviGraph.
-
-This module provides the primary command-line interface for NaviGraph experiments,
-built on Click for modern command interaction. It preserves compatibility with
-existing Hydra-based configurations while adding enhanced usability features.
-"""
+"""CLI for NaviGraph behavioral analysis framework."""
 
 import click
 import sys
@@ -21,12 +16,7 @@ from ..plugins import data_sources, shared_resources, analyzers
 @click.version_option(version="0.1.0", prog_name="navigraph")
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 def cli(verbose: bool):
-    """NaviGraph: Flexible graph-based analysis framework for behavioral research.
-    
-    This tool provides a modern, extensible architecture for analyzing behavioral
-    data from various sources (DeepLabCut, EEG, miniscope, etc.) with graph-based
-    spatial navigation analysis.
-    """
+    """NaviGraph: Graph-based behavioral analysis framework."""
     if verbose:
         logger.add(sys.stderr, level="DEBUG")
     else:
@@ -42,12 +32,9 @@ def cli(verbose: bool):
 @click.option('--output', '-o', type=click.Path(path_type=Path),
               help='Override output directory from config')
 def run(config_path: Path, mode: tuple, output: Optional[Path]):
-    """Run NaviGraph experiment with specified configuration.
+    """Run experiment with specified configuration.
     
-    CONFIG_PATH: Path to YAML configuration file (Hydra format supported)
-    
-    Examples:
-        navigraph run configs/maze_basic.yaml
+    CONFIG_PATH: Path to YAML configuration file
         navigraph run configs/maze_basic.yaml --mode analyze
         navigraph run configs/maze_basic.yaml --mode calibrate --mode analyze
     """

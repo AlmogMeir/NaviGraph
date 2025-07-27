@@ -35,10 +35,6 @@ class MetricsVisualizer(BasePlugin, IVisualizer):
         instance.initialize()
         return instance
     
-    def _validate_config(self) -> None:
-        """Validate metrics visualizer configuration."""
-        # All config keys are optional with sensible defaults
-        pass
     
     def visualize(
         self,

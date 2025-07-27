@@ -1,8 +1,6 @@
 """Exploration metrics analyzer plugin for NaviGraph.
 
-This plugin wraps the exploration analysis functionality from the original SessionAnalyzer,
-preserving all existing behavior while adapting to the new plugin architecture.
-It provides exploration patterns and node visit statistics.
+Computes exploration patterns and node visit statistics.
 """
 
 from typing import Dict, Any, List

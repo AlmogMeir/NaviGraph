@@ -1,11 +1,7 @@
 """Map integration plugin for NaviGraph.
 
-This plugin wraps the current MapLabeler functionality as a data source plugin,
-preserving all existing behavior while adapting to the new plugin architecture.
-It converts keypoint coordinates to spatial map coordinates and tile locations.
-
-The plugin requires keypoint data (x, y coordinates) from previous data sources
-and uses calibration data from shared resources to perform coordinate transformation.
+Converts keypoint coordinates to spatial map coordinates and tile locations.
+Requires keypoint data from previous data sources and calibration from shared resources.
 """
 
 import pandas as pd
@@ -14,7 +10,8 @@ import cv2
 from typing import Dict, Any, List
 from pathlib import Path
 
-from ...core.interfaces import IDataSource, DataSourceIntegrationError, Logger
+from ...core.interfaces import IDataSource, Logger
+from ...core.exceptions import DataSourceError
 from ...core.base_plugin import BasePlugin
 from ...core.registry import register_data_source_plugin
 
@@ -91,7 +88,7 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
             DataFrame with added map columns (map_x, map_y, tile_id, tile_bbox)
             
         Raises:
-            DataSourceIntegrationError: If prerequisites not met or processing fails
+            DataSourceError: If prerequisites not met or processing fails
         """
         logger.info("Starting map integration - converting keypoints to spatial coordinates")
         
@@ -101,13 +98,13 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
             calibration = shared_resources.get('calibration')
             
             if not map_provider:
-                raise DataSourceIntegrationError(
+                raise DataSourceError(
                     "Map integration requires 'maze_map' shared resource. "
                     "Make sure map_provider is configured in shared_resources."
                 )
             
             if not calibration:
-                raise DataSourceIntegrationError(
+                raise DataSourceError(
                     "Map integration requires 'calibration' shared resource. "
                     "Make sure camera_calibrator is configured in shared_resources."
                 )
@@ -139,7 +136,7 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
             return current_dataframe
             
         except Exception as e:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 f"Map integration failed: {str(e)}"
             ) from e
     
@@ -201,7 +198,7 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
             Column name containing the requested coordinate type
             
         Raises:
-            DataSourceIntegrationError: If coordinate column not found
+            DataSourceError: If coordinate column not found
         """
         # Look for columns ending with the coordinate type
         candidate_columns = [
@@ -210,7 +207,7 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
         ]
         
         if not candidate_columns:
-            raise DataSourceIntegrationError(
+            raise DataSourceError(
                 f"No {coord_type} coordinate column found. "
                 f"Available columns: {list(dataframe.columns)}. "
                 f"Make sure keypoint data source is configured before map integration."

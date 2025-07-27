@@ -1,8 +1,6 @@
 """Map provider shared resource for NaviGraph.
 
-This plugin wraps the current MapLabeler functionality as a shared resource,
-making maze map data and spatial configuration available to data sources
-and analyzers that need spatial coordinate transformation.
+Provides maze map data and spatial configuration for coordinate transformation.
 """
 
 import cv2
@@ -11,7 +9,8 @@ from typing import Dict, Any
 from pathlib import Path
 import os
 
-from ...core.interfaces import ISharedResource, SharedResourceError, Logger
+from ...core.interfaces import ISharedResource, Logger
+from ...core.exceptions import NavigraphError
 from ...core.base_plugin import BasePlugin
 from ...core.registry import register_shared_resource_plugin
 
@@ -59,7 +58,7 @@ class MapProviderResource(BasePlugin, ISharedResource):
             logger: Logger for initialization messages
             
         Raises:
-            SharedResourceError: If initialization fails
+            NavigraphError: If initialization fails
         """
         try:
             self.logger.info("Initializing map provider resource")
@@ -67,7 +66,7 @@ class MapProviderResource(BasePlugin, ISharedResource):
             # Get map image path
             map_path = resource_config.get('map_path')
             if not map_path:
-                raise SharedResourceError(
+                raise NavigraphError(
                     "Map provider requires 'map_path' in configuration"
                 )
             
@@ -78,20 +77,20 @@ class MapProviderResource(BasePlugin, ISharedResource):
             
             # Load map image
             if not os.path.isfile(map_path):
-                raise SharedResourceError(
+                raise NavigraphError(
                     f"Map image not found at path: {map_path}"
                 )
             
             self._map_image = cv2.imread(map_path)
             if self._map_image is None:
-                raise SharedResourceError(
+                raise NavigraphError(
                     f"Failed to load map image from: {map_path}"
                 )
             
             # Get map settings
             map_settings = resource_config.get('map_settings', {})
             if not map_settings:
-                raise SharedResourceError(
+                raise NavigraphError(
                     "Map provider requires 'map_settings' in configuration"
                 )
             
@@ -107,7 +106,7 @@ class MapProviderResource(BasePlugin, ISharedResource):
             )
             
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Failed to initialize map provider: {str(e)}"
             ) from e
     
@@ -138,10 +137,10 @@ class MapProviderResource(BasePlugin, ISharedResource):
             Map image as numpy array
             
         Raises:
-            SharedResourceError: If not initialized
+            NavigraphError: If not initialized
         """
         if not self._resource_initialized:
-            raise SharedResourceError("Map provider not initialized")
+            raise NavigraphError("Map provider not initialized")
         return self._map_image
     
     def get_map_configuration(self) -> Dict[str, Any]:
@@ -151,10 +150,10 @@ class MapProviderResource(BasePlugin, ISharedResource):
             Dictionary with origin, grid_size, segment_length
             
         Raises:
-            SharedResourceError: If not initialized
+            NavigraphError: If not initialized
         """
         if not self._resource_initialized:
-            raise SharedResourceError("Map provider not initialized")
+            raise NavigraphError("Map provider not initialized")
         return self._map_config.copy()
     
     def get_map_bounds(self) -> Dict[str, int]:
@@ -164,7 +163,7 @@ class MapProviderResource(BasePlugin, ISharedResource):
             Dictionary with width, height
         """
         if not self._resource_initialized:
-            raise SharedResourceError("Map provider not initialized")
+            raise NavigraphError("Map provider not initialized")
         
         height, width = self._map_image.shape[:2]
         return {'width': width, 'height': height}
@@ -179,7 +178,7 @@ class MapProviderResource(BasePlugin, ISharedResource):
             Parsed map configuration
             
         Raises:
-            SharedResourceError: If required settings missing or invalid
+            NavigraphError: If required settings missing or invalid
         """
         try:
             # Required settings
@@ -188,7 +187,7 @@ class MapProviderResource(BasePlugin, ISharedResource):
             segment_length = map_settings.get('segment_length')
             
             if not all([origin_str, grid_size_str, segment_length]):
-                raise SharedResourceError(
+                raise NavigraphError(
                     "Map settings must include 'origin', 'grid_size', and 'segment_length'"
                 )
             
@@ -206,17 +205,17 @@ class MapProviderResource(BasePlugin, ISharedResource):
             
             # Validate parsed values
             if not (isinstance(origin, (list, tuple)) and len(origin) == 2):
-                raise SharedResourceError(
+                raise NavigraphError(
                     f"Origin must be (x, y) tuple, got: {origin}"
                 )
             
             if not (isinstance(grid_size, (list, tuple)) and len(grid_size) == 2):
-                raise SharedResourceError(
+                raise NavigraphError(
                     f"Grid size must be (rows, cols) tuple, got: {grid_size}"
                 )
             
             if not isinstance(segment_length, (int, float)) or segment_length <= 0:
-                raise SharedResourceError(
+                raise NavigraphError(
                     f"Segment length must be positive number, got: {segment_length}"
                 )
             
@@ -228,6 +227,6 @@ class MapProviderResource(BasePlugin, ISharedResource):
             }
             
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Failed to parse map settings: {str(e)}"
             ) from e

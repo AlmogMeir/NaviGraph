@@ -1,8 +1,6 @@
 """Graph provider shared resource for NaviGraph.
 
-This plugin wraps the current Graph functionality as a shared resource,
-making graph instances and navigation utilities available to data sources
-and analyzers that need graph-based spatial analysis.
+Provides graph instances and navigation utilities for spatial analysis.
 """
 
 from typing import Dict, Any
@@ -11,7 +9,8 @@ from typing import Dict, Any
 from .graph_module import Graph
 from .graph_dictionary import graph_dict
 
-from ...core.interfaces import ISharedResource, SharedResourceError, Logger
+from ...core.interfaces import ISharedResource, Logger
+from ...core.exceptions import NavigraphError
 from ...core.base_plugin import BasePlugin
 from ...core.registry import register_shared_resource_plugin
 
@@ -62,7 +61,7 @@ class GraphProviderResource(BasePlugin, ISharedResource):
             logger: Logger for initialization messages
             
         Raises:
-            SharedResourceError: If initialization fails
+            NavigraphError: If initialization fails
         """
         try:
             self.logger.info("Initializing graph provider resource")
@@ -88,7 +87,7 @@ class GraphProviderResource(BasePlugin, ISharedResource):
             )
             
         except Exception as e:
-            raise SharedResourceError(
+            raise NavigraphError(
                 f"Failed to initialize graph provider: {str(e)}"
             ) from e
     
@@ -114,10 +113,10 @@ class GraphProviderResource(BasePlugin, ISharedResource):
             Graph instance for navigation analysis
             
         Raises:
-            SharedResourceError: If not initialized
+            NavigraphError: If not initialized
         """
         if not self._resource_initialized:
-            raise SharedResourceError("Graph provider not initialized")
+            raise NavigraphError("Graph provider not initialized")
         return self._graph_instance
     
     def get_graph_configuration(self) -> Dict[str, Any]:
@@ -127,10 +126,10 @@ class GraphProviderResource(BasePlugin, ISharedResource):
             Dictionary with graph settings
             
         Raises:
-            SharedResourceError: If not initialized
+            NavigraphError: If not initialized
         """
         if not self._resource_initialized:
-            raise SharedResourceError("Graph provider not initialized")
+            raise NavigraphError("Graph provider not initialized")
         return self._graph_config
     
     def get_tile_dictionary(self) -> Dict[int, Any]:
@@ -140,7 +139,7 @@ class GraphProviderResource(BasePlugin, ISharedResource):
             Dictionary mapping tile IDs to graph positions
         """
         if not self._resource_initialized:
-            raise SharedResourceError("Graph provider not initialized")
+            raise NavigraphError("Graph provider not initialized")
         return graph_dict
     
     def _create_graph_config(self, resource_config: Dict[str, Any]):

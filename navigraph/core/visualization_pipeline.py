@@ -1,29 +1,19 @@
-"""Visualization pipeline orchestrator for NaviGraph.
-
-This module provides a high-level interface for coordinating multiple
-visualization plugins to create comprehensive visual outputs from session
-data and analysis results.
-"""
+"""Simple visualization pipeline for NaviGraph."""
 
 from typing import Dict, List, Any, Optional, Union
 import pandas as pd
 from pathlib import Path
-from datetime import datetime
 from loguru import logger
 
 from .interfaces import IVisualizer, Logger
 from .registry import PluginRegistry, registry
 from .session import Session
 from .visualization_config import VisualizationConfig, OutputFormat
-from .exceptions import VisualizationError
+from .exceptions import NavigraphError
 
 
 class VisualizationPipeline:
-    """Orchestrates multiple visualization plugins.
-    
-    The pipeline can run visualizations sequentially or in parallel,
-    coordinate shared resources, and manage output organization.
-    """
+    """Simple visualization pipeline that runs configured visualizers."""
     
     def __init__(
         self,
@@ -31,20 +21,13 @@ class VisualizationPipeline:
         plugin_registry: Optional[PluginRegistry] = None,
         logger_instance: Optional[Logger] = None
     ):
-        """Initialize visualization pipeline.
-        
-        Args:
-            config: Pipeline configuration (dict or VisualizationConfig)
-            plugin_registry: Plugin registry to use (defaults to global)
-            logger_instance: Logger instance (defaults to global logger)
-        """
+        """Initialize visualization pipeline."""
         # Handle both dict and VisualizationConfig inputs
         if isinstance(config, VisualizationConfig):
             self.viz_config = config
             self.config = config.to_dict()
         else:
             self.config = config
-            # Extract visualization settings if present
             viz_settings = config.get('visualization_settings', {})
             self.viz_config = VisualizationConfig.from_dict(viz_settings) if viz_settings else VisualizationConfig()
         
@@ -73,15 +56,11 @@ class VisualizationPipeline:
                 # Get plugin class and create instance
                 plugin_class = self.registry.get_visualizer_plugin(plugin_name)
                 
-                # Merge visualizer config with theme/style settings
+                # Merge visualizer config with basic settings
                 visualizer_config = viz_config.get('config', {})
-                visualizer_config.update(self.viz_config.get_visualizer_config(plugin_name))
+                visualizer_config.update(self.viz_config.to_dict())
                 
-                visualizer = plugin_class.from_config(
-                    visualizer_config,
-                    self.logger
-                )
-                
+                visualizer = plugin_class.from_config(visualizer_config, self.logger)
                 self.visualizers[viz_name] = visualizer
                 self.logger.info(f"Loaded visualizer: {viz_name} ({plugin_name})")
                 
@@ -91,19 +70,9 @@ class VisualizationPipeline:
     def create_session_visualizations(
         self,
         session: Session,
-        output_path: Optional[str] = None,
-        video_path: Optional[str] = None
+        output_path: Optional[str] = None
     ) -> Dict[str, List[str]]:
-        """Create all configured visualizations for a session.
-        
-        Args:
-            session: Session object with integrated data
-            output_path: Base directory for visualization outputs
-            video_path: Path to source video file (if available)
-            
-        Returns:
-            Dictionary mapping visualizer names to lists of created file paths
-        """
+        """Create all configured visualizations for a session."""
         if not self.visualizers:
             self.logger.warning("No visualizers configured")
             return {}
@@ -111,19 +80,12 @@ class VisualizationPipeline:
         # Use configured output path or provided path
         base_output_path = output_path or self.viz_config.output_path
         if not base_output_path:
-            raise VisualizationError("No output path specified")
+            raise NavigraphError("No output path specified for visualization")
         
         # Prepare data and resources
         data = session.get_integrated_dataframe()
         shared_resources = session.shared_resources
         session_id = session.session_id
-        
-        # Prepare common parameters
-        common_kwargs = {
-            'session_id': session_id,
-            'video_path': video_path,
-            'reward_tile_id': session.config.get('reward_tile_id')
-        }
         
         results = {}
         
@@ -139,12 +101,10 @@ class VisualizationPipeline:
                 viz_config = self.config['visualizations'][viz_name].get('config', {})
                 
                 # Run visualization
-                output_file = visualizer.visualize(
-                    data=data,
+                output_file = visualizer.generate_visualization(
+                    session_data=data,
                     config=viz_config,
-                    shared_resources=shared_resources,
-                    output_path=str(viz_output_path),
-                    **common_kwargs
+                    output_path=str(viz_output_path)
                 )
                 
                 if output_file:
@@ -159,23 +119,3 @@ class VisualizationPipeline:
                 results[viz_name] = []
         
         return results
-    
-    def get_visualization_summary(self) -> Dict[str, Any]:
-        """Get summary of configured visualizations.
-        
-        Returns:
-            Dictionary with visualization pipeline information
-        """
-        return {
-            'total_visualizers': len(self.visualizers),
-            'enabled_visualizers': list(self.visualizers.keys()),
-            'available_plugins': self.registry.list_visualizer_plugins(),
-            'configuration': {
-                name: {
-                    'plugin': self.config['visualizations'][name].get('plugin'),
-                    'enabled': self.config['visualizations'][name].get('enabled', True),
-                    'config_keys': list(self.config['visualizations'][name].get('config', {}).keys())
-                }
-                for name in self.config.get('visualizations', {}).keys()
-            }
-        }
