@@ -85,7 +85,7 @@ class AnalyzerConfig(PluginConfig, total=False):
     metrics: Dict[str, Dict[str, Any]]
 
 
-class VisualizationConfig(PluginConfig, total=False):
+class VisualizationPluginConfig(PluginConfig, total=False):
     """Configuration for visualization plugins."""
     type: str
     output_formats: List[str]
@@ -97,7 +97,7 @@ class ExperimentConfig(TypedDict, total=False):
     data_sources: List[DataSourceConfig]
     shared_resources: List[SharedResourceConfig]
     analyzers: List[AnalyzerConfig]
-    visualizations: Dict[str, VisualizationConfig]
+    visualizations: Dict[str, VisualizationPluginConfig]
     output_path: str
     session_settings: Dict[str, Any]
 

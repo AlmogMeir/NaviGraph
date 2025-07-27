@@ -8,11 +8,14 @@ data and analysis results.
 from typing import Dict, List, Any, Optional, Union
 import pandas as pd
 from pathlib import Path
+from datetime import datetime
 from loguru import logger
 
 from .interfaces import IVisualizer, Logger
 from .registry import PluginRegistry, registry
 from .session import Session
+from .visualization_config import VisualizationConfig, OutputFormat
+from .exceptions import VisualizationError
 
 
 class VisualizationPipeline:
@@ -24,18 +27,27 @@ class VisualizationPipeline:
     
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: Union[Dict[str, Any], VisualizationConfig],
         plugin_registry: Optional[PluginRegistry] = None,
         logger_instance: Optional[Logger] = None
     ):
         """Initialize visualization pipeline.
         
         Args:
-            config: Pipeline configuration with visualizer settings
+            config: Pipeline configuration (dict or VisualizationConfig)
             plugin_registry: Plugin registry to use (defaults to global)
             logger_instance: Logger instance (defaults to global logger)
         """
-        self.config = config
+        # Handle both dict and VisualizationConfig inputs
+        if isinstance(config, VisualizationConfig):
+            self.viz_config = config
+            self.config = config.to_dict()
+        else:
+            self.config = config
+            # Extract visualization settings if present
+            viz_settings = config.get('visualization_settings', {})
+            self.viz_config = VisualizationConfig.from_dict(viz_settings) if viz_settings else VisualizationConfig()
+        
         self.registry = plugin_registry or registry
         self.logger = logger_instance or logger
         
@@ -60,8 +72,13 @@ class VisualizationPipeline:
             try:
                 # Get plugin class and create instance
                 plugin_class = self.registry.get_visualizer_plugin(plugin_name)
+                
+                # Merge visualizer config with theme/style settings
+                visualizer_config = viz_config.get('config', {})
+                visualizer_config.update(self.viz_config.get_visualizer_config(plugin_name))
+                
                 visualizer = plugin_class.from_config(
-                    viz_config.get('config', {}),
+                    visualizer_config,
                     self.logger
                 )
                 
@@ -74,7 +91,7 @@ class VisualizationPipeline:
     def create_session_visualizations(
         self,
         session: Session,
-        output_path: str,
+        output_path: Optional[str] = None,
         video_path: Optional[str] = None
     ) -> Dict[str, List[str]]:
         """Create all configured visualizations for a session.
@@ -90,6 +107,11 @@ class VisualizationPipeline:
         if not self.visualizers:
             self.logger.warning("No visualizers configured")
             return {}
+        
+        # Use configured output path or provided path
+        base_output_path = output_path or self.viz_config.output_path
+        if not base_output_path:
+            raise VisualizationError("No output path specified")
         
         # Prepare data and resources
         data = session.get_integrated_dataframe()
@@ -110,7 +132,7 @@ class VisualizationPipeline:
             
             try:
                 # Create session-specific output directory
-                viz_output_path = Path(output_path) / session_id / viz_name
+                viz_output_path = Path(base_output_path) / session_id / viz_name
                 viz_output_path.mkdir(parents=True, exist_ok=True)
                 
                 # Get visualizer configuration

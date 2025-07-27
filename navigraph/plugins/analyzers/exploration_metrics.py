@@ -10,12 +10,16 @@ import pandas as pd
 import numpy as np
 import operator
 from functools import partial
+from datetime import datetime
+import time
 
 # Import from local utils module
 from .utils import a_to_b, count_unique_type_specific_objects, Condition
 
 from ...core.interfaces import IAnalyzer
 from ...core.registry import register_analyzer_plugin
+from ...core.types import AnalysisResult, AnalysisMetadata
+from ...core.utils import compute_configuration_hash
 
 # Constants from original SessionAnalyzer
 FPS = 'fps'
@@ -42,15 +46,17 @@ class ExplorationMetricsAnalyzer(IAnalyzer):
     preserving all existing functionality while integrating with the new plugin architecture.
     """
     
-    def analyze_session(self, session) -> Dict[str, Any]:
+    def analyze_session(self, session) -> AnalysisResult:
         """Analyze a single session for exploration metrics.
         
         Args:
             session: Session object with integrated DataFrame and configuration
             
         Returns:
-            Dictionary of computed exploration metrics
+            AnalysisResult with computed exploration metrics
         """
+        start_time = time.time()
+        
         try:
             # Get session data
             dataframe = session.get_integrated_dataframe()
@@ -78,22 +84,51 @@ class ExplorationMetricsAnalyzer(IAnalyzer):
                     )
             
             logger.info(f"Exploration metrics computed: {list(results.keys())}")
-            return results
+            
+            # Create metadata
+            metadata = AnalysisMetadata(
+                analyzer_name="exploration_metrics",
+                version="1.0.0",
+                timestamp=datetime.now(),
+                computation_time=time.time() - start_time,
+                config_hash=compute_configuration_hash(analyzer_config)
+            )
+            
+            # Return structured result
+            return AnalysisResult(
+                session_id=session.session_id,
+                analyzer_name="exploration_metrics",
+                metrics=results,
+                metadata=metadata
+            )
             
         except Exception as e:
             session.logger.error(f"Exploration metrics analysis failed: {str(e)}")
-            return {}
+            # Return empty result with error metadata
+            metadata = AnalysisMetadata(
+                analyzer_name="exploration_metrics",
+                version="1.0.0",
+                timestamp=datetime.now(),
+                computation_time=time.time() - start_time,
+                config_hash=""
+            )
+            return AnalysisResult(
+                session_id=session.session_id,
+                analyzer_name="exploration_metrics",
+                metrics={},
+                metadata=metadata
+            )
     
     def analyze_cross_session(
         self,
         sessions: List,
-        session_metrics: Dict[str, Dict[str, Any]]
+        session_results: Dict[str, AnalysisResult]
     ) -> Dict[str, Any]:
         """Perform cross-session analysis for exploration metrics.
         
         Args:
             sessions: List of Session objects
-            session_metrics: Results from analyze_session for each session
+            session_results: Results from analyze_session for each session
             
         Returns:
             Dictionary of cross-session statistics
@@ -101,19 +136,19 @@ class ExplorationMetricsAnalyzer(IAnalyzer):
         cross_session_results = {}
         
         # Get all metric names from first session
-        if session_metrics:
-            first_session_metrics = next(iter(session_metrics.values()))
-            metric_names = list(first_session_metrics.keys())
+        if session_results:
+            first_result = next(iter(session_results.values()))
+            metric_names = list(first_result.metrics.keys())
             
             for metric_name in metric_names:
                 # Handle different metric types
                 if 'exploration_percentage' in metric_name:
                     # For exploration percentage, compute final values
                     final_values = []
-                    for session_id, metrics in session_metrics.items():
-                        if metric_name in metrics and metrics[metric_name]:
+                    for session_id, result in session_results.items():
+                        if result.has_metric(metric_name):
                             # Get final exploration percentage
-                            values = metrics[metric_name]
+                            values = result.get_metric(metric_name)
                             if isinstance(values, list) and values:
                                 final_values.append(values[-1])
                             elif isinstance(values, (int, float)):
@@ -129,9 +164,9 @@ class ExplorationMetricsAnalyzer(IAnalyzer):
                     all_node_avgs = []
                     all_node_medians = []
                     
-                    for session_id, metrics in session_metrics.items():
-                        if metric_name in metrics and metrics[metric_name]:
-                            node_data = metrics[metric_name]
+                    for session_id, result in session_results.items():
+                        if result.has_metric(metric_name):
+                            node_data = result.get_metric(metric_name)
                             if isinstance(node_data, dict):
                                 if 'node_avg' in node_data:
                                     all_node_avgs.append(node_data['node_avg'])

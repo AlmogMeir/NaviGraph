@@ -254,11 +254,13 @@ class ExperimentRunner:
             logger.info(f"Available analyzers: {available_analyzers}")
             
             # Run single-session analysis
-            session_results = {}
+            session_results = {}  # For DataFrame creation
+            analysis_results = {}  # For cross-session analysis (AnalysisResult objects)
             
             for session in self.sessions:
                 logger.info(f"Analyzing session: {session.session_id}")
                 session_metrics = {}
+                session_analysis_results = {}
                 
                 # Run each analyzer plugin
                 for analyzer_name in available_analyzers:
@@ -268,16 +270,19 @@ class ExperimentRunner:
                         analyzer = analyzer_class()
                         
                         # Run analysis
-                        metrics = analyzer.analyze_session(session)
-                        session_metrics.update(metrics)
+                        result = analyzer.analyze_session(session)
+                        # Store both the result object and extracted metrics
+                        session_analysis_results[analyzer_name] = result
+                        session_metrics.update(result.metrics)
                         
-                        logger.debug(f"✓ {analyzer_name}: {len(metrics)} metrics computed")
+                        logger.debug(f"✓ {analyzer_name}: {len(result.metrics)} metrics computed")
                         
                     except Exception as e:
                         logger.error(f"Analyzer {analyzer_name} failed for {session.session_id}: {str(e)}")
                         continue
                 
                 session_results[session.session_id] = session_metrics
+                analysis_results[session.session_id] = session_analysis_results
                 logger.info(f"✓ Session {session.session_id}: {len(session_metrics)} total metrics")
             
             # Run cross-session analysis
@@ -289,10 +294,16 @@ class ExperimentRunner:
                     analyzer_class = registry.get_analyzer_plugin(analyzer_name)
                     analyzer = analyzer_class()
                     
-                    cross_metrics = analyzer.analyze_cross_session(self.sessions, session_results)
-                    cross_session_results.update(cross_metrics)
+                    # Collect AnalysisResult objects for this analyzer across sessions
+                    analyzer_results = {}
+                    for session_id, session_analyzers in analysis_results.items():
+                        if analyzer_name in session_analyzers:
+                            analyzer_results[session_id] = session_analyzers[analyzer_name]
                     
-                    logger.debug(f"✓ {analyzer_name}: {len(cross_metrics)} cross-session metrics")
+                    if analyzer_results:
+                        cross_metrics = analyzer.analyze_cross_session(self.sessions, analyzer_results)
+                        cross_session_results.update(cross_metrics)
+                        logger.debug(f"✓ {analyzer_name}: {len(cross_metrics)} cross-session metrics")
                     
                 except Exception as e:
                     logger.error(f"Cross-session analysis failed for {analyzer_name}: {str(e)}")

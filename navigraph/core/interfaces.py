@@ -16,6 +16,9 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING, Type, TypeVar
 import pandas as pd
 from loguru import logger
 
+if TYPE_CHECKING:
+    from .types import AnalysisResult
+
 # Import standardized exceptions
 from .exceptions import (
     DataSourceIntegrationError,
@@ -339,7 +342,7 @@ class IAnalyzer(ABC):
         pass
     
     @abstractmethod
-    def analyze_session(self, session: "Session") -> Dict[str, Any]:
+    def analyze_session(self, session: "Session") -> "AnalysisResult":
         """Analyze a single session with full access to data and graph.
         
         Args:
@@ -352,21 +355,23 @@ class IAnalyzer(ABC):
                 - session.session_id: Session identifier
         
         Returns:
-            Dictionary of computed metrics and analysis results.
-            Keys should be descriptive metric names, values can be numbers,
-            lists, or nested dictionaries.
+            AnalysisResult object containing:
+                - session_id: Identifier of analyzed session
+                - analyzer_name: Name of this analyzer
+                - metrics: Dictionary of computed metrics
+                - metadata: Analysis metadata (timestamp, duration, etc.)
             
         Example:
-            {
-                'time_to_reward': 45.2,  # seconds
-                'average_velocity': 12.5,  # cm/s
-                'exploration_percentage': 0.73,
-                'path_efficiency': 0.85,
-                'neural_correlations': {
-                    'cell_001': 0.62,
-                    'cell_002': 0.41
-                }
-            }
+            return AnalysisResult(
+                session_id=session.session_id,
+                analyzer_name="spatial_metrics",
+                metrics={
+                    'time_to_reward': 45.2,
+                    'average_velocity': 12.5,
+                    'exploration_percentage': 0.73
+                },
+                metadata=AnalysisMetadata(...)
+            )
         """
         pass
     
@@ -374,14 +379,14 @@ class IAnalyzer(ABC):
     def analyze_cross_session(
         self,
         sessions: List["Session"],
-        session_metrics: Dict[str, Dict[str, Any]]
+        session_results: Dict[str, "AnalysisResult"]
     ) -> Dict[str, Any]:
         """Perform cross-session analysis and statistics.
         
         Args:
             sessions: List of Session objects for cross-session access.
-            session_metrics: Results from analyze_session for each session.
-                           Format: {session_id: {metric_name: value}}
+            session_results: Results from analyze_session for each session.
+                           Format: {session_id: AnalysisResult}
         
         Returns:
             Dictionary of cross-session analysis results.

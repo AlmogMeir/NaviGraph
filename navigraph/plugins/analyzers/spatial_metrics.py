@@ -10,6 +10,8 @@ import pandas as pd
 import numpy as np
 import operator
 from functools import partial
+from datetime import datetime
+import time
 
 # Import from local utils module
 from .utils import a_to_b, count_unique_type_specific_objects, Condition
@@ -17,6 +19,8 @@ from .utils import a_to_b, count_unique_type_specific_objects, Condition
 from ...core.interfaces import IAnalyzer, Logger
 from ...core.base_plugin import BasePlugin
 from ...core.registry import register_analyzer_plugin
+from ...core.types import AnalysisResult, AnalysisMetadata
+from ...core.utils import compute_configuration_hash
 
 # Constants from original SessionAnalyzer
 FPS = 'fps'
@@ -54,15 +58,17 @@ class SpatialMetricsAnalyzer(BasePlugin, IAnalyzer):
         # No required config keys for this analyzer
         pass
     
-    def analyze_session(self, session) -> Dict[str, Any]:
+    def analyze_session(self, session) -> AnalysisResult:
         """Analyze a single session for spatial metrics.
         
         Args:
             session: Session object with integrated DataFrame and configuration
             
         Returns:
-            Dictionary of computed spatial metrics
+            AnalysisResult with computed spatial metrics
         """
+        start_time = time.time()
+        
         try:
             # Get session data
             dataframe = session.get_integrated_dataframe()
@@ -90,22 +96,51 @@ class SpatialMetricsAnalyzer(BasePlugin, IAnalyzer):
                     )
             
             logger.info(f"Spatial metrics computed: {list(results.keys())}")
-            return results
+            
+            # Create metadata
+            metadata = AnalysisMetadata(
+                analyzer_name="spatial_metrics",
+                version="1.0.0",
+                timestamp=datetime.now(),
+                computation_time=time.time() - start_time,
+                config_hash=compute_configuration_hash(analyzer_config)
+            )
+            
+            # Return structured result
+            return AnalysisResult(
+                session_id=session.session_id,
+                analyzer_name="spatial_metrics",
+                metrics=results,
+                metadata=metadata
+            )
             
         except Exception as e:
             session.logger.error(f"Spatial metrics analysis failed: {str(e)}")
-            return {}
+            # Return empty result with error metadata
+            metadata = AnalysisMetadata(
+                analyzer_name="spatial_metrics",
+                version="1.0.0",
+                timestamp=datetime.now(),
+                computation_time=time.time() - start_time,
+                config_hash=""
+            )
+            return AnalysisResult(
+                session_id=session.session_id,
+                analyzer_name="spatial_metrics",
+                metrics={},
+                metadata=metadata
+            )
     
     def analyze_cross_session(
         self,
         sessions: List,
-        session_metrics: Dict[str, Dict[str, Any]]
+        session_results: Dict[str, AnalysisResult]
     ) -> Dict[str, Any]:
         """Perform cross-session analysis for spatial metrics.
         
         Args:
             sessions: List of Session objects
-            session_metrics: Results from analyze_session for each session
+            session_results: Results from analyze_session for each session
             
         Returns:
             Dictionary of cross-session statistics
@@ -113,16 +148,21 @@ class SpatialMetricsAnalyzer(BasePlugin, IAnalyzer):
         cross_session_results = {}
         
         # Get all metric names from first session
-        if session_metrics:
-            first_session_metrics = next(iter(session_metrics.values()))
-            metric_names = list(first_session_metrics.keys())
+        if session_results:
+            first_result = next(iter(session_results.values()))
+            metric_names = list(first_result.metrics.keys())
             
             for metric_name in metric_names:
                 # Collect values across sessions
                 values = []
-                for session_id, metrics in session_metrics.items():
-                    if metric_name in metrics and metrics[metric_name]:
-                        values.extend(metrics[metric_name])
+                for session_id, result in session_results.items():
+                    if result.has_metric(metric_name):
+                        metric_value = result.get_metric(metric_name)
+                        if metric_value:
+                            if isinstance(metric_value, list):
+                                values.extend(metric_value)
+                            else:
+                                values.append(metric_value)
                 
                 if values:
                     cross_session_results[f"{metric_name}_mean"] = np.mean(values)

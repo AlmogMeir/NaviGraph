@@ -13,6 +13,10 @@ from .session import Session
 from .file_discovery import FileDiscoveryEngine
 from .experiment_runner import ExperimentRunner
 from .visualization_pipeline import VisualizationPipeline
+from .visualization_config import (
+    VisualizationConfig, OutputFormat, ColorTheme, ColorPalette,
+    FontSettings, PlotSettings, create_default_configs
+)
 
 # Type definitions
 from .types import (
@@ -21,7 +25,7 @@ from .types import (
     Coordinate, RGBColor, NumericValue,
     
     # Configuration types
-    ExperimentConfig, DataSourceConfig, AnalyzerConfig, VisualizationConfig,
+    ExperimentConfig, DataSourceConfig, AnalyzerConfig, VisualizationPluginConfig,
     
     # Data structures
     SessionMetadata, AnalysisResult, AnalysisMetadata, VisualizationResult,
@@ -67,10 +71,19 @@ __all__ = [
     "ExperimentRunner",
     "VisualizationPipeline",
     
+    # Visualization configuration
+    "VisualizationConfig",
+    "OutputFormat",
+    "ColorTheme",
+    "ColorPalette",
+    "FontSettings",
+    "PlotSettings",
+    "create_default_configs",
+    
     # Types
     "SessionID", "TileID", "NodeID", "PluginName", "FilePath",
     "Coordinate", "RGBColor", "NumericValue",
-    "ExperimentConfig", "DataSourceConfig", "AnalyzerConfig", "VisualizationConfig",
+    "ExperimentConfig", "DataSourceConfig", "AnalyzerConfig", "VisualizationPluginConfig",
     "SessionMetadata", "AnalysisResult", "AnalysisMetadata", "VisualizationResult",
     "SessionSummary", "StatisticalResult",
     "MetricValue", "MetricDict", "CrossSessionMetrics",
