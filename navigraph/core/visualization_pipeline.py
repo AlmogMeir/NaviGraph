@@ -60,6 +60,10 @@ class VisualizationPipeline:
                 visualizer_config = viz_config.get('config', {})
                 visualizer_config.update(self.viz_config.to_dict())
                 
+                # Add file_requirements from the visualizer config
+                if 'file_requirements' in viz_config:
+                    visualizer_config['file_requirements'] = viz_config['file_requirements']
+                
                 visualizer = plugin_class.from_config(visualizer_config, self.logger)
                 self.visualizers[viz_name] = visualizer
                 self.logger.info(f"Loaded visualizer: {viz_name} ({plugin_name})")
@@ -70,9 +74,19 @@ class VisualizationPipeline:
     def create_session_visualizations(
         self,
         session: Session,
-        output_path: Optional[str] = None
+        output_path: Optional[str] = None,
+        session_path: Optional[str] = None
     ) -> Dict[str, List[str]]:
-        """Create all configured visualizations for a session."""
+        """Create all configured visualizations for a session.
+        
+        Args:
+            session: Session object with integrated data
+            output_path: Override output directory path
+            session_path: Path to session directory for file discovery
+            
+        Returns:
+            Dict mapping visualizer names to list of output file paths
+        """
         if not self.visualizers:
             self.logger.warning("No visualizers configured")
             return {}
@@ -87,6 +101,10 @@ class VisualizationPipeline:
         shared_resources = session.shared_resources
         session_id = session.session_id
         
+        # Get session metadata (like reward_tile_id)
+        session_metadata = session.get_session_metadata()
+        reward_tile_id = session.config.get('reward_tile_id')
+        
         results = {}
         
         for viz_name, visualizer in self.visualizers.items():
@@ -100,11 +118,20 @@ class VisualizationPipeline:
                 # Get visualizer configuration
                 viz_config = self.config['visualizations'][viz_name].get('config', {})
                 
+                # Prepare kwargs for visualizations
+                viz_kwargs = {
+                    'session_path': session_path,
+                    'session_id': session_id,
+                    'shared_resources': shared_resources,
+                    'reward_tile_id': reward_tile_id
+                }
+                
                 # Run visualization
                 output_file = visualizer.generate_visualization(
                     session_data=data,
                     config=viz_config,
-                    output_path=str(viz_output_path)
+                    output_path=str(viz_output_path),
+                    **viz_kwargs
                 )
                 
                 if output_file:

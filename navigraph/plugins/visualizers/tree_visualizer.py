@@ -38,25 +38,24 @@ class TreeVisualizer(BasePlugin, IVisualizer):
         # All config keys are optional with sensible defaults
         pass
     
-    def visualize(
+    def generate_visualization(
         self,
-        data: pd.DataFrame,
+        session_data: pd.DataFrame,
         config: Dict[str, Any],
-        shared_resources: Dict[str, Any],
         output_path: str,
         **kwargs
     ) -> Optional[str]:
         """Create tree visualization overlay on video frames.
         
         Args:
-            data: DataFrame with tile_id and tree_position data
+            session_data: DataFrame with tile_id and tree_position data
             config: Visualization-specific configuration
-            shared_resources: Must contain 'graph' resource
             output_path: Directory to save visualization outputs
             **kwargs: Additional parameters including:
                 - video_path: Path to source video file
                 - session_id: Session identifier for output naming
                 - reward_tile_id: Goal tile ID for path highlighting
+                - shared_resources: Must contain 'graph' resource
                 
         Returns:
             Path to created visualization video file, or None if failed
@@ -72,6 +71,7 @@ class TreeVisualizer(BasePlugin, IVisualizer):
             reward_tile_id = kwargs.get('reward_tile_id')
             
             # Get graph provider from shared resources
+            shared_resources = kwargs.get('shared_resources', {})
             graph_provider = shared_resources.get('graph')
             if not graph_provider:
                 self.logger.error("Tree visualization requires graph in shared_resources")
@@ -158,11 +158,11 @@ class TreeVisualizer(BasePlugin, IVisualizer):
                 current_tile_id = None
                 current_tree_position = None
                 
-                if frame_idx in data.index:
-                    if 'tile_id' in data.columns:
-                        current_tile_id = data.loc[frame_idx, 'tile_id']
-                    if 'tree_position' in data.columns:
-                        current_tree_position = data.loc[frame_idx, 'tree_position']
+                if frame_idx in session_data.index:
+                    if 'tile_id' in session_data.columns:
+                        current_tile_id = session_data.loc[frame_idx, 'tile_id']
+                    if 'tree_position' in session_data.columns:
+                        current_tree_position = session_data.loc[frame_idx, 'tree_position']
                 
                 # Update position history
                 if current_tree_position is not None and not pd.isna(current_tree_position):

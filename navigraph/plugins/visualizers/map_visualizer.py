@@ -38,38 +38,44 @@ class MapVisualizer(BasePlugin, IVisualizer):
         # All config keys are optional with sensible defaults
         pass
     
-    def visualize(
+    def generate_visualization(
         self,
-        data: pd.DataFrame,
+        session_data: pd.DataFrame,
         config: Dict[str, Any],
-        shared_resources: Dict[str, Any],
         output_path: str,
         **kwargs
     ) -> Optional[str]:
         """Create map visualization overlay on video frames.
         
         Args:
-            data: DataFrame with tile_id and position data
+            session_data: DataFrame with tile_id and position data
             config: Visualization-specific configuration
-            shared_resources: Must contain 'maze_map' resource
             output_path: Directory to save visualization outputs
             **kwargs: Additional parameters including:
                 - video_path: Path to source video file
                 - session_id: Session identifier for output naming
+                - shared_resources: Must contain 'maze_map' resource
                 
         Returns:
             Path to created visualization video file, or None if failed
         """
         try:
-            # Extract parameters
-            video_path = kwargs.get('video_path')
+            # Get file requirements
+            session_path = kwargs.get('session_path')
+            if not session_path:
+                self.logger.error("Map visualization requires session_path")
+                return None
+            
+            files = self.get_file_requirements(session_path)
+            video_path = files.get('video_file')
             if not video_path:
-                self.logger.error("Map visualization requires video_path")
+                self.logger.error("Map visualization could not find required video file")
                 return None
                 
             session_id = kwargs.get('session_id', 'unknown_session')
             
             # Get map provider from shared resources
+            shared_resources = kwargs.get('shared_resources', {})
             map_provider = shared_resources.get('maze_map')
             if not map_provider:
                 self.logger.error("Map visualization requires maze_map in shared_resources")
@@ -153,8 +159,8 @@ class MapVisualizer(BasePlugin, IVisualizer):
                 
                 # Get current tile
                 current_tile_id = None
-                if frame_idx in data.index and 'tile_id' in data.columns:
-                    current_tile_id = data.loc[frame_idx, 'tile_id']
+                if frame_idx in session_data.index and 'tile_id' in session_data.columns:
+                    current_tile_id = session_data.loc[frame_idx, 'tile_id']
                     
                     if not pd.isna(current_tile_id) and current_tile_id >= 0:
                         visited_tiles.add(int(current_tile_id))

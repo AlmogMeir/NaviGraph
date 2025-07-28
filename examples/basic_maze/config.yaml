@@ -112,7 +112,7 @@ analyze:
   save_as_pkl: true
   save_raw_data_as_pkl: true
 
-# Visualization settings
+# Visualization settings (legacy)
 visualization:
   show_visualization: true
   record_visualization: false
@@ -129,3 +129,36 @@ visualization:
     resize_factor: 1.0
     method: 'side_by_side'
     show_tree_only: false
+
+# Plugin-based visualizations
+visualizations:
+  keypoints:
+    enabled: true
+    plugin: keypoint_visualizer
+    file_requirements:
+      video_file: '.*\.(mp4|avi|mov)$'
+    config:
+      bodyparts: ['Nose']  # Which bodyparts to visualize
+      point_size: 5
+      point_thickness: -1  # Filled circle
+      point_colors:
+        Nose: [0, 255, 0]  # Green
+      default_color: [0, 255, 0]
+      likelihood_threshold: 0.3
+      show_labels: false
+      
+  map_overlay:
+    enabled: true
+    plugin: map_visualizer
+    file_requirements:
+      video_file: '.*\.(mp4|avi|mov)$'
+    config:
+      overlay_position: bottom_right
+      overlay_size: 0.3
+      overlay_opacity: 0.7
+      current_tile_color: [255, 0, 0]  # Red
+      visited_tile_color: [0, 255, 0]  # Green
+      visited_tile_opacity: 0.3
+      show_tile_id: true
+      tile_id_font_scale: 1.0
+      tile_id_color: [0, 0, 255]  # Blue

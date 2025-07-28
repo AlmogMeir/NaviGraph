@@ -15,7 +15,8 @@ from loguru import logger
 from .session import Session
 from .file_discovery import FileDiscoveryEngine
 from .registry import registry
-from ..plugins import data_sources, shared_resources, analyzers
+from .visualization_pipeline import VisualizationPipeline
+from ..plugins import data_sources, shared_resources, analyzers, visualizers
 
 
 # Configuration constants
@@ -571,7 +572,68 @@ class ExperimentRunner:
             raise
     
     def _run_visualization(self) -> None:
-        """Run visualization mode (placeholder for future implementation)."""
-        logger.info("Visualization mode requested")
-        logger.warning("Visualization functionality not yet implemented in plugin architecture")
-        # TODO: Implement visualization using plugin system
+        """Run visualization mode using plugin system."""
+        logger.info("Starting visualization phase")
+        
+        try:
+            # Check if we have sessions
+            if not self.sessions:
+                logger.warning("No sessions available for visualization")
+                return
+            
+            # Check if visualization config exists
+            if 'visualizations' not in self.config:
+                logger.warning("No visualization configuration found")
+                return
+            
+            # Create visualization pipeline
+            viz_pipeline = VisualizationPipeline(self.config, registry, logger)
+            
+            # Get output path
+            output_path = self.config.get(OUTPUT_PATH, '.')
+            
+            # Process each session
+            all_results = {}
+            for session in self.sessions:
+                logger.info(f"Creating visualizations for session: {session.session_id}")
+                
+                # Get session path from discovered sessions
+                session_path = None
+                discovered_sessions = self.discover_sessions()
+                
+                if discovered_sessions:
+                    # Use the data directory as session path (where files are located)
+                    session_path = self.config.get(STREAM_PATH, '.')
+                    
+                    # Resolve relative path
+                    config_dir = getattr(self.config, '_config_dir', None)
+                    if config_dir and not os.path.isabs(session_path):
+                        session_path = os.path.join(config_dir, session_path)
+                
+                if not session_path:
+                    logger.warning(f"No session path available for session {session.session_id}")
+                    continue
+                
+                logger.info(f"Using session path: {session_path}")
+                
+                # Create visualizations
+                session_results = viz_pipeline.create_session_visualizations(
+                    session,
+                    output_path=output_path,
+                    session_path=session_path
+                )
+                
+                all_results[session.session_id] = session_results
+                
+                # Log results
+                for viz_name, outputs in session_results.items():
+                    if outputs:
+                        logger.info(f"✓ {viz_name} created {len(outputs)} output(s)")
+                    else:
+                        logger.warning(f"✗ {viz_name} produced no output")
+            
+            logger.info(f"Visualization complete: {len(all_results)} sessions processed")
+            
+        except Exception as e:
+            logger.error(f"Visualization failed: {str(e)}")
+            raise

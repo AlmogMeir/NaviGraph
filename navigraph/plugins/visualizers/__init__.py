@@ -8,10 +8,12 @@ from .trajectory_visualizer import TrajectoryVisualizer
 from .map_visualizer import MapVisualizer
 from .tree_visualizer import TreeVisualizer
 from .metrics_visualizer import MetricsVisualizer
+from .keypoint_visualizer import KeypointVisualizer
 
 __all__ = [
     "TrajectoryVisualizer",
     "MapVisualizer", 
     "TreeVisualizer",
-    "MetricsVisualizer"
+    "MetricsVisualizer",
+    "KeypointVisualizer"
 ]
