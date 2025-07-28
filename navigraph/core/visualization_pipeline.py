@@ -43,8 +43,8 @@ class VisualizationPipeline:
         viz_configs = self.config.get('visualizations', {})
         
         for viz_name, viz_config in viz_configs.items():
-            if not viz_config.get('enabled', True):
-                self.logger.debug(f"Skipping disabled visualizer: {viz_name}")
+            # Skip pipeline configuration - it's handled separately
+            if viz_name == 'pipeline':
                 continue
                 
             plugin_name = viz_config.get('plugin')
@@ -87,6 +87,26 @@ class VisualizationPipeline:
         Returns:
             Dict mapping visualizer names to list of output file paths
         """
+        # Check if we have a pipeline configuration first
+        if 'pipeline' in self.config.get('visualizations', {}):
+            # Pipeline mode: chain visualizers together
+            # Use configured output path or provided path
+            base_output_path = output_path or self.viz_config.output_path
+            if not base_output_path:
+                raise NavigraphError("No output path specified for visualization")
+            
+            # Prepare data and resources
+            data = session.get_integrated_dataframe()
+            shared_resources = session.shared_resources
+            session_id = session.session_id
+            
+            # Get session metadata (like reward_tile_id)
+            session_metadata = session.get_session_metadata()
+            reward_tile_id = session.config.get('reward_tile_id')
+            
+            return self._run_pipeline_mode(data, session_id, session_path, shared_resources, reward_tile_id, base_output_path)
+        
+        # Independent mode: check if we have individual visualizers
         if not self.visualizers:
             self.logger.warning("No visualizers configured")
             return {}
@@ -105,6 +125,19 @@ class VisualizationPipeline:
         session_metadata = session.get_session_metadata()
         reward_tile_id = session.config.get('reward_tile_id')
         
+        # Independent mode: run each visualizer separately
+        return self._run_independent_mode(data, session_id, session_path, shared_resources, reward_tile_id, base_output_path)
+    
+    def _run_independent_mode(
+        self, 
+        data: pd.DataFrame, 
+        session_id: str, 
+        session_path: str, 
+        shared_resources: Dict[str, Any], 
+        reward_tile_id: Any, 
+        base_output_path: str
+    ) -> Dict[str, List[str]]:
+        """Run visualizers independently (current behavior)."""
         results = {}
         
         for viz_name, visualizer in self.visualizers.items():
@@ -126,7 +159,7 @@ class VisualizationPipeline:
                     'reward_tile_id': reward_tile_id
                 }
                 
-                # Run visualization
+                # Run visualization (no input_video_path, uses file discovery)
                 output_file = visualizer.generate_visualization(
                     session_data=data,
                     config=viz_config,
@@ -146,3 +179,100 @@ class VisualizationPipeline:
                 results[viz_name] = []
         
         return results
+    
+    def _run_pipeline_mode(
+        self, 
+        data: pd.DataFrame, 
+        session_id: str, 
+        session_path: str, 
+        shared_resources: Dict[str, Any], 
+        reward_tile_id: Any, 
+        base_output_path: str
+    ) -> Dict[str, List[str]]:
+        """Run visualizers in pipeline mode (chained together)."""
+        pipeline_config = self.config['visualizations']['pipeline']
+        stages = pipeline_config.get('stages', [])
+        output_name = pipeline_config.get('output_name', 'pipeline_output')
+        
+        if not stages:
+            self.logger.error("Pipeline mode requires 'stages' configuration")
+            return {'pipeline': []}
+        
+        self.logger.info(f"Running {len(stages)}-stage visualization pipeline for {session_id}")
+        
+        # Create pipeline output directory
+        pipeline_output_path = Path(base_output_path) / session_id / 'pipeline'
+        pipeline_output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Common kwargs for all stages (same as independent mode)
+        viz_kwargs = {
+            'session_path': session_path,
+            'session_id': session_id,
+            'shared_resources': shared_resources,
+            'reward_tile_id': reward_tile_id
+        }
+        
+        # Start with original video for first stage
+        current_video_path = None  # First stage will use file discovery
+        
+        try:
+            for i, stage_config in enumerate(stages):
+                plugin_name = stage_config.get('plugin')
+                stage_config_dict = stage_config.get('config', {})
+                
+                if not plugin_name:
+                    self.logger.error(f"Pipeline stage {i+1} missing 'plugin' specification")
+                    return {'pipeline': []}
+                
+                # Get visualizer instance (same as independent mode would)
+                if plugin_name not in self.registry._visualizers:
+                    available_plugins = list(self.registry._visualizers.keys())
+                    self.logger.error(f"Unknown visualizer plugin: {plugin_name}. Available: {available_plugins}")
+                    return {'pipeline': []}
+                
+                visualizer_class = self.registry.get_visualizer_plugin(plugin_name)
+                visualizer = visualizer_class.from_config(stage_config_dict, self.logger)
+                
+                self.logger.info(f"Pipeline stage {i+1}/{len(stages)}: {plugin_name}")
+                
+                # Create stage-specific output directory (simple naming)
+                stage_output_path = pipeline_output_path / f"stage_{i+1}_{plugin_name}"
+                stage_output_path.mkdir(parents=True, exist_ok=True)
+                
+                # Run visualization - EXACTLY like independent mode, just with input_video_path
+                output_file = visualizer.generate_visualization(
+                    session_data=data,
+                    config=stage_config_dict,
+                    output_path=str(stage_output_path),
+                    input_video_path=current_video_path,  # Only difference from independent mode!
+                    **viz_kwargs
+                )
+                
+                if not output_file:
+                    self.logger.error(f"Pipeline stage {i+1} ({plugin_name}) produced no output")
+                    return {'pipeline': []}
+                
+                # Output from this stage becomes input for next stage
+                current_video_path = output_file
+                self.logger.info(f"✓ Stage {i+1} complete: {Path(output_file).name}")
+            
+            # Move final output to pipeline root and clean up intermediate files
+            if current_video_path:
+                # Create final output with desired name
+                final_output_path = pipeline_output_path / f"{output_name}_{session_id}.mp4"
+                Path(current_video_path).rename(final_output_path)
+                
+                # Clean up intermediate stage directories (keep only final output)
+                for stage_dir in pipeline_output_path.glob("stage_*"):
+                    if stage_dir.is_dir():
+                        import shutil
+                        shutil.rmtree(stage_dir)
+                
+                self.logger.info(f"✓ Pipeline complete: {final_output_path.name}")
+                return {'pipeline': [str(final_output_path)]}
+            else:
+                return {'pipeline': []}
+                
+        except Exception as e:
+            self.logger.error(f"Pipeline failed: {str(e)}")
+            return {'pipeline': []}

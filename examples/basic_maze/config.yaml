@@ -12,7 +12,7 @@ map_path: ./resources/maze_map.png
 experiment_output_path: ./output
 
 # Running Mode
-system_running_mode: 'analyze'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations like 'calibrate&analyze'
+system_running_mode: 'visualize'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations like 'calibrate&analyze'
 
 # Calibration parameters
 calibrator_parameters:
@@ -40,8 +40,9 @@ map_settings:
 
 # Location tracking settings
 location_settings:
-  bodypart: 'Nose'  # Which bodypart to track
+  bodypart: 'Nose'  # Which bodypart to track (backward compatibility)
   likelihood: 0.3  # Confidence threshold
+  bodyparts: 'all'  # Options: 'all', ['Nose', 'Tail'], or single bodypart name
 
 # Graph visualization
 graph:
@@ -132,33 +133,34 @@ visualization:
 
 # Plugin-based visualizations
 visualizations:
-  keypoints:
-    enabled: true
-    plugin: keypoint_visualizer
-    file_requirements:
-      video_file: '.*\.(mp4|avi|mov)$'
-    config:
-      bodyparts: ['Nose']  # Which bodyparts to visualize
-      point_size: 5
-      point_thickness: -1  # Filled circle
-      point_colors:
-        Nose: [0, 255, 0]  # Green
-      default_color: [0, 255, 0]
-      likelihood_threshold: 0.3
-      show_labels: false
-      
-  map_overlay:
-    enabled: true
-    plugin: map_visualizer
-    file_requirements:
-      video_file: '.*\.(mp4|avi|mov)$'
-    config:
-      overlay_position: bottom_right
-      overlay_size: 0.3
-      overlay_opacity: 0.7
-      current_tile_color: [255, 0, 0]  # Red
-      visited_tile_color: [0, 255, 0]  # Green
-      visited_tile_opacity: 0.3
-      show_tile_id: true
-      tile_id_font_scale: 1.0
-      tile_id_color: [0, 0, 255]  # Blue
+  pipeline:
+    output_name: keypoints_map_combined
+    stages:
+      - plugin: keypoint_visualizer
+        config:
+          bodyparts: 'all'
+          point_size: 5
+          point_thickness: -1
+          point_colors:
+            Nose: [0, 255, 0]  # Green
+            Midline_top: [255, 0, 0]  # Red
+            Midline_middle: [0, 0, 255]  # Blue
+            Tail_base: [255, 255, 0]  # Yellow
+          default_color: [0, 255, 0]
+          likelihood_threshold: 0.3
+          show_labels: false
+          file_requirements:
+            video_file: '.*\.(mp4|avi|mov)$'
+      - plugin: map_visualizer
+        config:
+          overlay_position: bottom_right
+          overlay_size: 0.3
+          overlay_opacity: 0.7
+          current_tile_color: [255, 0, 0]  # Red
+          visited_tile_color: [0, 255, 0]  # Green
+          visited_tile_opacity: 0.3
+          show_tile_id: true
+          tile_id_font_scale: 1.0
+          tile_id_color: [0, 0, 255]  # Blue
+          file_requirements:
+            video_file: '.*\.(mp4|avi|mov)$'

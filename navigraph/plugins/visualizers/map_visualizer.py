@@ -43,6 +43,7 @@ class MapVisualizer(BasePlugin, IVisualizer):
         session_data: pd.DataFrame,
         config: Dict[str, Any],
         output_path: str,
+        input_video_path: Optional[str] = None,
         **kwargs
     ) -> Optional[str]:
         """Create map visualization overlay on video frames.
@@ -60,17 +61,22 @@ class MapVisualizer(BasePlugin, IVisualizer):
             Path to created visualization video file, or None if failed
         """
         try:
-            # Get file requirements
-            session_path = kwargs.get('session_path')
-            if not session_path:
-                self.logger.error("Map visualization requires session_path")
-                return None
-            
-            files = self.get_file_requirements(session_path)
-            video_path = files.get('video_file')
-            if not video_path:
-                self.logger.error("Map visualization could not find required video file")
-                return None
+            # Get video path - priority: input_video_path > file discovery
+            if input_video_path:
+                video_path = input_video_path
+                self.logger.info(f"Using pipeline input video: {Path(video_path).name}")
+            else:
+                # Fall back to file discovery
+                session_path = kwargs.get('session_path')
+                if not session_path:
+                    self.logger.error("Map visualization requires session_path or input_video_path")
+                    return None
+                
+                files = self.get_file_requirements(session_path)
+                video_path = files.get('video_file')
+                if not video_path:
+                    self.logger.error("Map visualization could not find required video file")
+                    return None
                 
             session_id = kwargs.get('session_id', 'unknown_session')
             

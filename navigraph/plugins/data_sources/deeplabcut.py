@@ -43,8 +43,19 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
                 "found a matching .h5 file for this session."
             )
         
-        target_bodypart = session_config.get('bodypart', 'nose')
-        likelihood_threshold = session_config.get('likelihood_threshold', 0.3)
+        # Extract config from session_config structure
+        config_section = session_config.get('config', {})
+        
+        # Support both single bodypart (backward compatibility) and multiple bodyparts
+        target_bodyparts = config_section.get('bodyparts', None)
+        if target_bodyparts is None:
+            # Backward compatibility: use single bodypart from config
+            target_bodyparts = config_section.get('bodypart', 'nose')
+        
+        self.logger.debug(f"DeepLabCut config: {session_config}")
+        self.logger.info(f"Target bodyparts configuration: {target_bodyparts}")
+        
+        likelihood_threshold = config_section.get('likelihood_threshold', 0.3)
         
         self.logger.info(f"Loading DeepLabCut data from: {Path(h5_file_path).name}")
         
@@ -55,10 +66,22 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
             # Extract session information (preserving existing logic)
             session_metadata = self._extract_session_metadata(dlc_dataframe, self.logger)
             
-            # Extract single bodypart data (existing behavior)
-            processed_data = self._extract_single_bodypart_data(
-                dlc_dataframe, session_metadata, target_bodypart, likelihood_threshold, self.logger
-            )
+            # Extract bodypart data based on configuration
+            if isinstance(target_bodyparts, str) and target_bodyparts.lower() == 'all':
+                # Extract all available bodyparts
+                processed_data = self._extract_all_bodyparts_data(
+                    dlc_dataframe, session_metadata, likelihood_threshold, self.logger
+                )
+            elif isinstance(target_bodyparts, list):
+                # Extract multiple specific bodyparts
+                processed_data = self._extract_multiple_bodyparts_data(
+                    dlc_dataframe, session_metadata, target_bodyparts, likelihood_threshold, self.logger
+                )
+            else:
+                # Single bodypart (backward compatibility)
+                processed_data = self._extract_single_bodypart_data(
+                    dlc_dataframe, session_metadata, target_bodyparts, likelihood_threshold, self.logger
+                )
             
             # Create or merge with existing dataframe
             if current_dataframe.empty:
@@ -94,7 +117,10 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
     
     def get_provided_column_names(self) -> List[str]:
         """Return column names this data source provides."""
-        return ['keypoints_x', 'keypoints_y', 'keypoints_likelihood']
+        # Note: This is dynamic based on bodyparts configuration
+        # For single bodypart: keypoints_x, keypoints_y, keypoints_likelihood
+        # For multiple: BodypartName_x, BodypartName_y, BodypartName_likelihood
+        return ['keypoints_x', 'keypoints_y', 'keypoints_likelihood']  # Default single bodypart
     
     def get_required_columns(self) -> List[str]:
         """Return column names required by this data source."""
@@ -212,3 +238,54 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
             raise DataSourceError(
                 f"Failed to extract bodypart '{target_bodypart}' from DeepLabCut data: {str(e)}"
             ) from e
+    
+    def _extract_multiple_bodyparts_data(
+        self,
+        dlc_dataframe: pd.DataFrame,
+        session_metadata: Dict[str, Any],
+        target_bodyparts: List[str],
+        likelihood_threshold: float,
+        logger
+    ) -> pd.DataFrame:
+        """Extract data for multiple specific bodyparts."""
+        all_columns = {}
+        
+        for bodypart in target_bodyparts:
+            try:
+                # Extract single bodypart data
+                single_data = self._extract_single_bodypart_data(
+                    dlc_dataframe, session_metadata, bodypart, likelihood_threshold, logger
+                )
+                
+                # Rename columns to include bodypart name
+                for col in single_data.columns:
+                    # Replace generic 'keypoints' with actual bodypart name
+                    new_col_name = col.replace('keypoints', bodypart)
+                    all_columns[new_col_name] = single_data[col]
+                    
+            except DataSourceError as e:
+                logger.warning(f"Skipping bodypart '{bodypart}': {str(e)}")
+                continue
+        
+        if not all_columns:
+            raise DataSourceError(
+                f"None of the requested bodyparts {target_bodyparts} could be extracted"
+            )
+        
+        logger.info(f"Extracted {len(target_bodyparts)} bodyparts with {len(all_columns)} total columns")
+        return pd.DataFrame(all_columns)
+    
+    def _extract_all_bodyparts_data(
+        self,
+        dlc_dataframe: pd.DataFrame,
+        session_metadata: Dict[str, Any],
+        likelihood_threshold: float,
+        logger
+    ) -> pd.DataFrame:
+        """Extract data for all available bodyparts."""
+        available_bodyparts = session_metadata['bodyparts']
+        logger.info(f"Extracting all {len(available_bodyparts)} available bodyparts: {available_bodyparts}")
+        
+        return self._extract_multiple_bodyparts_data(
+            dlc_dataframe, session_metadata, available_bodyparts, likelihood_threshold, logger
+        )

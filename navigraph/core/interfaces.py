@@ -61,6 +61,7 @@ class IVisualizer(ABC):
         session_data: pd.DataFrame,
         config: Dict[str, Any],
         output_path: str,
+        input_video_path: Optional[str] = None,
         **kwargs
     ) -> Optional[str]:
         """Generate visualization and return output path.
@@ -69,8 +70,9 @@ class IVisualizer(ABC):
             session_data: DataFrame with integrated session data
             config: Visualization-specific configuration
             output_path: Directory to save visualization outputs
+            input_video_path: Optional input video path for pipeline mode
             **kwargs: Additional parameters that may include:
-                - video_path: Path to source video for video-based visualizations
+                - session_path: Path to session directory for file discovery
                 - session_id: Session identifier for output naming
                 - shared_resources: Dict of shared resources (map, graph, etc.)
                 - Any other visualizer-specific parameters

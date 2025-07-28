@@ -483,6 +483,7 @@ class ExperimentRunner:
                 'discovered_file_path': session_files['h5_file'],
                 'config': {
                     'bodypart': self.config.get('location_settings', {}).get('bodypart', 'nose'),
+                    'bodyparts': self.config.get('location_settings', {}).get('bodyparts'),  # Multi-bodypart support
                     'likelihood_threshold': self.config.get('location_settings', {}).get('likelihood', 0.3)
                 }
             })

@@ -38,6 +38,7 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
         session_data: pd.DataFrame,
         config: Dict[str, Any],
         output_path: str,
+        input_video_path: Optional[str] = None,
         **kwargs
     ) -> Optional[str]:
         """Create keypoint visualization on video frames.
@@ -54,17 +55,22 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
             Path to created visualization video file, or None if failed
         """
         try:
-            # Get file requirements
-            session_path = kwargs.get('session_path')
-            if not session_path:
-                self.logger.error("Keypoint visualization requires session_path")
-                return None
-            
-            files = self.get_file_requirements(session_path)
-            video_path = files.get('video_file')
-            if not video_path:
-                self.logger.error("Keypoint visualization could not find required video file")
-                return None
+            # Get video path - priority: input_video_path > file discovery
+            if input_video_path:
+                video_path = input_video_path
+                self.logger.info(f"Using pipeline input video: {Path(video_path).name}")
+            else:
+                # Fall back to file discovery
+                session_path = kwargs.get('session_path')
+                if not session_path:
+                    self.logger.error("Keypoint visualization requires session_path or input_video_path")
+                    return None
+                
+                files = self.get_file_requirements(session_path)
+                video_path = files.get('video_file')
+                if not video_path:
+                    self.logger.error("Keypoint visualization could not find required video file")
+                    return None
                 
             session_id = kwargs.get('session_id', 'unknown_session')
             
@@ -141,7 +147,7 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
                         # Get coordinates and likelihood
                         x = session_data.loc[frame_idx, cols['x']]
                         y = session_data.loc[frame_idx, cols['y']]
-                        likelihood = session_data.loc[frame_idx, cols['likelihood']] if cols['likelihood'] else 1.0
+                        likelihood = session_data.loc[frame_idx, cols['likelihood']] if 'likelihood' in cols and cols['likelihood'] else 1.0
                         
                         # Skip if low confidence or NaN
                         if pd.isna(x) or pd.isna(y) or likelihood < viz_config['likelihood_threshold']:
@@ -227,14 +233,14 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
                     'likelihood': 'likelihood' if 'likelihood' in df.columns else None
                 }
             else:
-                # Look for bodypart patterns
+                # Look for bodypart patterns: BodypartName_x, BodypartName_y, BodypartName_likelihood
                 for col in df.columns:
                     for suffix in ['_x', '_y', '_likelihood']:
                         if col.endswith(suffix):
                             bodypart = col.replace(suffix, '')
                             if bodypart not in keypoint_info:
                                 keypoint_info[bodypart] = {}
-                            coord = suffix[1:]  # Remove underscore
+                            coord = suffix[1:]  # Remove underscore  
                             keypoint_info[bodypart][coord] = col
         
         # Validate that we have complete info for each bodypart
