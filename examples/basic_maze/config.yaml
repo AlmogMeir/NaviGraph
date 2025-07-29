@@ -4,12 +4,17 @@
 verbose: false
 
 # Data paths (relative to this config file)
-stream_path: ./data  # Directory containing video files
-keypoint_detection_file_path: ./data  # Directory containing .h5 files
+stream_path: ./demo_session  # Directory containing video files
+keypoint_detection_file_path: ./demo_session  # Directory containing .h5 files
 map_path: ./resources/maze_map.png
 
 # Output
-experiment_output_path: ./output
+# Options for experiment_output_path:
+#   - {PROJECT_ROOT}/output - creates output at project root level
+#   - ./output - creates output relative to this config file  
+#   - ~/output - creates output in user home directory
+#   - /absolute/path/output - creates output at absolute path
+experiment_output_path: "{PROJECT_ROOT}/output"
 
 # Running Mode
 system_running_mode: 'visualize'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations like 'calibrate&analyze'
@@ -28,8 +33,8 @@ calibrator_parameters:
 
   registration_method: 'homography&ransac'  # Options: 'affine', 'homography', 'homography&ransac'
   save_transform_matrix: true
-  path_to_save_calibration_files: ./data
-  pre_calculated_transform_matrix_path: ./data/calibration/transform_matrix.npy
+  path_to_save_calibration_files: ./demo_session
+  pre_calculated_transform_matrix_path: ./demo_session/calibration/transform_matrix.npy
 
 # Map settings
 map_settings:

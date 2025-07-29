@@ -4,10 +4,7 @@ This module provides extensible plugins for data sources, analyzers,
 and shared resources.
 """
 
-# Import all plugins to trigger registration
-from . import data_sources
-from . import shared_resources
-from . import analyzers
-from . import visualizers
+# Plugins are now loaded lazily when imported explicitly
+# This prevents automatic registration during CLI help
 
 __all__ = ["data_sources", "shared_resources", "analyzers", "visualizers"]

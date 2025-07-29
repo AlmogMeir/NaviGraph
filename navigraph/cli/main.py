@@ -8,15 +8,31 @@ from omegaconf import OmegaConf, DictConfig
 from loguru import logger
 
 from ..core.experiment_runner import ExperimentRunner
-from ..core.registry import registry
-from ..plugins import data_sources, shared_resources, analyzers
 
 
 @click.group()
 @click.version_option(version="0.1.0", prog_name="navigraph")
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
 def cli(verbose: bool):
-    """NaviGraph: Graph-based behavioral analysis framework."""
+    """NaviGraph: Graph-based behavioral analysis framework.
+    
+    Comprehensive infrastructure to empower researcher workflows in 
+    multimodal scenarios - digesting inputs, analysis, visualizations 
+    and more.
+    
+    \b
+    Quick Start:
+      navigraph run examples/basic_maze/config.yaml --mode visualize
+      navigraph run examples/basic_maze/config.yaml --mode analyze
+      navigraph discover ./data/
+      navigraph list-plugins
+    
+    \b
+    Installation:
+      poetry install    # Install dependencies
+      poetry shell      # Activate environment
+      navigraph --help  # You're here!
+    """
     if verbose:
         logger.add(sys.stderr, level="DEBUG")
     else:
@@ -32,12 +48,32 @@ def cli(verbose: bool):
 @click.option('--output', '-o', type=click.Path(path_type=Path),
               help='Override output directory from config')
 def run(config_path: Path, mode: tuple, output: Optional[Path]):
-    """Run experiment with specified configuration.
+    """Run NaviGraph experiment with the specified configuration.
+    
+    Process video data through the complete analysis pipeline including
+    calibration, spatial mapping, graph analysis, and visualization.
     
     CONFIG_PATH: Path to YAML configuration file
-        navigraph run configs/maze_basic.yaml --mode analyze
-        navigraph run configs/maze_basic.yaml --mode calibrate --mode analyze
+    
+    \b
+    Examples:
+      navigraph run examples/basic_maze/config.yaml --mode visualize
+      navigraph run examples/basic_maze/config.yaml --mode analyze  
+      navigraph run config.yaml --mode calibrate --mode analyze
+      navigraph run config.yaml --output ./results/
+    
+    \b
+    Available modes:
+      calibrate   - Calibrate camera-to-maze coordinate transformation
+      test        - Test calibration quality and accuracy
+      analyze     - Analyze behavioral metrics and navigation patterns  
+      visualize   - Generate video visualizations with keypoints/maps
+    
+    Modes can be combined: --mode calibrate --mode analyze
     """
+    # Load plugins only when actually running experiments
+    from ..plugins import data_sources, shared_resources, analyzers
+    
     try:
         click.echo(f"🚀 Starting NaviGraph experiment with config: {config_path}")
         
@@ -89,13 +125,28 @@ def run(config_path: Path, mode: tuple, output: Optional[Path]):
               default='table',
               help='Output format for discovered sessions')
 def discover(data_path: Path, format: str):
-    """Discover available sessions in a data directory.
+    """Discover and list available experimental sessions.
+    
+    Scan a directory for video files (.mp4, .avi) and matching DeepLabCut
+    H5 files to identify sessions ready for analysis.
     
     DATA_PATH: Path to directory containing experimental data
     
-    This command scans the specified directory for video files and corresponding
-    DeepLabCut H5 files, showing what sessions would be processed by NaviGraph.
+    \b
+    Examples:
+      navigraph discover ./data/
+      navigraph discover /path/to/experiments/ --format json
+      navigraph discover ./sessions/ --format tree
+    
+    \b
+    Expected file structure:
+      • Video files: *.mp4, *.avi, *.mov
+      • DeepLabCut files: *DLC*.h5
+      • Matching names: video basename should appear in H5 filename
     """
+    # Load plugins for session discovery
+    from ..plugins import data_sources, shared_resources, analyzers
+    
     try:
         click.echo(f"🔍 Discovering sessions in: {data_path}")
         
@@ -160,17 +211,30 @@ def discover(data_path: Path, format: str):
               default='table',
               help='Output format')
 def list_plugins(category: str, format: str):
-    """List available NaviGraph plugins.
+    """List all available NaviGraph plugins by category.
     
-    Shows all registered plugins in the system, organized by category.
-    Useful for understanding what data sources, analyzers, and shared
-    resources are available for use in configurations.
+    Display plugins for data integration, analysis, and visualization.
+    Use this to discover available functionality and verify plugin registration.
+    
+    \b
+    Examples:
+      navigraph list-plugins
+      navigraph list-plugins --category analyzers
+      navigraph list-plugins --format json
+    
+    \b
+    Plugin categories:
+      data_sources      - DeepLabCut, map integration, graph integration
+      shared_resources  - Map provider, graph provider, calibration
+      analyzers        - Spatial metrics, navigation analysis, exploration
+      visualizers      - Keypoint, map, trajectory visualizations
     """
     try:
         click.echo("🔌 NaviGraph Plugin Registry")
         
-        # Trigger plugin registration by importing
-        # (This happens automatically when plugins are imported)
+        # Load plugins to populate the registry
+        from ..plugins import data_sources, shared_resources, analyzers
+        from ..core.registry import registry
         
         # Get all plugins
         all_plugins = registry.list_all_plugins()
@@ -228,17 +292,31 @@ def list_plugins(category: str, format: str):
 @cli.command()
 @click.argument('config_path', type=click.Path(exists=True, path_type=Path))
 def validate(config_path: Path):
-    """Validate NaviGraph configuration file.
+    """Validate configuration file for errors and compatibility.
+    
+    Check configuration syntax, required fields, file paths, and plugin
+    dependencies before running experiments to catch issues early.
     
     CONFIG_PATH: Path to YAML configuration file to validate
     
-    Checks the configuration for common issues:
-    - Required paths exist
-    - Plugin dependencies are satisfied  
-    - Configuration structure is valid
+    \b
+    Examples:
+      navigraph validate examples/basic_maze/config.yaml
+      navigraph validate my_experiment_config.yaml
+    
+    \b
+    Validation checks:
+      ✓ YAML syntax and structure
+      ✓ Required fields present
+      ✓ File paths exist and accessible
+      ✓ Plugin dependencies satisfied
+      ✓ Configuration parameter validity
     """
     try:
         click.echo(f"🔍 Validating configuration: {config_path}")
+        
+        # Load plugins for validation
+        from ..plugins import data_sources, shared_resources, analyzers
         
         # Load configuration
         config = OmegaConf.load(config_path)
@@ -262,6 +340,7 @@ def validate(config_path: Path):
         # Check plugin configuration
         if 'analyze' in config and 'metrics' in config.analyze:
             metrics = config.analyze.metrics
+            from ..core.registry import registry
             available_analyzers = registry.list_all_plugins()['analyzers']
             
             for metric_name, metric_config in metrics.items():

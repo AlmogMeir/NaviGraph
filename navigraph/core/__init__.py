@@ -3,7 +3,6 @@
 # Core interfaces and classes
 from .interfaces import IDataSource, ISharedResource, IAnalyzer, IVisualizer
 from .base_plugin import BasePlugin
-from .registry import PluginRegistry, registry
 from .session import Session
 from .experiment_runner import ExperimentRunner
 
@@ -25,8 +24,6 @@ __all__ = [
     "IAnalyzer",
     "IVisualizer",
     "BasePlugin",
-    "PluginRegistry",
-    "registry",
     "Session",
     "ExperimentRunner",
     

@@ -19,7 +19,6 @@ from .exceptions import (
     DataSourceError,
     NavigraphError
 )
-from .registry import PluginRegistry, registry
 from .file_discovery import FileDiscoveryEngine
 
 
@@ -34,14 +33,14 @@ class Session:
         logger_instance: Logger,
         session_identifier: Optional[str] = None,
         file_discovery_engine: Optional[FileDiscoveryEngine] = None,
-        plugin_registry: Optional[PluginRegistry] = None
+        plugin_registry = None
     ):
         """Initialize session with data source orchestration."""
         self.session_id = session_identifier or session_configuration.get('session_id', 'unknown_session')
         self.config = session_configuration
         
-        # Set up basic attributes first
-        self.registry = plugin_registry or registry  # Use global registry if not provided
+        # Set up basic attributes first  
+        self.registry = plugin_registry  # Will be loaded lazily when needed
         self.logger = logger_instance
         
         # Initialize shared resources from configuration
@@ -55,6 +54,9 @@ class Session:
                 if resource_name and resource_type:
                     try:
                         # Get plugin class from registry and instantiate
+                        if not self.registry:
+                            from .registry import registry
+                            self.registry = registry
                         resource_class = self.registry.get_shared_resource_plugin(resource_type)
                         
                         # Add experiment path to resource config for path resolution
@@ -581,6 +583,9 @@ class Session:
             
             try:
                 # Get plugin class from registry
+                if not self.registry:
+                    from .registry import registry
+                    self.registry = registry
                 ds_class = self.registry.get_data_source_plugin(ds_type)
                 ds_instance = ds_class()
                 

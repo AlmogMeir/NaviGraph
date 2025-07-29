@@ -8,15 +8,15 @@ import os
 import glob
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
+import shutil
 import pandas as pd
 from omegaconf import DictConfig, OmegaConf
 from loguru import logger
 
 from .session import Session
 from .file_discovery import FileDiscoveryEngine
-from .registry import registry
 from .visualization_pipeline import VisualizationPipeline
-from ..plugins import data_sources, shared_resources, analyzers, visualizers
 
 
 # Configuration constants
@@ -48,16 +48,22 @@ class ExperimentRunner:
         
         # Resolve relative paths using config directory
         config_dir = getattr(config, '_config_dir', None)
+        self.config_dir = config_dir
         
-        # Setup logging with resolved output path
-        output_path = config.get(OUTPUT_PATH, '.')
-        if config_dir and not os.path.isabs(output_path):
-            output_path = os.path.join(config_dir, output_path)
-        if not os.path.exists(output_path):
-            os.makedirs(output_path, exist_ok=True)
-            
-        # Configure loguru with file output
-        log_file = os.path.join(output_path, 'navigraph_experiment.log')
+        # Create timestamped experiment folder with flexible path resolution
+        base_output_path = self._resolve_output_path(config.get(OUTPUT_PATH, '.'), config_dir)
+        
+        # Create experiment folder with timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.experiment_folder = os.path.join(base_output_path, f"experiment_{timestamp}")
+        os.makedirs(self.experiment_folder, exist_ok=True)
+        
+        # Save configuration to experiment folder for reproducibility
+        config_copy_path = os.path.join(self.experiment_folder, 'config.yaml')
+        OmegaConf.save(config, config_copy_path)
+        
+        # Configure loguru with file output in experiment folder
+        log_file = os.path.join(self.experiment_folder, 'experiment.log')
         logger.add(log_file, format="{time} | {level} | {message}", level="DEBUG")
         
         if config.get('verbose', False):
@@ -73,6 +79,61 @@ class ExperimentRunner:
         self.analysis_results: Optional[pd.DataFrame] = None
         
         logger.info(f"Experiment runner initialized with mode: {self.system_mode}")
+    
+    def _resolve_output_path(self, output_path: str, config_dir: Optional[str]) -> str:
+        """Resolve output path with flexible options.
+        
+        Supports:
+        - Absolute paths: /absolute/path
+        - Home directory: ~/path
+        - Project root: {PROJECT_ROOT}/path
+        - Config relative: ./path (default behavior)
+        
+        Args:
+            output_path: Path from configuration
+            config_dir: Directory containing the config file
+            
+        Returns:
+            Resolved absolute path
+        """
+        # Handle absolute paths
+        if os.path.isabs(output_path):
+            return output_path
+        
+        # Handle home directory paths
+        if output_path.startswith('~/'):
+            return os.path.expanduser(output_path)
+        
+        # Handle project root token
+        if '{PROJECT_ROOT}' in output_path:
+            # Find project root (directory containing pyproject.toml)
+            project_root = self._find_project_root()
+            return output_path.replace('{PROJECT_ROOT}', project_root)
+        
+        # Default: relative to config directory (backwards compatibility)
+        if config_dir and not os.path.isabs(output_path):
+            return os.path.join(config_dir, output_path)
+        
+        return output_path
+    
+    def _find_project_root(self) -> str:
+        """Find the project root directory by looking for pyproject.toml."""
+        current_dir = os.path.abspath(os.getcwd())
+        
+        # Start from current directory and walk up
+        while current_dir != os.path.dirname(current_dir):  # Stop at filesystem root
+            if os.path.exists(os.path.join(current_dir, 'pyproject.toml')):
+                return current_dir
+            current_dir = os.path.dirname(current_dir)
+        
+        # If we can't find pyproject.toml, use the directory containing navigraph package
+        try:
+            import navigraph
+            navigraph_path = os.path.dirname(os.path.dirname(navigraph.__file__))
+            return navigraph_path
+        except:
+            # Fallback to current working directory
+            return os.getcwd()
     
     def discover_sessions(self) -> List[Dict[str, str]]:
         """Discover available sessions using file discovery (preserving original Manager logic).
@@ -146,10 +207,15 @@ class ExperimentRunner:
             # Create session dictionaries
             discovered_sessions = []
             for video_file, h5_file in zip(matched_streams, sorted_detection_paths):
+                # Extract session folder name (last directory in path)
+                video_dir = os.path.dirname(video_file)
+                session_folder_name = os.path.basename(video_dir)
+                
                 session_dict = {
                     'video_file': video_file,
                     'h5_file': h5_file,
-                    'session_name': os.path.basename(video_file).split('.')[0]
+                    'session_name': os.path.basename(video_file).split('.')[0],
+                    'session_folder_name': session_folder_name
                 }
                 discovered_sessions.append(session_dict)
             
@@ -166,6 +232,10 @@ class ExperimentRunner:
         This method initializes all shared resources (map, graph, calibration)
         that will be used across sessions.
         """
+        # Load plugins for shared resource initialization
+        from ..plugins import data_sources, shared_resources, analyzers, visualizers
+        from .registry import registry
+        
         logger.info("Initializing shared resources")
         
         try:
@@ -241,13 +311,16 @@ class ExperimentRunner:
         try:
             for i, session_files in enumerate(discovered_sessions):
                 try:
+                    # Use session folder name as session ID
+                    session_folder_name = session_files.get('session_folder_name', f"session_{i:03d}")
+                    
                     # Create session configuration  
                     session_config = {
                         'data_sources': self._get_data_source_config(session_files),
                         'session_settings': dict(self.config.get('location_settings', {})),
                         'analyze': dict(self.config.get('analyze', {})),
                         'reward_tile_id': self.config.get('reward_tile_id'),
-                        'session_id': f"session_{i:03d}"
+                        'session_id': session_folder_name
                     }
                     
                     # Create session
@@ -275,6 +348,10 @@ class ExperimentRunner:
         Returns:
             DataFrame with analysis results
         """
+        # Load plugins for analysis
+        from ..plugins import data_sources, shared_resources, analyzers, visualizers
+        from .registry import registry
+        
         logger.info("Starting analysis phase")
         
         try:
@@ -365,6 +442,10 @@ class ExperimentRunner:
         Args:
             discovered_sessions: List of discovered session files
         """
+        # Load plugins for calibration
+        from ..plugins import data_sources, shared_resources, analyzers, visualizers
+        from .registry import registry
+        
         logger.info("Starting calibration mode")
         
         try:
@@ -513,34 +594,60 @@ class ExperimentRunner:
     def _save_analysis_results(self, results_df: pd.DataFrame) -> None:
         """Save analysis results to configured outputs."""
         try:
-            output_path = self.config.get(OUTPUT_PATH, '.')
             analyze_config = self.config.get('analyze', {})
             
-            # Save as CSV
+            # Create cross_session metrics directory
+            cross_session_dir = os.path.join(self.experiment_folder, 'cross_session', 'metrics')
+            os.makedirs(cross_session_dir, exist_ok=True)
+            
+            # Save cross-session results
             if analyze_config.get('save_as_csv', False):
-                csv_path = os.path.join(output_path, 'analysis_results.csv')
+                csv_path = os.path.join(cross_session_dir, 'analysis_results.csv')
                 results_df.to_csv(csv_path)
-                logger.info(f"✓ Results saved to CSV: {csv_path}")
+                logger.info(f"✓ Cross-session results saved to CSV: {csv_path}")
             
-            # Save as PKL
             if analyze_config.get('save_as_pkl', False):
-                pkl_path = os.path.join(output_path, 'analysis_results.pkl')
+                pkl_path = os.path.join(cross_session_dir, 'analysis_results.pkl')
                 results_df.to_pickle(pkl_path)
-                logger.info(f"✓ Results saved to PKL: {pkl_path}")
+                logger.info(f"✓ Cross-session results saved to PKL: {pkl_path}")
             
-            # Save raw data
-            if analyze_config.get('save_raw_data_as_pkl', False):
-                for session in self.sessions:
+            # Save per-session data
+            for session in self.sessions:
+                # Create session directories
+                session_dir = os.path.join(self.experiment_folder, session.session_id)
+                metrics_dir = os.path.join(session_dir, 'metrics')
+                raw_data_dir = os.path.join(session_dir, 'raw_data')
+                os.makedirs(metrics_dir, exist_ok=True)
+                os.makedirs(raw_data_dir, exist_ok=True)
+                
+                # Save session-specific metrics
+                if analyze_config.get('save_as_csv', False):
+                    session_metrics = results_df[[session.session_id]]
+                    session_csv_path = os.path.join(metrics_dir, 'session_metrics.csv')
+                    session_metrics.to_csv(session_csv_path)
+                
+                if analyze_config.get('save_as_pkl', False):
+                    session_metrics = results_df[[session.session_id]]
+                    session_pkl_path = os.path.join(metrics_dir, 'session_metrics.pkl')
+                    session_metrics.to_pickle(session_pkl_path)
+                
+                # Save raw data
+                if analyze_config.get('save_raw_data_as_pkl', False):
                     raw_df = session.get_integrated_dataframe()
-                    raw_path = os.path.join(output_path, f'{session.session_id}_raw.pkl')
+                    raw_path = os.path.join(raw_data_dir, 'session_raw_data.pkl')
                     raw_df.to_pickle(raw_path)
-                logger.info(f"✓ Raw data saved for {len(self.sessions)} sessions")
+            
+            logger.info(f"✓ Session data saved for {len(self.sessions)} sessions")
                 
         except Exception as e:
             logger.warning(f"Failed to save some results: {str(e)}")
     
     def _test_saved_calibration(self, discovered_sessions: List[Dict[str, str]]) -> None:
         """Test saved calibration using calibration plugin."""
+        # Load plugins for calibration testing
+        from ..plugins import data_sources, shared_resources, analyzers, visualizers
+        from .registry import registry
+        
         logger.info("Testing saved calibration")
         
         try:
@@ -590,13 +697,13 @@ class ExperimentRunner:
             # Create visualization pipeline
             viz_pipeline = VisualizationPipeline(self.config, registry, logger)
             
-            # Get output path
-            output_path = self.config.get(OUTPUT_PATH, '.')
-            
             # Process each session
             all_results = {}
             for session in self.sessions:
                 logger.info(f"Creating visualizations for session: {session.session_id}")
+                
+                # Create session output directory
+                session_output_path = os.path.join(self.experiment_folder, session.session_id)
                 
                 # Get session path from discovered sessions
                 session_path = None
@@ -620,7 +727,7 @@ class ExperimentRunner:
                 # Create visualizations
                 session_results = viz_pipeline.create_session_visualizations(
                     session,
-                    output_path=output_path,
+                    output_path=session_output_path,
                     session_path=session_path
                 )
                 

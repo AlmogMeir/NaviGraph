@@ -53,32 +53,39 @@ class IAnalyzer(ABC):
 
 
 class IVisualizer(ABC):
-    """Interface for visualizers that create plots and figures."""
+    """Interface for visualizers that process and transform data.
+    
+    Visualizers are pure data transformation functions that process input
+    data and return the result. They do not handle file I/O - that is the
+    responsibility of the pipeline and publishers.
+    """
     
     @abstractmethod
-    def generate_visualization(
+    def process(
         self,
         session_data: pd.DataFrame,
         config: Dict[str, Any],
-        output_path: str,
-        input_video_path: Optional[str] = None,
+        input_data: Optional[Any] = None,
         **kwargs
-    ) -> Optional[str]:
-        """Generate visualization and return output path.
+    ) -> Any:
+        """Process data and return visualization result.
         
         Args:
             session_data: DataFrame with integrated session data
             config: Visualization-specific configuration
-            output_path: Directory to save visualization outputs
-            input_video_path: Optional input video path for pipeline mode
-            **kwargs: Additional parameters that may include:
+            input_data: Optional input from previous pipeline stage
+                - For video processors: Iterator[np.ndarray] or video path
+                - For plot processors: matplotlib Figure or data
+            **kwargs: Additional parameters including:
                 - session_path: Path to session directory for file discovery
-                - session_id: Session identifier for output naming
+                - session_id: Session identifier
                 - shared_resources: Dict of shared resources (map, graph, etc.)
-                - Any other visualizer-specific parameters
                 
         Returns:
-            Path to created visualization file, or None if failed
+            Processed visualization data:
+            - Video processors: Iterator[np.ndarray] (frame generator)
+            - Plot processors: matplotlib.Figure or np.ndarray
+            - Data processors: Transformed data
         """
         pass
 
