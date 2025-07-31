@@ -92,18 +92,29 @@ class FileDiscoveryEngine:
         self, 
         session_folder_name: str, 
         file_pattern_mapping: Dict[str, str],
-        validate_session_exists: bool = True
+        validate_session_exists: bool = True,
+        shared_pattern_mapping: Optional[Dict[str, str]] = None
     ) -> Dict[str, Optional[str]]:
-        """Match files in session folder using regex patterns."""
+        """Match files and directories in session folder using regex patterns.
+        
+        Args:
+            session_folder_name: Name of the session folder
+            file_pattern_mapping: Map of data source names to regex patterns for session files/directories
+            validate_session_exists: Whether to validate session folder exists
+            shared_pattern_mapping: Map of data source names to regex patterns for shared files/directories
+            
+        Returns:
+            Dictionary mapping data source names to discovered file/directory paths
+        """
         session_path = self.experiment_path / session_folder_name
         
         if validate_session_exists and not session_path.exists():
             self.logger.error(f"Session folder not found: {session_path}")
             return {name: None for name in file_pattern_mapping.keys()}
         
-        # Get all files in session folder efficiently
+        # Get all files and directories in session folder efficiently
         try:
-            available_files = [f.name for f in session_path.iterdir() if f.is_file()]
+            available_files = [f.name for f in session_path.iterdir()]
         except PermissionError:
             self.logger.error(f"Permission denied accessing session folder: {session_path}")
             return {name: None for name in file_pattern_mapping.keys()}
@@ -114,6 +125,7 @@ class FileDiscoveryEngine:
         discovered_files = {}
         pattern_match_stats = []
         
+        # Match session-specific files/directories
         for data_source_name, regex_pattern in file_pattern_mapping.items():
             matched_file_path = self._find_matching_file(
                 available_files, regex_pattern, session_path, data_source_name
@@ -125,6 +137,39 @@ class FileDiscoveryEngine:
                 pattern_match_stats.append(f"✓ {data_source_name}")
             else:
                 pattern_match_stats.append(f"✗ {data_source_name}")
+        
+        # Match shared files if provided
+        if shared_pattern_mapping:
+            # Look for shared files in experiment root or shared subfolder
+            shared_paths = [
+                self.experiment_path,  # Root level
+                self.experiment_path / 'shared',  # Shared subfolder
+                self.experiment_path / 'resources'  # Resources subfolder
+            ]
+            
+            for data_source_name, regex_pattern in shared_pattern_mapping.items():
+                matched_file_path = None
+                
+                # Try each shared path
+                for shared_path in shared_paths:
+                    if shared_path.exists():
+                        try:
+                            shared_files = [f.name for f in shared_path.iterdir()]
+                            matched_file_path = self._find_matching_file(
+                                shared_files, regex_pattern, shared_path, data_source_name
+                            )
+                            if matched_file_path:
+                                break
+                        except (PermissionError, OSError):
+                            continue
+                
+                discovered_files[data_source_name] = matched_file_path
+                
+                # Track pattern matching statistics
+                if matched_file_path:
+                    pattern_match_stats.append(f"✓ {data_source_name} (shared)")
+                else:
+                    pattern_match_stats.append(f"✗ {data_source_name} (shared)")
         
         self.logger.debug(
             f"File matching for {session_folder_name}: {', '.join(pattern_match_stats)}"
@@ -161,12 +206,12 @@ class FileDiscoveryEngine:
     
     def _find_matching_file(
         self, 
-        available_files: List[str], 
+        available_items: List[str], 
         regex_pattern: str, 
         session_path: Path,
         data_source_name: str
     ) -> Optional[str]:
-        """Find single matching file using regex pattern with comprehensive logging."""
+        """Find single matching file or directory using regex pattern with comprehensive logging."""
         try:
             compiled_pattern = re.compile(regex_pattern, re.IGNORECASE)
         except re.error as e:
@@ -175,17 +220,17 @@ class FileDiscoveryEngine:
             )
             return None
         
-        # Find all matching files
+        # Find all matching files/directories
         matching_files = [
-            filename for filename in available_files 
+            filename for filename in available_items 
             if compiled_pattern.match(filename)
         ]
         
         if not matching_files:
             self.logger.debug(
-                f"No files found for {data_source_name} in {session_path.name} "
+                f"No files/directories found for {data_source_name} in {session_path.name} "
                 f"(pattern: {regex_pattern}). "
-                f"Available files: {', '.join(available_files[:5])}{'...' if len(available_files) > 5 else ''}"
+                f"Available items: {', '.join(available_items[:5])}{'...' if len(available_items) > 5 else ''}"
             )
             return None
         

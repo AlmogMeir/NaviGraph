@@ -1,0 +1,266 @@
+# NaviGraph Multimodal Demo Configuration
+# 
+# This configuration demonstrates the integration of multiple data modalities:
+# 1. Behavioral tracking (DeepLabCut pose estimation)
+# 2. Neural activity (calcium imaging from Minian)  
+# 3. Head direction (IMU quaternion data)
+# 4. Spatial navigation (maze mapping)
+#
+# Session: apoE4 female RSC 4m AAV1 GCaMP6s memory task (021123)
+
+# Debug and system settings
+verbose: true
+
+# Experiment configuration
+experiment_path: .  # Directory containing session folders
+map_path: ../basic_maze/resources/maze_map.png  # Reference to existing maze map
+
+# Output configuration
+experiment_output_path: "{PROJECT_ROOT}/output"
+
+# System running mode
+system_running_mode: 'analyze'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations
+
+# Calibration parameters
+calibrator_parameters:
+  points_capture_parameters:
+    radius: 9
+    color: (208, 224, 64)  # Turquoise
+    thickness: 3
+
+  map_test_parameters:
+    radius: 9
+    color: (255, 0, 255)  # Pink
+    thickness: 3
+
+  registration_method: 'homography&ransac'
+  save_transform_matrix: true
+  path_to_save_calibration_files: ./resources
+  pre_calculated_transform_matrix_path: ./resources/transform_matrix.npy
+
+# Map settings (maze configuration)
+map_settings:
+  segment_length: 86  # pixels per maze segment
+  origin: (47, 40)  # top-left corner of maze in pixels
+  grid_size: (17, 17)  # maze grid dimensions
+  pixel_to_meter: 2279.4117647058824  # conversion factor
+
+# Location tracking settings
+location_settings:
+  bodypart: 'Nose'  # Primary bodypart for tracking (backward compatibility)
+  likelihood: 0.3  # Confidence threshold
+  bodyparts: 'all'  # Track all available bodyparts
+
+# Data sources configuration - executed in order
+data_sources:
+  # Primary pose estimation data (establishes temporal index)
+  - name: deeplabcut
+    type: deeplabcut
+    file_pattern: '.*DLC.*\.h5$'  # Match DeepLabCut H5 files
+    config:
+      bodypart: 'Nose'
+      likelihood_threshold: 0.3
+      bodyparts: 'all'
+
+  # Camera calibration transformation matrix
+  - name: calibration
+    type: calibration
+    shared: true  # Look in resources folder
+    file_pattern: 'transform_matrix\.npy$'
+    config: {}
+
+  # Neural activity from calcium imaging
+  - name: neural_activity
+    type: neural_activity
+    file_pattern: "minian"  # Match minian folder
+    config:
+      merge_mode: "left"  # Merge strategy with session DataFrame
+      unit_prefix: "neuron_"  # Prefix for neuron column names
+
+  # Head direction from IMU sensor
+  - name: head_direction
+    type: head_direction
+    file_pattern: '.*headOrientation\.csv$'  # Match head orientation CSV
+    config:
+      yaw_offset: -167  # Calibration offset for yaw angle (degrees)
+      positive_direction: -1  # Direction correction multiplier
+      skip_index: 2  # Sampling rate adjustment (use every nth sample)
+      merge_mode: "left"  # Merge strategy with session DataFrame
+
+  # Spatial coordinate transformation and tile detection
+  - name: map_integration
+    type: map_integration
+    shared: true  # Map is shared across sessions
+    file_pattern: '.*maze_map\.png$'  # Match maze map image
+    config:
+      bodypart: 'Nose'  # Which bodypart to track for map coordinates
+
+  # Graph-based spatial navigation analysis
+  - name: graph_integration
+    type: graph_integration
+    shared: true  # Graph is shared across sessions
+    config:
+      reward_tile_id: 273  # Tile ID for reward location
+
+# Graph visualization settings
+graph:
+  height: 7  # Binary tree height for topological analysis
+  draw:
+    with_labels: true
+    font_weight: 'bold'
+    node_size: 1000
+    font_size: 15
+  options:
+    static_node_color: '#C9D6E8'
+    static_edge_color: 'k'
+    dynamic_node_color: '#FF0000'
+    dynamic_edge_color: '#FF0000'
+    history_node_color: '#8b0000'
+    history_edge_color: '#8b0000'
+    dynamic_reward_node_color: '#7CFC00'
+    dynamic_reward_edge_color: '#7CFC00'
+    history_reward_node_color: '#228B22'
+    history_reward_edge_color: '#228B22'
+    edge_width: 10
+
+# Important spatial landmarks
+reward_tile_id: 273  # Reward location tile
+learning_start_tile_id: 145  # Starting position tile
+
+# Analysis metrics configuration
+analyze:
+  metrics:
+    # Standard behavioral metrics
+    time_to_reward: 
+      func_name: 'time_a_to_b'
+      args: 
+        a: 145  # learning_start_tile_id
+        b: 273  # reward_tile_id
+    
+    velocity_to_reward:
+      func_name: 'velocity_a_to_b'
+      args:
+        a: 145
+        b: 273
+    
+    exploration_percentage:
+      func_name: 'exploration_percentage'
+    
+    topological_distance_to_reward:
+      func_name: 'num_nodes_in_path'
+      args:
+        a: 145
+        b: 273
+        min_frame_rep: 5
+    
+    exploration_to_reward:
+      func_name: 'num_nodes_in_path'
+      args:
+        a: 145
+        b: 273
+        mode: 'exploration'
+    
+    eureka_path_length:
+      func_name: 'shortest_path_from_a_to_b'
+      args:
+        a: 145
+        b: 273
+        levels: [5, 6]
+        strikes: 2
+
+    # Neural-behavioral metrics can be added here by custom analyzers
+    # that access the neural activity columns (neuron_0, neuron_1, etc.)
+    # and head direction columns (yaw, pitch, roll)
+
+  # Output formats
+  save_as_csv: true
+  save_as_pkl: true
+  save_raw_data_as_pkl: true
+
+# Visualization settings (legacy pipeline)
+visualization:
+  show_visualization: true
+  record_visualization: false
+  fps: null  # Use original video FPS
+  resize: [800, 450]
+  
+  draw_map:
+    show: true
+    method: 'on_top'
+    frame_location: 'bottom_right'
+  
+  draw_tree:
+    show: false  # Computationally expensive
+    resize_factor: 1.0
+    method: 'side_by_side'
+    show_tree_only: false
+
+# Plugin-based visualizations (new pipeline)
+visualizations:
+  pipeline:
+    output_name: multimodal_combined
+    stages:
+      # Pose keypoints visualization
+      - plugin: keypoint_visualizer
+        config:
+          bodyparts: 'all'
+          point_size: 5
+          point_thickness: -1
+          point_colors:
+            Nose: [0, 255, 0]  # Green
+            Midline_top: [255, 0, 0]  # Red
+            Midline_middle: [0, 0, 255]  # Blue
+            Tail_base: [255, 255, 0]  # Yellow
+          default_color: [0, 255, 0]
+          likelihood_threshold: 0.3
+          show_labels: false
+          file_requirements:
+            video_file: '.*\.(mp4|avi|mov)$'
+            
+      # Spatial map overlay
+      - plugin: map_visualizer
+        config:
+          overlay_position: bottom_right
+          overlay_size: 0.3
+          overlay_opacity: 0.7
+          current_tile_color: [255, 0, 0]  # Red
+          visited_tile_color: [0, 255, 0]  # Green
+          visited_tile_opacity: 0.3
+          show_tile_id: true
+          tile_id_font_scale: 1.0
+          tile_id_color: [0, 0, 255]  # Blue
+          file_requirements:
+            video_file: '.*\.(mp4|avi|mov)$'
+            
+      # Neural and head direction overlay
+      - plugin: text_visualizer
+        config:
+          columns: ["yaw", "neuron_mean_activity"]
+          position: "top_right"
+          text_color: [0, 255, 255]  # Cyan
+          font_scale: 1.0
+          decimal_places: 2
+          background_opacity: 0.3
+          file_requirements:
+            video_file: '.*\.(mp4|avi|mov)$'
+
+# Expected file structure:
+# demo_session/
+# ├── memory5-11022023_withrewardafter8min.avi                    # Video file
+# ├── memory5-11022023_withrewardafter8minDLC_...h5              # DeepLabCut keypoints
+# ├── headOrientation.csv                                         # Head direction (qw,qx,qy,qz)
+# ├── minian/                                                     # Neural data directory
+# │   ├── A.zarr/                                                # Spatial footprints
+# │   ├── C.zarr/                                                # Calcium traces (df/f)
+# │   ├── S.zarr/                                                # Smoothed traces
+# │   └── ... (other Minian outputs)
+# └── calibration/
+#     └── transform_matrix.npy                                   # Camera-maze transformation
+
+# Notes:
+# 1. This configuration demonstrates full multimodal integration
+# 2. Neural activity data will be available as columns: neuron_0, neuron_1, ..., neuron_N
+# 3. Head direction data will be available as columns: yaw, pitch, roll
+# 4. All data is synchronized by frame index for temporal alignment
+# 5. Custom analyzers can be created to analyze neural-behavioral correlations
+# 6. The session DataFrame will contain all modalities for comprehensive analysis

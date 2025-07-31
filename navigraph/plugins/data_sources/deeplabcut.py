@@ -106,15 +106,6 @@ class DeepLabCutDataSource(BasePlugin, IDataSource):
                 f"Failed to load DeepLabCut data from {h5_file_path}: {str(e)}"
             ) from e
     
-    def validate_session_prerequisites(
-        self, 
-        current_dataframe: pd.DataFrame, 
-        shared_resources: Dict[str, Any]
-    ) -> bool:
-        """DeepLabCut typically runs first - minimal prerequisites."""
-        # DeepLabCut is typically the primary data source with no dependencies
-        return True
-    
     def get_provided_column_names(self) -> List[str]:
         """Return column names this data source provides."""
         # Note: This is dynamic based on bodyparts configuration

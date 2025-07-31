@@ -39,32 +39,14 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
     
     def _validate_config(self) -> None:
         """Validate map integration configuration."""
-        # No required config keys for this plugin - uses shared resources
-        pass
+        # Bodypart is optional, defaults to 'Nose' for backward compatibility
+        if 'bodypart' not in self.config:
+            self.config['bodypart'] = 'Nose'
+            self.logger.debug("No bodypart specified in config, defaulting to 'Nose'")
     
     def get_provided_column_names(self) -> List[str]:
         """Return column names this data source provides."""
         return ['map_x', 'map_y', 'tile_id', 'tile_bbox']
-    
-    def validate_session_prerequisites(
-        self, 
-        current_dataframe: pd.DataFrame, 
-        shared_resources: Dict[str, Any]
-    ) -> bool:
-        """Validate that prerequisites are met for map integration."""
-        # Check for required keypoint columns
-        required_columns = ['keypoints_x', 'keypoints_y']
-        for col in required_columns:
-            if col not in current_dataframe.columns:
-                self.logger.error(f"Map integration requires '{col}' column from previous data sources")
-                return False
-        
-        # Check for required shared resources
-        if 'maze_map' not in shared_resources:
-            self.logger.error("Map integration requires 'maze_map' shared resource")
-            return False
-            
-        return True
     
     def integrate_data_into_session(
         self,
@@ -92,14 +74,53 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
         """
         logger.info("Starting map integration - converting keypoints to spatial coordinates")
         
+        # Validate prerequisites at runtime
+        config_section = session_config.get('config', {})
+        bodypart = config_section.get('bodypart', 'Nose')
+        
+        if bodypart == 'all':
+            # Check that we have at least one bodypart with x,y coordinates
+            x_cols = [col for col in current_dataframe.columns if col.endswith('_x')]
+            y_cols = [col for col in current_dataframe.columns if col.endswith('_y')]
+            
+            if not x_cols or not y_cols:
+                raise DataSourceError(
+                    "Map integration requires at least one bodypart with _x and _y columns. "
+                    "Make sure DeepLabCut runs before map integration in your config."
+                )
+        else:
+            # Check for specific bodypart columns
+            required_x = f"{bodypart}_x"
+            required_y = f"{bodypart}_y"
+            
+            if required_x not in current_dataframe.columns or required_y not in current_dataframe.columns:
+                raise DataSourceError(
+                    f"Map integration requires '{required_x}' and '{required_y}' columns for bodypart '{bodypart}'. "
+                    f"Available columns: {list(current_dataframe.columns)}. "
+                    "Make sure DeepLabCut runs before map integration and extracts the required bodypart."
+                )
+        
+        # Check for required shared resources
+        has_map = any(key in shared_resources for key in ['maze_map', 'map_integration', 'map_provider'])
+        if not has_map:
+            raise DataSourceError(
+                "Map integration requires a map shared resource. "
+                "Make sure map_integration is configured with shared: true in your config."
+            )
+            
         try:
-            # Get required resources
-            map_provider = shared_resources.get('maze_map')
+            # Get required resources - try different possible names
+            map_provider = None
+            for map_key in ['maze_map', 'map_integration', 'map_provider']:
+                if map_key in shared_resources:
+                    map_provider = shared_resources[map_key]
+                    break
+                    
             calibration = shared_resources.get('calibration')
             
             if not map_provider:
                 raise DataSourceError(
-                    "Map integration requires 'maze_map' shared resource. "
+                    "Map integration requires a map shared resource. "
                     "Make sure map_provider is configured in shared_resources."
                 )
             
@@ -109,29 +130,51 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
                     "Make sure camera_calibrator is configured in shared_resources."
                 )
             
-            # Get keypoint columns from previous data source
-            keypoint_x_col = self._find_keypoint_column(current_dataframe, 'x', logger)
-            keypoint_y_col = self._find_keypoint_column(current_dataframe, 'y', logger)
+            bodypart = self.config.get('bodypart', 'Nose')
             
-            # Transform coordinates and get tile information
-            map_data = self._process_coordinate_transformation(
-                current_dataframe, keypoint_x_col, keypoint_y_col, 
-                map_provider, calibration, logger
-            )
-            
-            # Add new columns to existing DataFrame
-            for col_name, col_data in map_data.items():
-                current_dataframe[col_name] = col_data
-            
-            # Log success statistics
-            valid_coordinates = map_data['tile_id'] != -1
-            valid_count = valid_coordinates.sum()
-            total_count = len(current_dataframe)
-            
-            logger.info(
-                f"✓ Map integration complete: {valid_count}/{total_count} frames "
-                f"mapped to valid tiles ({valid_count/total_count*100:.1f}%)"
-            )
+            if bodypart == 'all':
+                # Process all bodyparts
+                all_bodyparts = self._detect_bodyparts(current_dataframe)
+                logger.info(f"Processing map integration for all bodyparts: {all_bodyparts}")
+                
+                for bp in all_bodyparts:
+                    # Transform coordinates for this bodypart
+                    map_data = self._process_coordinate_transformation(
+                        current_dataframe, f"{bp}_x", f"{bp}_y", 
+                        map_provider, calibration, logger
+                    )
+                    
+                    # Add columns with bodypart prefix
+                    for col_suffix, col_data in map_data.items():
+                        col_name = f"{bp}_{col_suffix}"
+                        current_dataframe[col_name] = col_data
+                
+                logger.info(f"✓ Map integration complete for {len(all_bodyparts)} bodyparts")
+                
+            else:
+                # Process single bodypart
+                keypoint_x_col = f"{bodypart}_x"
+                keypoint_y_col = f"{bodypart}_y"
+                
+                # Transform coordinates and get tile information
+                map_data = self._process_coordinate_transformation(
+                    current_dataframe, keypoint_x_col, keypoint_y_col, 
+                    map_provider, calibration, logger
+                )
+                
+                # Add new columns to existing DataFrame
+                for col_name, col_data in map_data.items():
+                    current_dataframe[col_name] = col_data
+                
+                # Log success statistics
+                valid_coordinates = map_data['tile_id'] != -1
+                valid_count = valid_coordinates.sum()
+                total_count = len(current_dataframe)
+                
+                logger.info(
+                    f"✓ Map integration complete for {bodypart}: {valid_count}/{total_count} frames "
+                    f"mapped to valid tiles ({valid_count/total_count*100:.1f}%)"
+                )
             
             return current_dataframe
             
@@ -140,48 +183,45 @@ class MapIntegrationDataSource(BasePlugin, IDataSource):
                 f"Map integration failed: {str(e)}"
             ) from e
     
-    def validate_session_prerequisites(
-        self, 
-        current_dataframe: pd.DataFrame, 
-        shared_resources: Dict[str, Any]
-    ) -> bool:
-        """Check for keypoints and map resources.
-        
-        This method validates that:
-        1. Keypoint coordinates are available from previous data sources
-        2. Required shared resources (map, calibration) are available
-        
-        Args:
-            current_dataframe: Current DataFrame state
-            shared_resources: Available shared resources
-            
-        Returns:
-            True if all prerequisites are met
-        """
-        # Check for required columns
-        required_columns = self.get_required_columns()
-        has_columns = all(
-            any(col.endswith(suffix) for col in current_dataframe.columns)
-            for suffix in ['_x', '_y']
-        )
-        
-        # Check for required resources  
-        required_resources = self.get_required_shared_resources()
-        has_resources = all(res in shared_resources for res in required_resources)
-        
-        return has_columns and has_resources
     
     def get_provided_column_names(self) -> List[str]:
         """Return column names this data source provides."""
-        return ['map_x', 'map_y', 'tile_id', 'tile_bbox']
+        # Note: For 'all' bodyparts, actual columns will be determined dynamically
+        # based on available bodyparts in the DataFrame
+        if self.config.get('bodypart', 'Nose') == 'all':
+            # Return empty list since we don't know bodyparts until we see the data
+            return []
+        else:
+            # Single bodypart mode - return standard column names
+            return ['map_x', 'map_y', 'tile_id', 'tile_bbox']
     
     def get_required_columns(self) -> List[str]:
         """Return column names required by this data source."""
-        return ['keypoints_x', 'keypoints_y']
+        # We don't require specific columns - we'll find bodypart columns dynamically
+        return []
     
     def get_required_shared_resources(self) -> List[str]:
         """Return shared resource names required by this data source."""
         return ['maze_map', 'calibration']
+    
+    def _detect_bodyparts(self, dataframe: pd.DataFrame) -> List[str]:
+        """Detect all available bodyparts from column names.
+        
+        Args:
+            dataframe: DataFrame with bodypart columns
+            
+        Returns:
+            List of unique bodypart names
+        """
+        bodyparts = set()
+        for col in dataframe.columns:
+            if col.endswith('_x'):
+                bodypart = col[:-2]  # Remove '_x' suffix
+                # Check if corresponding _y column exists
+                if f"{bodypart}_y" in dataframe.columns:
+                    bodyparts.add(bodypart)
+        
+        return sorted(list(bodyparts))
     
     def _find_keypoint_column(self, dataframe: pd.DataFrame, coord_type: str, logger) -> str:
         """Find keypoint coordinate column (handling different naming conventions).

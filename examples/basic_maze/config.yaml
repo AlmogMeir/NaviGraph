@@ -1,11 +1,10 @@
 # NaviGraph Configuration - Basic Maze Example
 
 # Debug
-verbose: false
+verbose: true
 
-# Data paths (relative to this config file)
-stream_path: ./demo_session  # Directory containing video files
-keypoint_detection_file_path: ./demo_session  # Directory containing .h5 files
+# Experiment configuration
+experiment_path: .  # Directory containing session folders
 map_path: ./resources/maze_map.png
 
 # Output
@@ -17,7 +16,7 @@ map_path: ./resources/maze_map.png
 experiment_output_path: "{PROJECT_ROOT}/output"
 
 # Running Mode
-system_running_mode: 'visualize'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations like 'calibrate&analyze'
+system_running_mode: 'analyze'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations like 'calibrate&analyze'
 
 # Calibration parameters
 calibrator_parameters:
@@ -33,8 +32,8 @@ calibrator_parameters:
 
   registration_method: 'homography&ransac'  # Options: 'affine', 'homography', 'homography&ransac'
   save_transform_matrix: true
-  path_to_save_calibration_files: ./demo_session
-  pre_calculated_transform_matrix_path: ./demo_session/calibration/transform_matrix.npy
+  path_to_save_calibration_files: ./resources
+  pre_calculated_transform_matrix_path: ./resources/transform_matrix.npy
 
 # Map settings
 map_settings:
@@ -48,6 +47,39 @@ location_settings:
   bodypart: 'Nose'  # Which bodypart to track (backward compatibility)
   likelihood: 0.3  # Confidence threshold
   bodyparts: 'all'  # Options: 'all', ['Nose', 'Tail'], or single bodypart name
+
+# Data sources configuration - executed in order
+data_sources:
+  # Primary pose estimation data (establishes temporal index)
+  - name: deeplabcut
+    type: deeplabcut
+    file_pattern: '.*DLC.*\.h5$'  # Match DeepLabCut H5 files
+    config:
+      bodypart: 'Nose'
+      likelihood_threshold: 0.3
+      bodyparts: 'all'
+
+  # Camera calibration transformation matrix
+  - name: calibration
+    type: calibration
+    shared: true  # Look in resources folder
+    file_pattern: 'transform_matrix\.npy$'
+    config: {}
+
+  # Spatial coordinate transformation and tile detection
+  - name: map_integration
+    type: map_integration
+    shared: true  # Map is shared across sessions
+    file_pattern: '.*maze_map\.png$'  # Match maze map image
+    config:
+      bodypart: 'Nose'  # Which bodypart to track for map coordinates
+
+  # Graph-based spatial navigation analysis
+  - name: graph_integration
+    type: graph_integration
+    shared: true  # Graph is shared across sessions
+    config:
+      reward_tile_id: 273  # Tile ID for reward location
 
 # Graph visualization
 graph:
@@ -167,5 +199,15 @@ visualizations:
           show_tile_id: true
           tile_id_font_scale: 1.0
           tile_id_color: [0, 0, 255]  # Blue
+          file_requirements:
+            video_file: '.*\.(mp4|avi|mov)$'
+      - plugin: text_visualizer
+        config:
+          columns: ["tile_id"]
+          position: "top_right"
+          text_color: [0, 255, 255]  # Cyan
+          font_scale: 1.0
+          decimal_places: 0
+          background_opacity: 0.3
           file_requirements:
             video_file: '.*\.(mp4|avi|mov)$'

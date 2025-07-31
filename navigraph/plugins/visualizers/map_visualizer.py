@@ -69,9 +69,9 @@ class MapVisualizer(BasePlugin, IVisualizer):
         """
         # Get map provider from shared resources
         shared_resources = kwargs.get('shared_resources', {})
-        map_provider = shared_resources.get('maze_map')
+        map_provider = shared_resources.get('map_integration') or shared_resources.get('maze_map')
         if not map_provider:
-            self.logger.error("Map visualization requires maze_map in shared_resources")
+            self.logger.error("Map visualization requires map_integration or maze_map in shared_resources")
             return
         
         # Get visualization settings with defaults

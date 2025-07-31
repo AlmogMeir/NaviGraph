@@ -21,8 +21,7 @@ from .visualization_pipeline import VisualizationPipeline
 
 # Configuration constants
 DEFAULT_RUNNING_MODE = 'analyze'
-STREAM_PATH = 'stream_path'
-DETECTION_PATH = 'keypoint_detection_file_path'
+EXPERIMENT_PATH = 'experiment_path'
 OUTPUT_PATH = 'experiment_output_path'
 
 # System Modes
@@ -69,13 +68,19 @@ class ExperimentRunner:
         if config.get('verbose', False):
             logger.info("Verbose logging enabled")
         
-        # Initialize components with resolved stream path
-        stream_path = config.get(STREAM_PATH, '.')
-        if config_dir and not os.path.isabs(stream_path):
-            stream_path = os.path.join(config_dir, stream_path)
-        self.file_discovery = FileDiscoveryEngine(stream_path, logger)
+        # Validate and resolve experiment path
+        experiment_path = config.get(EXPERIMENT_PATH)
+        if not experiment_path:
+            raise ValueError("experiment_path is required in configuration")
+        
+        if config_dir and not os.path.isabs(experiment_path):
+            experiment_path = os.path.join(config_dir, experiment_path)
+        
+        if not os.path.isdir(experiment_path):
+            raise ValueError(f"Experiment directory does not exist: {experiment_path}")
+            
+        self.experiment_path = experiment_path
         self.sessions: List[Session] = []
-        self.shared_resources: Dict[str, Any] = {}
         self.analysis_results: Optional[pd.DataFrame] = None
         
         logger.info(f"Experiment runner initialized with mode: {self.system_mode}")
@@ -135,205 +140,85 @@ class ExperimentRunner:
             # Fallback to current working directory
             return os.getcwd()
     
-    def discover_sessions(self) -> List[Dict[str, str]]:
-        """Discover available sessions using file discovery (preserving original Manager logic).
+    def discover_session_folders(self) -> List[str]:
+        """Discover session folders in the experiment directory.
         
         Returns:
-            List of session dictionaries with discovered file paths
+            List of session folder names
         """
-        logger.info("Starting session discovery")
+        logger.info("Discovering session folders")
         
         try:
-            # Get paths from configuration
-            stream_path = self.config.get(STREAM_PATH)
-            detection_path = self.config.get(DETECTION_PATH)
+            session_folders = []
             
-            if not stream_path or not detection_path:
-                raise ValueError("stream_path and keypoint_detection_file_path required in configuration")
+            # Look for session subdirectories (normal case)
+            for item in os.listdir(self.experiment_path):
+                item_path = os.path.join(self.experiment_path, item)
+                if os.path.isdir(item_path) and not item.startswith('.') and item != 'resources':
+                    session_folders.append(item)
             
-            # Resolve relative paths using config directory
-            config_dir = getattr(self.config, '_config_dir', None)
-            logger.debug(f"Config directory: {config_dir}")
-            logger.debug(f"Original stream_path: {stream_path}")
-            logger.debug(f"Original detection_path: {detection_path}")
-            
-            if config_dir:
-                if not os.path.isabs(stream_path):
-                    stream_path = os.path.join(config_dir, stream_path)
-                if not os.path.isabs(detection_path):
-                    detection_path = os.path.join(config_dir, detection_path)
-            
-            logger.debug(f"Resolved stream_path: {stream_path}")
-            logger.debug(f"Resolved detection_path: {detection_path}")
-            
-            # Validate paths exist
-            if not os.path.isdir(stream_path):
-                raise ValueError(f"Experiment directory does not exist: {stream_path}. Make sure the path is correct and accessible.")
-            if not os.path.isdir(detection_path):
-                raise ValueError(f"Detection directory does not exist: {detection_path}. Make sure the path is correct and accessible.")
-            
-            # Find video files (preserving original logic)
-            input_streams = []
-            for supported_type in SUPPORTED_VIDEO_FORMATS:
-                input_streams.extend(glob.glob(os.path.join(stream_path, supported_type), recursive=True))
-            
-            # Find H5 files (preserving original logic)
-            detection_paths = glob.glob(os.path.join(stream_path, "*.h5"), recursive=True)
-            
-            if len(input_streams) == 0:
-                logger.warning(f"No video files found in {stream_path}")
-                return []
-            
-            if len(detection_paths) == 0:
-                logger.warning(f"No H5 files found in {stream_path}")
-                return []
-            
-            if len(input_streams) != len(detection_paths):
-                logger.warning(f"Mismatch: {len(input_streams)} videos vs {len(detection_paths)} H5 files")
-            
-            # Match detection files to stream files by name (preserving original logic)
-            sorted_detection_paths = []
-            matched_streams = []
-            
-            for input_stream in input_streams:
-                for detection_path in detection_paths:
-                    stream_basename = os.path.basename(input_stream).split('.')[0]
-                    detection_basename = os.path.basename(detection_path)
-                    if stream_basename in detection_basename:
-                        sorted_detection_paths.append(detection_path)
-                        matched_streams.append(input_stream)
-                        break
-            
-            # Create session dictionaries
-            discovered_sessions = []
-            for video_file, h5_file in zip(matched_streams, sorted_detection_paths):
-                # Extract session folder name (last directory in path)
-                video_dir = os.path.dirname(video_file)
-                session_folder_name = os.path.basename(video_dir)
+            if session_folders:
+                logger.info(f"Found {len(session_folders)} session folders: {session_folders}")
+            else:
+                # Fallback: Check if experiment_path itself is a session (has data files directly)
+                has_session_files = any(
+                    os.path.isfile(os.path.join(self.experiment_path, f)) and 
+                    (f.endswith('.h5') or f.endswith('.csv') or f.endswith('.avi') or f.endswith('.mp4'))
+                    for f in os.listdir(self.experiment_path)
+                )
                 
-                session_dict = {
-                    'video_file': video_file,
-                    'h5_file': h5_file,
-                    'session_name': os.path.basename(video_file).split('.')[0],
-                    'session_folder_name': session_folder_name
-                }
-                discovered_sessions.append(session_dict)
+                if has_session_files:
+                    # Experiment path is itself a session folder - use "." as folder name
+                    session_folders.append(".")
+                    logger.info(f"Found direct session in experiment root")
+                else:
+                    logger.warning(f"No session folders or session files found in {self.experiment_path}")
             
-            logger.info(f"Discovered {len(discovered_sessions)} sessions")
-            return discovered_sessions
+            return session_folders
             
         except Exception as e:
-            logger.error(f"Session discovery failed: {str(e)}")
+            logger.error(f"Session folder discovery failed: {str(e)}")
             return []
     
-    def initialize_shared_resources(self) -> None:
-        """Initialize shared resources from configuration.
-        
-        This method initializes all shared resources (map, graph, calibration)
-        that will be used across sessions.
-        """
-        # Load plugins for shared resource initialization
-        from ..plugins import data_sources, shared_resources, analyzers, visualizers
-        from .registry import registry
-        
-        logger.info("Initializing shared resources")
-        
-        try:
-            # Initialize map provider
-            if 'map_path' in self.config and 'map_settings' in self.config:
-                map_provider_class = registry.get_shared_resource_plugin('map_provider')
-                
-                # Resolve relative map path
-                map_path = str(self.config.map_path)
-                if not os.path.isabs(map_path):
-                    # If config has a source path, resolve relative to config directory
-                    config_dir = getattr(self.config, '_config_dir', None)
-                    if config_dir:
-                        map_path = os.path.join(config_dir, map_path)
-                
-                map_config = {
-                    'map_path': map_path,
-                    'map_settings': dict(self.config.map_settings)
-                }
-                
-                # Use new factory pattern
-                map_provider = map_provider_class.from_config(map_config, logger)
-                self.shared_resources['maze_map'] = map_provider
-                logger.info("✓ Map provider initialized")
-            
-            # Initialize graph provider
-            if 'graph' in self.config:
-                graph_provider_class = registry.get_shared_resource_plugin('graph_provider')
-                
-                graph_config = dict(self.config.graph)
-                
-                # Use new factory pattern
-                graph_provider = graph_provider_class.from_config(graph_config, logger)
-                self.shared_resources['graph'] = graph_provider
-                logger.info("✓ Graph provider initialized")
-            
-            # Initialize calibration provider
-            calibration_config = self.config.get('calibrator_parameters', {})
-            if calibration_config:
-                calibration_provider_class = registry.get_shared_resource_plugin('calibration_provider')
-                
-                # Resolve relative calibration matrix path
-                matrix_path = calibration_config.get('pre_calculated_transform_matrix_path')
-                if matrix_path and not os.path.isabs(matrix_path):
-                    config_dir = getattr(self.config, '_config_dir', None)
-                    if config_dir:
-                        matrix_path = os.path.join(config_dir, matrix_path)
-                
-                calib_resource_config = {
-                    'pre_calculated_transform_matrix_path': matrix_path,
-                    'transform_matrix': calibration_config.get('transform_matrix')
-                }
-                
-                # Use new factory pattern
-                calibration_provider = calibration_provider_class.from_config(calib_resource_config, logger)
-                self.shared_resources['calibration'] = calibration_provider
-                logger.info("✓ Calibration provider initialized")
-            
-            logger.info(f"Initialized {len(self.shared_resources)} shared resources")
-            
-        except Exception as e:
-            logger.error(f"Shared resource initialization failed: {str(e)}")
-            raise
     
-    def create_sessions(self, discovered_sessions: List[Dict[str, str]]) -> None:
-        """Create Session objects from discovered files.
+    def create_sessions(self, session_folders: List[str]) -> None:
+        """Create Session objects for discovered session folders.
         
         Args:
-            discovered_sessions: List of session dictionaries from discovery
+            session_folders: List of session folder names
         """
-        logger.info(f"Creating {len(discovered_sessions)} sessions")
+        logger.info(f"Creating {len(session_folders)} sessions")
         
         try:
-            for i, session_files in enumerate(discovered_sessions):
+            for i, session_folder in enumerate(session_folders):
                 try:
-                    # Use session folder name as session ID
-                    session_folder_name = session_files.get('session_folder_name', f"session_{i:03d}")
+                    # Handle direct session (.) vs named session folder
+                    if session_folder == ".":
+                        session_id = os.path.basename(self.experiment_path)
+                    else:
+                        session_id = session_folder
                     
-                    # Create session configuration  
+                    # Create session configuration with data source specifications
                     session_config = {
-                        'data_sources': self._get_data_source_config(session_files),
+                        'session_id': session_id,
+                        'experiment_path': self.experiment_path,
+                        'data_source_specifications': self.config.get('data_sources', []),
                         'session_settings': dict(self.config.get('location_settings', {})),
                         'analyze': dict(self.config.get('analyze', {})),
                         'reward_tile_id': self.config.get('reward_tile_id'),
-                        'session_id': session_folder_name
+                        'map_settings': dict(self.config.get('map_settings', {})),
+                        'graph': dict(self.config.get('graph', {})),
+                        'map_path': str(self.config.get('map_path', ''))
                     }
                     
-                    # Create session
+                    # Create session - it will handle its own resource creation
                     session = Session(session_config, logger)
-                    
-                    # Manually set the shared resources (they're already instantiated)
-                    session.shared_resources = self.shared_resources
                     self.sessions.append(session)
                     
-                    logger.info(f"✓ Created session {i+1}/{len(discovered_sessions)}")
+                    logger.info(f"✓ Created session {i+1}/{len(session_folders)}: {session_folder}")
                     
                 except Exception as e:
-                    logger.error(f"Failed to create session {i+1}: {str(e)}")
+                    logger.error(f"Failed to create session {session_folder}: {str(e)}")
                     continue
             
             logger.info(f"Successfully created {len(self.sessions)} sessions")
@@ -508,25 +393,23 @@ class ExperimentRunner:
         logger.info(f"Starting experiment with mode: {self.system_mode}")
         
         try:
-            # Discover sessions
-            discovered_sessions = self.discover_sessions()
+            # Discover session folders
+            session_folders = self.discover_session_folders()
             
-            if not discovered_sessions:
-                logger.warning("No sessions discovered - experiment terminated")
+            if not session_folders:
+                logger.warning("No session folders discovered - experiment terminated")
                 return None
             
-            # Handle calibration mode
+            # TODO: Update calibration and test modes for new architecture
             if CALIBRATE_MODE in self.system_mode:
-                self.run_calibration(discovered_sessions)
+                logger.warning("Calibration mode not yet updated for new architecture")
             
-            # Handle test mode
             if TEST_MODE in self.system_mode and CALIBRATE_MODE not in self.system_mode:
-                self._test_saved_calibration(discovered_sessions)
+                logger.warning("Test mode not yet updated for new architecture")
             
-            # Initialize shared resources for analysis/visualization
+            # Create sessions for analysis/visualization
             if ANALYZE_MODE in self.system_mode or VISUALIZE_MODE in self.system_mode:
-                self.initialize_shared_resources()
-                self.create_sessions(discovered_sessions)
+                self.create_sessions(session_folders)
             
             # Run analysis
             results = None
@@ -544,52 +427,6 @@ class ExperimentRunner:
             logger.error(f"Experiment failed: {str(e)}")
             raise
     
-    def _get_data_source_config(self, session_files: Dict[str, str]) -> List[Dict[str, Any]]:
-        """Create data source configuration for a session.
-        
-        Args:
-            session_files: Dictionary with discovered file paths
-            
-        Returns:
-            List of data source configurations
-        """
-        data_sources = []
-        
-        # DeepLabCut data source (if H5 file found)
-        if 'h5_file' in session_files:
-            data_sources.append({
-                'name': 'deeplabcut',
-                'type': 'deeplabcut',
-                'required': True,
-                'discovered_file_path': session_files['h5_file'],
-                'config': {
-                    'bodypart': self.config.get('location_settings', {}).get('bodypart', 'nose'),
-                    'bodyparts': self.config.get('location_settings', {}).get('bodyparts'),  # Multi-bodypart support
-                    'likelihood_threshold': self.config.get('location_settings', {}).get('likelihood', 0.3)
-                }
-            })
-        
-        # Map integration (if map provider available)
-        if 'maze_map' in self.shared_resources:
-            data_sources.append({
-                'name': 'map_integration',
-                'type': 'map_integration',
-                'required': True,
-                'config': {}
-            })
-        
-        # Graph integration (if graph provider available)
-        if 'graph' in self.shared_resources:
-            data_sources.append({
-                'name': 'graph_integration',
-                'type': 'graph_integration',
-                'required': False,
-                'config': {
-                    'reward_tile_id': self.config.get('reward_tile_id')
-                }
-            })
-        
-        return data_sources
     
     def _save_analysis_results(self, results_df: pd.DataFrame) -> None:
         """Save analysis results to configured outputs."""
@@ -681,6 +518,10 @@ class ExperimentRunner:
     
     def _run_visualization(self) -> None:
         """Run visualization mode using plugin system."""
+        # Load plugins for visualization
+        from ..plugins import data_sources, shared_resources, analyzers, visualizers
+        from .registry import registry
+        
         logger.info("Starting visualization phase")
         
         try:
@@ -705,18 +546,8 @@ class ExperimentRunner:
                 # Create session output directory
                 session_output_path = os.path.join(self.experiment_folder, session.session_id)
                 
-                # Get session path from discovered sessions
-                session_path = None
-                discovered_sessions = self.discover_sessions()
-                
-                if discovered_sessions:
-                    # Use the data directory as session path (where files are located)
-                    session_path = self.config.get(STREAM_PATH, '.')
-                    
-                    # Resolve relative path
-                    config_dir = getattr(self.config, '_config_dir', None)
-                    if config_dir and not os.path.isabs(session_path):
-                        session_path = os.path.join(config_dir, session_path)
+                # Use experiment path as session path for file discovery
+                session_path = self.experiment_path
                 
                 if not session_path:
                     logger.warning(f"No session path available for session {session.session_id}")

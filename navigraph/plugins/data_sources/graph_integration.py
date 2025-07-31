@@ -46,24 +46,6 @@ class GraphIntegrationDataSource(BasePlugin, IDataSource):
         """Return column names this data source provides."""
         return ['tree_position', 'graph_node', 'graph_edge', 'path_to_reward']
     
-    def validate_session_prerequisites(
-        self, 
-        current_dataframe: pd.DataFrame, 
-        shared_resources: Dict[str, Any]
-    ) -> bool:
-        """Validate that prerequisites are met for graph integration."""
-        # Check for required tile_id column
-        if 'tile_id' not in current_dataframe.columns:
-            self.logger.error("Graph integration requires 'tile_id' column from map integration")
-            return False
-        
-        # Check for required shared resources
-        if 'graph' not in shared_resources:
-            self.logger.error("Graph integration requires 'graph' shared resource")
-            return False
-            
-        return True
-    
     def integrate_data_into_session(
         self,
         current_dataframe: pd.DataFrame,
@@ -91,19 +73,21 @@ class GraphIntegrationDataSource(BasePlugin, IDataSource):
         logger.info("Starting graph integration - mapping tiles to graph positions")
         
         try:
-            # Get required resources
-            graph_provider = shared_resources.get('graph')
-            if not graph_provider:
-                raise DataSourceError(
-                    "Graph integration requires 'graph' shared resource. "
-                    "Make sure graph_provider is configured in shared_resources."
-                )
-            
-            # Check for tile_id column from previous data source
+            # Check for required tile_id column from map integration
             if 'tile_id' not in current_dataframe.columns:
                 raise DataSourceError(
-                    "Graph integration requires 'tile_id' column from previous data sources. "
-                    "Make sure map_integration or equivalent is configured before graph_integration."
+                    "Graph integration requires 'tile_id' column from map integration. "
+                    f"Available columns: {list(current_dataframe.columns)}. "
+                    "Make sure map_integration runs before graph_integration in your config."
+                )
+            
+            # Get required graph resource - it's stored under the data source name
+            graph_provider = shared_resources.get('graph_integration')
+            if not graph_provider:
+                raise DataSourceError(
+                    "Graph integration requires 'graph_integration' shared resource. "
+                    f"Available shared resources: {list(shared_resources.keys())}. "
+                    "Make sure graph_integration is configured with shared: true in your config."
                 )
             
             # Process graph mapping for all frames

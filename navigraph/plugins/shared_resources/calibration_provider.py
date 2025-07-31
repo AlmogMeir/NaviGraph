@@ -76,6 +76,11 @@ class CalibrationProviderResource(BasePlugin, ISharedResource):
                 
             elif pre_calculated_path is not None:
                 # Load from file (preserving existing logic)
+                # Handle relative paths relative to experiment path
+                if not os.path.isabs(pre_calculated_path) and 'experiment_path' in self.config:
+                    experiment_path = self.config['experiment_path']
+                    pre_calculated_path = os.path.join(experiment_path, pre_calculated_path)
+                
                 if not os.path.isfile(pre_calculated_path):
                     raise NavigraphError(
                         f"Calibration file not found at path: {pre_calculated_path}"

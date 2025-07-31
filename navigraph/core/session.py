@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 import cv2
-import queue
 from loguru import logger
 
 # Type alias for logger
@@ -30,59 +29,23 @@ class Session:
     def __init__(
         self,
         session_configuration: Dict[str, Any],
-        logger_instance: Logger,
-        session_identifier: Optional[str] = None,
-        file_discovery_engine: Optional[FileDiscoveryEngine] = None,
-        plugin_registry = None
+        logger_instance: Logger
     ):
         """Initialize session with data source orchestration."""
-        self.session_id = session_identifier or session_configuration.get('session_id', 'unknown_session')
+        self.session_id = session_configuration.get('session_id', 'unknown_session')
         self.config = session_configuration
+        self.experiment_path = session_configuration.get('experiment_path', '.')
+        self.data_source_specifications = session_configuration.get('data_source_specifications', [])
         
-        # Set up basic attributes first  
-        self.registry = plugin_registry  # Will be loaded lazily when needed
+        # Set up basic attributes
+        self.registry = None  # Will be loaded lazily when needed
         self.logger = logger_instance
         
-        # Initialize shared resources from configuration
-        shared_resources_config = session_configuration.get('shared_resources', [])
+        # Initialize shared resources - will be created during data source integration
         self.shared_resources = {}
-        if isinstance(shared_resources_config, list):
-            # Process shared resources configuration list and instantiate plugins
-            for resource_config in shared_resources_config:
-                resource_name = resource_config.get('name')
-                resource_type = resource_config.get('type')
-                if resource_name and resource_type:
-                    try:
-                        # Get plugin class from registry and instantiate
-                        if not self.registry:
-                            from .registry import registry
-                            self.registry = registry
-                        resource_class = self.registry.get_shared_resource_plugin(resource_type)
-                        
-                        # Add experiment path to resource config for path resolution
-                        resource_config_with_path = resource_config.get('config', {}).copy()
-                        resource_config_with_path['experiment_path'] = session_configuration.get('experiment_path', '.')
-                        
-                        resource_instance = resource_class.from_config(
-                            resource_config_with_path, 
-                            logger_instance
-                        )
-                        self.shared_resources[resource_name] = resource_instance
-                        self.logger.debug(f"Initialized shared resource: {resource_name} ({resource_type})")
-                    except Exception as e:
-                        self.logger.error(f"Failed to initialize shared resource '{resource_name}': {e}")
-                        # Don't fail session creation, just skip this resource
-        elif isinstance(shared_resources_config, dict):
-            # Legacy support - assume it's already instantiated resources
-            self.shared_resources = shared_resources_config
         
-        # Use provided file discovery engine or create a minimal one
-        if file_discovery_engine:
-            self.file_discovery = file_discovery_engine
-        else:
-            # Create minimal file discovery if not provided
-            experiment_path = session_configuration.get('experiment_path', '.')
-            self.file_discovery = FileDiscoveryEngine(experiment_path, logger_instance)
+        # Create file discovery engine for this session
+        self.file_discovery = FileDiscoveryEngine(self.experiment_path, logger_instance)
         
         # Lazy-loaded data - populated on first access
         self._integrated_dataframe: Optional[pd.DataFrame] = None
@@ -94,15 +57,10 @@ class Session:
         # File discovery results
         self._discovered_file_paths: Dict[str, Optional[str]] = {}
         
-        # Backward compatibility properties
+        # Minimal backward compatibility properties
         self._session_name: Optional[str] = None
-        self._video_file_path: Optional[str] = None
         self._likelihood_threshold: Optional[float] = None
         self._bodyparts: Optional[List[str]] = None
-        self._coords: Optional[List[str]] = None
-        
-        # Tree visualization state (for backward compatibility)
-        self.session_history = queue.Queue()
         self._path_to_reward: Optional[List[int]] = None
         
         try:
@@ -129,54 +87,13 @@ class Session:
         return self.config.copy()
     
     def get_session_stream_info(self) -> Dict[str, Any]:
-        """Get session stream information extracted from video file."""
-        # Try to get video file path from session configuration
-        video_path = None
-        
-        # Look for video file in discovered files or configuration
-        for ds_config in self.config.get('data_sources', []):
-            if ds_config.get('plugin_name') == 'deeplabcut':
-                video_path = ds_config.get('discovered_file_path')
-                # Convert H5 path to video path by replacing extension
-                if video_path and video_path.endswith('.h5'):
-                    # Try common video extensions
-                    for ext in ['.mp4', '.avi', '.mov']:
-                        potential_video = video_path.replace('.h5', ext)
-                        if Path(potential_video).exists():
-                            video_path = potential_video
-                            break
-                break
-        
-        # If no video path found, return defaults
-        if not video_path or not Path(video_path).exists():
-            df_len = len(self.get_integrated_dataframe()) if self._integrated_dataframe is not None else 0
-            return {
-                'fps': 30.0,  # Default FPS
-                'frame_count': df_len,
-                'duration': df_len / 30.0
-            }
-        
-        # Extract real video information
-        try:
-            cap = cv2.VideoCapture(video_path)
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration = frame_count / fps if fps > 0 else 0
-            cap.release()
-            
-            return {
-                'fps': fps,
-                'frame_count': frame_count, 
-                'duration': duration
-            }
-        except Exception as e:
-            self.logger.warning(f"Could not extract video info from {video_path}: {str(e)}")
-            df_len = len(self.get_integrated_dataframe()) if self._integrated_dataframe is not None else 0
-            return {
-                'fps': 30.0,  # Default FPS
-                'frame_count': df_len,
-                'duration': df_len / 30.0
-            }
+        """Get session stream information with defaults."""
+        df_len = len(self.get_integrated_dataframe()) if self._integrated_dataframe is not None else 0
+        return {
+            'fps': 30.0,  # Default FPS
+            'frame_count': df_len,
+            'duration': df_len / 30.0
+        }
     
     def get_session_metadata(self) -> Dict[str, Any]:
         """Get comprehensive metadata about this session."""
@@ -456,57 +373,12 @@ class Session:
         return bodypart_df
     
     def draw_tree(self, tile_id: Union[int, List[int]], mode: str = 'current') -> np.ndarray:
-        """Draw tree visualization with current tile highlighted.
-        
-        Args:
-            tile_id: Tile ID or list of tile IDs to highlight
-            mode: Drawing mode ('current' or 'history')
-            
-        Returns:
-            Tree image as numpy array
-        """
+        """Simplified tree drawing method."""
         if 'graph' not in self.shared_resources:
             raise AttributeError("No graph provider available for tree drawing")
         
-        # Recursively draw history
-        if self.session_history.qsize() > 0:
-            self.draw_tree(self.session_history.get(), mode='history')
-        
-        if mode != 'history':
-            self.session_history.put(tile_id)
-        
-        if tile_id == -1:
-            node, edge = None, None
-        else:
-            tree_loc = self.tree.get_tree_location(tile_id)
-            if isinstance(tree_loc, tuple):
-                edge = [tree_loc]
-                node = None
-            elif isinstance(tree_loc, int):
-                edge = None  
-                node = [tree_loc]
-            elif isinstance(tree_loc, frozenset):
-                node = []
-                edge = []
-                for item in tree_loc:
-                    if isinstance(item, tuple):
-                        edge.append(item)
-                    elif isinstance(item, int):
-                        node.append(item)
-            else:
-                node, edge = None, None
-        
-        # Get unique path to reward
-        unique_path = []
-        if self.path_to_reward:
-            unique_path = self.path_to_reward + [
-                (node_1, node_2) for node_1, node_2 in 
-                zip(self.path_to_reward, self.path_to_reward[1:])
-            ]
-        
-        # Draw tree using graph provider
-        self.tree.draw_tree(node_list=node, edge_list=edge, color_mode=mode, unique_path=unique_path)
-        return self.tree.tree_fig_to_img()
+        # Simplified tree drawing - delegate to graph provider
+        return self.tree.draw_simple_tree(tile_id, mode)
     
     def insert_data(self, body_part: str, col_name: str, col_values: Any) -> None:
         """Insert additional data column for a specific body part.
@@ -549,39 +421,58 @@ class Session:
         )
     
     def _discover_session_files(self) -> None:
-        """Discover files for this session using configured patterns."""
-        if 'data_sources' not in self.config:
+        """Discover files for this session using data source specifications."""
+        if not self.data_source_specifications:
             raise NavigraphError(
-                f"No data sources configured for session {self.session_id}. "
-                f"Make sure your configuration includes a 'data_sources' section."
+                f"No data source specifications provided for session {self.session_id}. "
+                f"Make sure data_source_specifications are passed to the session."
             )
         
-        # Extract file patterns from data source configurations
-        file_patterns = {}
-        for ds_config in self.config['data_sources']:
-            if 'file_pattern' in ds_config:
-                file_patterns[ds_config['name']] = ds_config['file_pattern']
+        # Extract file patterns from data source specifications, separating session and shared
+        session_patterns = {}
+        shared_patterns = {}
         
-        if file_patterns:
+        for ds_spec in self.data_source_specifications:
+            if 'file_pattern' in ds_spec:
+                pattern_name = ds_spec['name']
+                pattern = ds_spec['file_pattern']
+                
+                # Check if this is a shared resource
+                if ds_spec.get('shared', False):
+                    shared_patterns[pattern_name] = pattern
+                else:
+                    session_patterns[pattern_name] = pattern
+        
+        if session_patterns or shared_patterns:
+            # Call file discovery with both pattern sets
+            # Use session_id as the folder name to search in the session directory
             self._discovered_file_paths = self.file_discovery.match_files_in_session(
-                self.session_id, file_patterns
+                self.session_id, 
+                session_patterns,
+                shared_pattern_mapping=shared_patterns
             )
             
             # Log discovery results
             found_files = sum(1 for path in self._discovered_file_paths.values() if path is not None)
+            total_patterns = len(session_patterns) + len(shared_patterns)
             self.logger.info(
-                f"File discovery for {self.session_id}: {found_files}/{len(file_patterns)} files found"
+                f"File discovery for {self.session_id}: {found_files}/{total_patterns} files found "
+                f"({len(session_patterns)} session, {len(shared_patterns)} shared)"
             )
         else:
             self.logger.debug(f"No file patterns specified for session {self.session_id}")
     
     def _load_and_validate_data_sources(self) -> None:
-        """Load and validate data sources in configuration order (NO SORTING)."""
-        for ds_config in self.config['data_sources']:
-            ds_name = ds_config['name']
-            ds_type = ds_config['type']
+        """Load and validate data sources in specification order (NO SORTING)."""
+        for ds_spec in self.data_source_specifications:
+            ds_name = ds_spec['name']
+            ds_type = ds_spec['type']
             
             try:
+                # Handle shared resources (create if not exists)
+                if ds_spec.get('shared', False):
+                    self._ensure_shared_resource(ds_spec)
+                
                 # Get plugin class from registry
                 if not self.registry:
                     from .registry import registry
@@ -589,8 +480,8 @@ class Session:
                 ds_class = self.registry.get_data_source_plugin(ds_type)
                 ds_instance = ds_class()
                 
-                # Store in configuration order (no sorting!)
-                self.data_source_instances.append((ds_name, ds_instance, ds_config))
+                # Store in specification order (no sorting!)
+                self.data_source_instances.append((ds_name, ds_instance, ds_spec))
                 
                 self.logger.debug(f"Loaded data source plugin: {ds_name} ({ds_type})")
                 
@@ -602,13 +493,73 @@ class Session:
                 self.logger.error(error_msg)
                 
                 # Check if this is a required data source
-                if ds_config.get('required', True):
+                if ds_spec.get('required', True):
                     raise NavigraphError(error_msg) from e
                 else:
                     self.logger.warning(f"Skipping optional data source: {ds_name}")
     
+    
+    def _ensure_shared_resource(self, ds_spec: Dict[str, Any]) -> None:
+        """Ensure a shared resource exists, creating it if necessary."""
+        resource_name = ds_spec['name']
+        data_source_type = ds_spec['type']
+        
+        # Map data source types to shared resource types
+        type_mapping = {
+            'map_integration': 'map_provider',
+            'graph_integration': 'graph_provider'
+        }
+        
+        shared_resource_type = type_mapping.get(data_source_type)
+        
+        # Some data sources with shared=true are regular data sources that populate shared_resources
+        # (e.g., calibration), not actual shared resource types that need special creation
+        if not shared_resource_type:
+            self.logger.debug(f"Data source type '{data_source_type}' with shared=true will be handled as regular data source")
+            return
+        
+        if resource_name not in self.shared_resources:
+            try:
+                # Get plugin class from registry and instantiate
+                if not self.registry:
+                    from .registry import registry
+                    self.registry = registry
+                
+                resource_class = self.registry.get_shared_resource_plugin(shared_resource_type)
+                
+                # Create resource config with session configuration data
+                resource_config = ds_spec.get('config', {}).copy()
+                
+                # Add additional config from session configuration
+                if shared_resource_type == 'map_provider' and 'map_settings' in self.config:
+                    resource_config['map_settings'] = self.config['map_settings']
+                    if 'map_path' in self.config:
+                        resource_config['map_path'] = self.config['map_path']
+                        
+                elif shared_resource_type == 'graph_provider' and 'graph' in self.config:
+                    resource_config.update(self.config['graph'])
+                
+                resource_config['experiment_path'] = self.experiment_path
+                
+                resource_instance = resource_class.from_config(resource_config, self.logger)
+                self.shared_resources[resource_name] = resource_instance
+                self.logger.debug(f"Created shared resource: {resource_name} ({shared_resource_type})")
+                
+            except Exception as e:
+                self.logger.error(f"Failed to create shared resource '{resource_name}': {e}")
+                raise
+    
     def _integrate_all_data_sources(self) -> pd.DataFrame:
-        """Sequentially integrate all data sources in configuration order."""
+        """Sequentially integrate all data sources in configuration order.
+        
+        Data flows through plugins in the order specified in the config:
+        1. Each plugin receives the current DataFrame
+        2. Plugin adds its columns/data via integrate_data_into_session()
+        3. Updated DataFrame is passed to the next plugin
+        
+        Plugins are responsible for checking their own prerequisites and
+        raising descriptive errors if dependencies are missing.
+        """
         if not self.data_source_instances:
             raise DataSourceError(
                 f"No data sources available for integration in session {self.session_id}"
@@ -622,25 +573,18 @@ class Session:
             f"{len(self.data_source_instances)} data sources"
         )
         
-        for position, (ds_name, ds_instance, ds_config) in enumerate(self.data_source_instances):
+        for position, (ds_name, ds_instance, ds_spec) in enumerate(self.data_source_instances):
             self.logger.info(f"Integrating data source {position+1}/{len(self.data_source_instances)}: {ds_name}")
             
-            # Validate prerequisites
-            if not ds_instance.validate_session_prerequisites(current_dataframe, self.shared_resources):
-                error_message = f"Prerequisites not met for data source '{ds_name}'"
-                self.logger.error(error_message)
-                # TODO: Get specific missing requirements from data source
-                raise DataSourcePrerequisiteError(ds_name, ["Requirements validation failed"])
-            
-            # Add discovered file path to configuration
+            # Add discovered file path to specification
             if ds_name in self._discovered_file_paths:
-                ds_config = ds_config.copy()  # Don't modify original
-                ds_config['discovered_file_path'] = self._discovered_file_paths[ds_name]
+                ds_spec = ds_spec.copy()  # Don't modify original
+                ds_spec['discovered_file_path'] = self._discovered_file_paths[ds_name]
             
             # Perform integration
             try:
                 current_dataframe = ds_instance.integrate_data_into_session(
-                    current_dataframe, ds_config, self.shared_resources, self.logger
+                    current_dataframe, ds_spec, self.shared_resources, self.logger
                 )
                 
                 provided_columns = ds_instance.get_provided_column_names()

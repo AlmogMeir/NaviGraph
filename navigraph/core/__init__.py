@@ -16,6 +16,7 @@ from .exceptions import (
 
 # Utilities
 from .utils import resolve_path, ensure_directory, compute_configuration_hash
+from .conversion_utils import quaternions_to_euler, wrap_angle, degrees_to_radians, radians_to_degrees
 
 __all__ = [
     # Core interfaces and classes
@@ -40,5 +41,9 @@ __all__ = [
     # Utilities
     "resolve_path",
     "ensure_directory", 
-    "compute_configuration_hash"
+    "compute_configuration_hash",
+    "quaternions_to_euler",
+    "wrap_angle",
+    "degrees_to_radians",
+    "radians_to_degrees"
 ]
