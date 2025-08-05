@@ -69,41 +69,29 @@ class TextVisualizer(BasePlugin, IVisualizer):
             self.logger.warning(f"Invalid position '{self.config['position']}', using 'top_right'")
             self.config['position'] = 'top_right'
     
-    def process(
-        self,
-        session_data: pd.DataFrame,
-        config: Dict[str, Any],
-        input_data: Optional[Union[Iterator[np.ndarray], str]] = None,
-        **kwargs
-    ) -> Iterator[np.ndarray]:
-        """Process video frames and add text overlays.
+    def process_frame(self, frame: np.ndarray, frame_index: int, session) -> np.ndarray:
+        """Process a single frame and add text overlays.
         
         Args:
-            session_data: DataFrame with column data to display
-            config: Configuration dictionary
-            input_data: Input video frames iterator or video file path
-            **kwargs: Additional arguments
+            frame: Input video frame
+            frame_index: Current frame index
+            session: Session object with full data access
             
-        Yields:
-            Video frames with text overlays added
+        Returns:
+            Frame with text overlays added
         """
-        self.logger.info("Starting text visualization")
-        
         # Get columns to display
         columns_to_display = self.config.get('columns', [])
         if not columns_to_display:
-            self.logger.warning("No columns specified for text visualization")
-            # If no input data, can't proceed
-            if input_data is None:
-                return
-            # Just pass through frames unchanged
-            if isinstance(input_data, str):
-                for frame in self._read_video_frames(input_data):
-                    yield frame
-            else:
-                for frame in input_data:
-                    yield frame
-            return
+            self.logger.debug("No columns specified for text visualization")
+            return frame
+        
+        # Get session data
+        try:
+            session_data = session.get_integrated_dataframe()
+        except Exception as e:
+            self.logger.error(f"Could not get session data: {str(e)}")
+            return frame
         
         # Validate columns exist
         available_columns = list(session_data.columns)
@@ -113,43 +101,20 @@ class TextVisualizer(BasePlugin, IVisualizer):
             columns_to_display = [col for col in columns_to_display if col in available_columns]
         
         if not columns_to_display:
-            self.logger.warning("No valid columns found for text visualization")
-            # Just pass through frames
-            if input_data is None:
-                return
-            if isinstance(input_data, str):
-                for frame in self._read_video_frames(input_data):
-                    yield frame
-            else:
-                for frame in input_data:
-                    yield frame
-            return
+            self.logger.debug("No valid columns found for text visualization")
+            return frame
         
-        self.logger.info(f"Displaying columns: {columns_to_display}")
+        # Check if frame_index is valid
+        if frame_index >= len(session_data):
+            self.logger.debug(f"Frame index {frame_index} beyond session data length {len(session_data)}")
+            return frame
         
-        # Process video frames
-        if isinstance(input_data, str):
-            frame_iterator = self._read_video_frames(input_data)
-        elif input_data is not None:
-            frame_iterator = input_data
-        else:
-            self.logger.error("No input video data provided")
-            return
-        
-        frame_idx = 0
-        for frame in frame_iterator:
-            try:
-                # Add text overlays for this frame
-                enhanced_frame = self._add_text_overlays(
-                    frame, session_data, columns_to_display, frame_idx
-                )
-                yield enhanced_frame
-                frame_idx += 1
-                
-            except Exception as e:
-                self.logger.warning(f"Failed to process frame {frame_idx}: {e}")
-                yield frame  # Return original frame on error
-                frame_idx += 1
+        try:
+            # Add text overlays for this frame
+            return self._add_text_overlays(frame, session_data, columns_to_display, frame_index)
+        except Exception as e:
+            self.logger.error(f"Failed to process frame {frame_index}: {str(e)}")
+            return frame  # Return original frame on error
     
     def _add_text_overlays(
         self, 
@@ -281,29 +246,6 @@ class TextVisualizer(BasePlugin, IVisualizer):
         
         return str(value)
     
-    def _read_video_frames(self, video_path: str) -> Iterator[np.ndarray]:
-        """Read frames from a video file.
-        
-        Args:
-            video_path: Path to video file
-            
-        Yields:
-            Video frames as numpy arrays
-        """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            self.logger.error(f"Failed to open video: {video_path}")
-            return
-        
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                yield frame
-        finally:
-            cap.release()
-    
     def get_required_columns(self) -> List[str]:
         """Get list of required DataFrame columns.
         
@@ -311,13 +253,3 @@ class TextVisualizer(BasePlugin, IVisualizer):
             List of column names that this visualizer needs
         """
         return self.config.get('columns', [])
-    
-    def get_file_requirements(self) -> Dict[str, str]:
-        """Get file requirements for this visualizer.
-        
-        Returns:
-            Dictionary mapping requirement names to file patterns
-        """
-        return {
-            'video_file': r'.*\.(mp4|avi|mov)$'
-        }

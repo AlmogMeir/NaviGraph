@@ -53,39 +53,23 @@ class IAnalyzer(ABC):
 
 
 class IVisualizer(ABC):
-    """Interface for visualizers that process and transform data.
+    """Interface for visualizers that process frames.
     
-    Visualizers are pure data transformation functions that process input
-    data and return the result. They do not handle file I/O - that is the
-    responsibility of the pipeline and publishers.
+    Visualizers process individual frames with session context.
+    The pipeline handles all file I/O and frame iteration.
     """
     
     @abstractmethod
-    def process(
-        self,
-        session_data: pd.DataFrame,
-        config: Dict[str, Any],
-        input_data: Optional[Any] = None,
-        **kwargs
-    ) -> Any:
-        """Process data and return visualization result.
+    def process_frame(self, frame, frame_index: int, session) -> Any:
+        """Process a single frame with session context.
         
         Args:
-            session_data: DataFrame with integrated session data
-            config: Visualization-specific configuration
-            input_data: Optional input from previous pipeline stage
-                - For video processors: Iterator[np.ndarray] or video path
-                - For plot processors: matplotlib Figure or data
-            **kwargs: Additional parameters including:
-                - session_path: Path to session directory for file discovery
-                - session_id: Session identifier
-                - shared_resources: Dict of shared resources (map, graph, etc.)
+            frame: Input frame (numpy array for video)
+            frame_index: Current frame index
+            session: Session object with full data access
                 
         Returns:
-            Processed visualization data:
-            - Video processors: Iterator[np.ndarray] (frame generator)
-            - Plot processors: matplotlib.Figure or np.ndarray
-            - Data processors: Transformed data
+            Processed frame (same type as input)
         """
         pass
 

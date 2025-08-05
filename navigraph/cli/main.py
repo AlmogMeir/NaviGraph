@@ -120,81 +120,184 @@ def run(config_path: Path, mode: tuple, output: Optional[Path]):
 
 @cli.command()
 @click.argument('data_path', type=click.Path(exists=True, path_type=Path))
+@click.option('--config', '-c', type=click.Path(exists=True, path_type=Path),
+              help='Configuration file to use for validation (optional)')
 @click.option('--format', '-f', 
               type=click.Choice(['table', 'json', 'tree']),
               default='table',
               help='Output format for discovered sessions')
-def discover(data_path: Path, format: str):
-    """Discover and list available experimental sessions.
+def discover(data_path: Path, config: Optional[Path], format: str):
+    """Discover and list available experimental sessions with validation.
     
-    Scan a directory for video files (.mp4, .avi) and matching DeepLabCut
-    H5 files to identify sessions ready for analysis.
+    Scan a directory for sessions and validate them against configured data sources.
+    Without a config file, performs basic directory scanning.
     
     DATA_PATH: Path to directory containing experimental data
     
     \b
     Examples:
       navigraph discover ./data/
-      navigraph discover /path/to/experiments/ --format json
+      navigraph discover ./data/ --config config.yaml --format json
       navigraph discover ./sessions/ --format tree
     
     \b
-    Expected file structure:
-      • Video files: *.mp4, *.avi, *.mov
-      • DeepLabCut files: *DLC*.h5
-      • Matching names: video basename should appear in H5 filename
+    With config file:
+      • Validates sessions using configured data source plugins
+      • Shows detailed validation results per session
+      • Respects plugin file patterns and requirements
+    
+    \b
+    Without config file:
+      • Basic directory scanning for potential sessions
+      • Lists directories that could contain session data
     """
     # Load plugins for session discovery
-    from ..plugins import data_sources, shared_resources, analyzers
+    from ..plugins import data_sources, shared_resources, analyzers  # noqa: F401
     
     try:
         click.echo(f"🔍 Discovering sessions in: {data_path}")
         
-        # Create minimal config for discovery
-        config = OmegaConf.create({
-            'stream_path': str(data_path),
-            'keypoint_detection_file_path': str(data_path),
-            'experiment_output_path': '/tmp/navigraph_discovery'
-        })
+        if config:
+            # Use provided config for plugin-based validation
+            click.echo(f"📋 Using configuration: {config}")
+            
+            # Load configuration
+            config_data = OmegaConf.load(config)
+            config_data._config_dir = str(config.parent)
+            
+            # Override experiment path to discovery location
+            config_data.experiment_path = str(data_path)
+            
+            # Create experiment runner
+            runner = ExperimentRunner(config_data)
+            
+            # Discover sessions
+            sessions = runner.discover_sessions()
+            
+            if not sessions:
+                click.echo("⚠️  No session directories found")
+                return
+            
+            click.echo(f"📁 Found {len(sessions)} session directories")
+            
+            # Validate sessions using plugins
+            validation_report = runner.validate_sessions(sessions)
+            
+            # Display results
+            if format == 'table':
+                click.echo()
+                click.echo("Session Validation Results:")
+                click.echo("=" * 60)
+                
+                for session_validation in validation_report.session_validations:
+                    status = "✅ VALID" if session_validation.is_valid else "❌ INVALID"
+                    click.echo(f"\n{session_validation.session_id}: {status}")
+                    
+                    for result in session_validation.results:
+                        symbol = "✓" if result.is_valid else "✗"
+                        click.echo(f"  {symbol} {result.plugin_name}: {result.found_count} files")
+                        if result.message:
+                            click.echo(f"    └─ {result.message}")
+                
+                click.echo()
+                valid_count = validation_report.valid_sessions
+                total_count = len(validation_report.session_validations)
+                click.echo(f"Summary: {valid_count}/{total_count} sessions valid ({validation_report.validation_rate:.1f}%)")
+            
+            elif format == 'json':
+                import json
+                # Convert validation report to JSON-serializable format
+                report_data = {
+                    'summary': {
+                        'total_sessions': len(validation_report.session_validations),
+                        'valid_sessions': validation_report.valid_sessions,
+                        'invalid_sessions': validation_report.invalid_sessions,
+                        'validation_rate': validation_report.validation_rate
+                    },
+                    'sessions': []
+                }
+                
+                for session_validation in validation_report.session_validations:
+                    session_data = {
+                        'session_id': session_validation.session_id,
+                        'is_valid': session_validation.is_valid,
+                        'plugins': []
+                    }
+                    
+                    for result in session_validation.results:
+                        plugin_data = {
+                            'plugin_name': result.plugin_name,
+                            'plugin_type': result.plugin_type,
+                            'is_valid': result.is_valid,
+                            'found_count': result.found_count,
+                            'message': result.message
+                        }
+                        session_data['plugins'].append(plugin_data)
+                    
+                    report_data['sessions'].append(session_data)
+                
+                click.echo(json.dumps(report_data, indent=2))
+            
+            elif format == 'tree':
+                click.echo()
+                for i, session_validation in enumerate(validation_report.session_validations, 1):
+                    prefix = "├── " if i < len(validation_report.session_validations) else "└── "
+                    status = "✅" if session_validation.is_valid else "❌"
+                    click.echo(f"{prefix}{status} {session_validation.session_id}")
+                    
+                    for j, result in enumerate(session_validation.results):
+                        is_last = j == len(session_validation.results) - 1
+                        sub_prefix = "    └── " if is_last else "    ├── "
+                        symbol = "✓" if result.is_valid else "✗"
+                        click.echo(f"{sub_prefix}{symbol} {result.plugin_name} ({result.found_count} files)")
         
-        # Use experiment runner for discovery
-        runner = ExperimentRunner(config)
-        sessions = runner.discover_sessions()
-        
-        if not sessions:
-            click.echo("⚠️  No sessions found in the specified directory")
-            click.echo("💡 Make sure the directory contains:")
-            click.echo("   • Video files (.mp4, .avi)")  
-            click.echo("   • DeepLabCut files (.h5)")
-            click.echo("   • Matching filenames (video basename in H5 filename)")
-            return
-        
-        click.echo(f"✅ Found {len(sessions)} sessions:")
-        
-        if format == 'table':
-            # Table format
+        else:
+            # Basic directory scanning without config
+            click.echo("📋 No config provided - performing basic directory scan")
+            
+            # Create minimal config for basic discovery
+            config_data = OmegaConf.create({
+                'experiment_path': str(data_path),
+                'data_sources': [],  # No data sources = basic scanning
+                'experiment_output_path': '/tmp/navigraph_discovery'
+            })
+            
+            # Create experiment runner
+            runner = ExperimentRunner(config_data)
+            sessions = runner.discover_sessions()
+            
+            if not sessions:
+                click.echo("⚠️  No potential session directories found")
+                click.echo("💡 Try providing a config file for detailed validation:")
+                click.echo("   navigraph discover ./data/ --config config.yaml")
+                return
+            
+            click.echo(f"📁 Found {len(sessions)} potential session directories:")
+            
+            if format == 'table':
+                click.echo()
+                click.echo("Directory Name".ljust(40) + "Path")
+                click.echo("-" * 80)
+                for session in sessions:
+                    name = session.name[:38]
+                    path = str(session.path)
+                    click.echo(f"{name:<40} {path}")
+            
+            elif format == 'json':
+                import json
+                session_data = [{'name': s.name, 'path': str(s.path)} for s in sessions]
+                click.echo(json.dumps(session_data, indent=2))
+            
+            elif format == 'tree':
+                click.echo()
+                for i, session in enumerate(sessions, 1):
+                    prefix = "├── " if i < len(sessions) else "└── "
+                    click.echo(f"{prefix}📁 {session.name}")
+                    click.echo(f"    └── {session.path}")
+            
             click.echo()
-            click.echo("Session Name".ljust(30) + "Video File".ljust(40) + "H5 File")
-            click.echo("-" * 90)
-            for session in sessions:
-                name = session['session_name'][:28]
-                video = Path(session['video_file']).name[:38]
-                h5 = Path(session['h5_file']).name
-                click.echo(f"{name:<30} {video:<40} {h5}")
-        
-        elif format == 'json':
-            # JSON format
-            import json
-            click.echo(json.dumps(sessions, indent=2))
-        
-        elif format == 'tree':
-            # Tree format
-            click.echo()
-            for i, session in enumerate(sessions, 1):
-                prefix = "├── " if i < len(sessions) else "└── "
-                click.echo(f"{prefix}{session['session_name']}")
-                click.echo(f"    ├── 🎥 {Path(session['video_file']).name}")
-                click.echo(f"    └── 📊 {Path(session['h5_file']).name}")
+            click.echo("💡 For detailed validation, provide a config file:")
+            click.echo("   navigraph discover ./data/ --config config.yaml")
             
     except Exception as e:
         click.echo(f"❌ Discovery failed: {str(e)}", err=True)

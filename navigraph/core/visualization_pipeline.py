@@ -80,6 +80,7 @@ class VisualizationPipeline:
                 output_files = self._run_visualization_pipeline(
                     viz_name=viz_name,
                     viz_config=viz_config,
+                    session=session,
                     session_data=session_data,
                     session_id=session_id,
                     session_path=session_path,
@@ -105,6 +106,7 @@ class VisualizationPipeline:
         self,
         viz_name: str,
         viz_config: Dict[str, Any],
+        session,
         session_data: pd.DataFrame,
         session_id: str,
         session_path: Optional[str],
@@ -117,6 +119,7 @@ class VisualizationPipeline:
         Args:
             viz_name: Name of the visualization
             viz_config: Configuration for this visualization
+            session: Session object with full data access
             session_data: Session DataFrame
             session_id: Session identifier
             session_path: Path to session files
@@ -152,10 +155,15 @@ class VisualizationPipeline:
             'reward_tile_id': reward_tile_id
         }
         
-        # Process stages in sequence
-        self.logger.info(f"Running {len(stages)}-stage pipeline for {viz_name}")
+        # Discover video file for frame processing
+        video_path = self._discover_video_file(stages, session_path)
+        if not video_path:
+            self.logger.error(f"No video file found for visualization {viz_name}")
+            return []
         
-        current_data = None  # First stage will use file discovery
+        # Create visualizer instances for all stages
+        visualizers = []
+        self.logger.info(f"Running {len(stages)}-stage pipeline for {viz_name}")
         
         for i, stage_config in enumerate(stages):
             plugin_name = stage_config.get('plugin')
@@ -172,31 +180,32 @@ class VisualizationPipeline:
                     self.registry = registry
                 visualizer_class = self.registry.get_visualizer_plugin(plugin_name)
                 visualizer = visualizer_class.from_config(stage_params, self.logger)
+                visualizers.append((plugin_name, visualizer))
             except Exception as e:
                 self.logger.error(f"Failed to create visualizer {plugin_name}: {str(e)}")
                 return []
             
             self.logger.info(f"Stage {i+1}/{len(stages)}: {plugin_name}")
+        
+        # Process video frame by frame
+        try:
+            processed_frames = self._process_video_frames(
+                video_path=video_path,
+                session=session,
+                visualizers=visualizers,
+                session_id=session_id
+            )
             
-            # Process data through this stage
-            try:
-                current_data = visualizer.process(
-                    session_data=session_data,
-                    config=stage_params,
-                    input_data=current_data,
-                    **stage_kwargs
-                )
-                
-                # Ensure we have data
-                if current_data is None:
-                    self.logger.error(f"Stage {i+1} ({plugin_name}) produced no data")
-                    return []
-                    
-            except Exception as e:
-                self.logger.error(f"Stage {i+1} ({plugin_name}) failed: {str(e)}")
+            if not processed_frames:
+                self.logger.error(f"No frames processed for {viz_name}")
                 return []
+                
+        except Exception as e:
+            self.logger.error(f"Frame processing failed for {viz_name}: {str(e)}")
+            return []
         
         # Publish final output
+        current_data = processed_frames  # Set processed frames as output
         try:
             publisher = get_publisher(
                 publisher_type=publisher_type,
@@ -222,4 +231,123 @@ class VisualizationPipeline:
                 
         except Exception as e:
             self.logger.error(f"Publishing failed for {viz_name}: {str(e)}")
+            return []
+    
+    def _discover_video_file(self, stages: List[Dict[str, Any]], session_path: str) -> Optional[str]:
+        """Discover video file needed by the visualization stages.
+        
+        Args:
+            stages: List of visualization stage configurations
+            session_path: Path to session directory for file discovery
+            
+        Returns:
+            Path to discovered video file, or None if not found
+        """
+        # Check if any stage requires video files
+        video_patterns = set()
+        
+        for stage_config in stages:
+            stage_params = stage_config.get('config', {})
+            file_requirements = stage_params.get('file_requirements', {})
+            
+            # Look for video file requirements
+            for req_name, pattern in file_requirements.items():
+                if 'video' in req_name.lower():
+                    video_patterns.add(pattern)
+        
+        if not video_patterns:
+            self.logger.warning("No video file requirements found in stages")
+            return None
+        
+        # Use first video pattern to discover file
+        video_pattern = next(iter(video_patterns))
+        
+        # Use direct file discovery instead of BasePlugin 
+        try:
+            import re
+            video_files = []
+            search_path = Path(session_path)
+            
+            if search_path.exists():
+                for file_path in search_path.rglob('*'):
+                    if file_path.is_file():
+                        relative_path = str(file_path.relative_to(search_path))
+                        if re.match(video_pattern, relative_path):
+                            video_files.append(file_path)
+            if video_files:
+                video_path = str(video_files[0])
+                self.logger.info(f"Discovered video file: {Path(video_path).name}")
+                return video_path
+            else:
+                self.logger.error(f"No video file found matching pattern: {video_pattern}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Video file discovery failed: {str(e)}")
+            return None
+    
+    def _process_video_frames(self, video_path: str, session, visualizers: List, session_id: str) -> List:
+        """Process video frames through the visualizer pipeline.
+        
+        Args:
+            video_path: Path to input video file
+            session: Session object with full data access
+            visualizers: List of (name, visualizer) tuples
+            session_id: Session identifier for logging
+            
+        Returns:
+            List of processed frames (numpy arrays)
+        """
+        import cv2
+        import numpy as np
+        
+        processed_frames = []
+        
+        try:
+            # Open video
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open video: {video_path}")
+            
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self.logger.info(f"Processing {total_frames} frames from {Path(video_path).name}")
+            
+            frame_index = 0
+            frames_processed = 0
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                current_frame = frame.copy()
+                
+                # Pass frame through each visualizer stage
+                for visualizer_name, visualizer in visualizers:
+                    try:
+                        current_frame = visualizer.process_frame(current_frame, frame_index, session)
+                        if current_frame is None:
+                            raise ValueError(f"Visualizer {visualizer_name} returned None frame")
+                    except Exception as e:
+                        self.logger.error(f"Frame {frame_index} failed in {visualizer_name}: {str(e)}")
+                        # Use previous frame to continue processing
+                        current_frame = frame.copy()
+                
+                processed_frames.append(current_frame)
+                frames_processed += 1
+                frame_index += 1
+                
+                # Log progress periodically
+                if frame_index % 100 == 0:
+                    self.logger.debug(f"Processed {frame_index}/{total_frames} frames")
+            
+            cap.release()
+            
+            self.logger.info(f"Successfully processed {frames_processed} frames for {session_id}")
+            return processed_frames
+            
+        except Exception as e:
+            self.logger.error(f"Frame processing failed: {str(e)}")
+            if 'cap' in locals():
+                cap.release()
             return []

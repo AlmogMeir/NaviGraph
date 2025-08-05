@@ -38,158 +38,91 @@ class MapVisualizer(BasePlugin, IVisualizer):
         instance.initialize()
         return instance
     
-    def process(
-        self,
-        session_data: pd.DataFrame,
-        config: Dict[str, Any],
-        input_data: Optional[Iterator[np.ndarray]] = None,
-        **kwargs
-    ) -> Iterator[np.ndarray]:
-        """Process video frames and add map overlay visualizations.
+    def process_frame(self, frame: np.ndarray, frame_index: int, session) -> np.ndarray:
+        """Process a single frame and add map overlay.
         
         Args:
-            session_data: DataFrame with tile_id and position data
-            config: Visualization configuration including:
-                - overlay_position: Corner position ('bottom_right', 'top_left', etc.)
-                - overlay_size: Size as fraction of frame (0.0-1.0)
-                - overlay_opacity: Opacity of overlay (0.0-1.0)
-                - current_tile_color: [B,G,R] color for current tile
-                - visited_tile_color: [B,G,R] color for visited tiles
-                - visited_tile_opacity: Opacity for visited tiles
-                - show_tile_id: Whether to show tile ID text
-                - tile_id_font_scale: Text size for tile IDs
-                - tile_id_color: [B,G,R] color for tile ID text
-            input_data: Frame iterator from previous stage or video path
-            **kwargs: Additional parameters including:
-                - shared_resources: Must contain 'maze_map' resource
-                - session_path: Path for file discovery if needed
-                
-        Yields:
-            Processed frames with map overlay
+            frame: Input video frame
+            frame_index: Current frame index  
+            session: Session object with full data access
+            
+        Returns:
+            Frame with map overlay applied
         """
-        # Get map provider from shared resources
-        shared_resources = kwargs.get('shared_resources', {})
-        map_provider = shared_resources.get('map_integration') or shared_resources.get('maze_map')
-        if not map_provider:
-            self.logger.error("Map visualization requires map_integration or maze_map in shared_resources")
-            return
-        
         # Get visualization settings with defaults
         viz_config = {
-            'overlay_position': config.get('overlay_position', 'bottom_right'),
-            'overlay_size': config.get('overlay_size', 0.3),
-            'overlay_opacity': config.get('overlay_opacity', 0.7),
-            'current_tile_color': config.get('current_tile_color', [255, 0, 0]),
-            'visited_tile_color': config.get('visited_tile_color', [0, 255, 0]),
-            'visited_tile_opacity': config.get('visited_tile_opacity', 0.3),
-            'show_tile_id': config.get('show_tile_id', True),
-            'tile_id_font_scale': config.get('tile_id_font_scale', 1.0),
-            'tile_id_color': config.get('tile_id_color', [0, 0, 255])
+            'overlay_position': self.config.get('overlay_position', 'bottom_right'),
+            'overlay_size': self.config.get('overlay_size', 0.3), 
+            'overlay_opacity': self.config.get('overlay_opacity', 0.7),
+            'current_tile_color': self.config.get('current_tile_color', [255, 0, 0]),
+            'visited_tile_color': self.config.get('visited_tile_color', [0, 255, 0]),
+            'visited_tile_opacity': self.config.get('visited_tile_opacity', 0.3),
+            'show_visited_tiles': self.config.get('show_visited_tiles', True),
+            'show_tile_id': self.config.get('show_tile_id', True),
+            'tile_id_font_scale': self.config.get('tile_id_font_scale', 1.0),
+            'tile_id_color': self.config.get('tile_id_color', [0, 0, 255])
         }
         
-        # Get frame source
-        frame_source = self._get_frame_source(input_data, kwargs.get('session_path'))
-        if frame_source is None:
-            return
+        # Get map provider from shared resources
+        try:
+            shared_resources = session.shared_resources
+            map_provider = shared_resources.get('map_integration') or shared_resources.get('maze_map')
+            if not map_provider:
+                self.logger.error("Map visualization requires map_integration or maze_map in shared_resources")
+                return frame
+                
+            # Get session data
+            session_data = session.get_integrated_dataframe()
+            
+            # Get map resources
+            map_img = map_provider.get_map_image()
+            map_config = map_provider.get_map_configuration()
+            
+        except Exception as e:
+            self.logger.error(f"Could not get map resources: {str(e)}")
+            return frame
         
-        # Get map resources
-        map_img = map_provider.get_map_image()
-        map_config = map_provider.get_map_configuration()
+        # Check if frame_index is valid
+        if frame_index >= len(session_data):
+            self.logger.debug(f"Frame index {frame_index} beyond session data length {len(session_data)}")
+            return frame
         
-        # Track visited tiles
+        # Initialize visited tiles tracking (simple approach - get all visited up to current frame)
         visited_tiles: Set[int] = set()
+        if 'tile_id' in session_data.columns:
+            # Get all tiles visited up to current frame
+            tiles_up_to_frame = session_data.iloc[:frame_index + 1]['tile_id'].dropna()
+            visited_tiles = set(int(tile_id) for tile_id in tiles_up_to_frame if not pd.isna(tile_id))
         
-        # Process frames
-        frame_idx = 0
-        overlay_params = None
-        
-        for frame in frame_source:
-            # Calculate overlay parameters on first frame
-            if overlay_params is None:
-                overlay_params = self._calculate_overlay_params(
-                    frame.shape, map_img.shape, viz_config
-                )
+        try:
+            # Calculate overlay parameters
+            overlay_params = self._calculate_overlay_params(
+                frame.shape, map_img.shape, viz_config
+            )
             
             # Create map overlay for this frame
             map_overlay = self._create_map_overlay(
-                map_img, 
+                map_img,
                 map_config,
                 session_data,
-                frame_idx,
+                frame_index,
                 visited_tiles,
                 overlay_params,
                 viz_config
             )
             
             # Apply overlay to frame
-            frame = self._apply_overlay(
+            return self._apply_overlay(
                 frame,
                 map_overlay,
                 overlay_params,
                 viz_config['overlay_opacity']
             )
             
-            yield frame
-            frame_idx += 1
+        except Exception as e:
+            self.logger.error(f"Failed to process frame {frame_index}: {str(e)}")
+            return frame  # Return original frame on error
     
-    def _get_frame_source(
-        self, 
-        input_data: Optional[Union[Iterator[np.ndarray], str]], 
-        session_path: Optional[str]
-    ) -> Optional[Iterator[np.ndarray]]:
-        """Get frame source from input data or file discovery.
-        
-        Args:
-            input_data: Either frame iterator or video file path
-            session_path: Path for file discovery if input_data is None
-            
-        Returns:
-            Iterator yielding frames, or None if no source found
-        """
-        # If we have a frame iterator, use it directly
-        if input_data is not None and not isinstance(input_data, str):
-            return input_data
-        
-        # Otherwise, we need to open a video file
-        video_path = None
-        
-        if isinstance(input_data, str):
-            # Input is a video path
-            video_path = input_data
-        elif session_path:
-            # Try file discovery
-            files = self.get_file_requirements(session_path)
-            video_path = files.get('video_file')
-        
-        if not video_path:
-            self.logger.error("No video source available")
-            return None
-        
-        # Open video and create frame generator
-        return self._video_frame_generator(video_path)
-    
-    def _video_frame_generator(self, video_path: str) -> Iterator[np.ndarray]:
-        """Generator that yields frames from a video file.
-        
-        Args:
-            video_path: Path to video file
-            
-        Yields:
-            Video frames as numpy arrays
-        """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            self.logger.error(f"Failed to open video: {video_path}")
-            return
-        
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret or frame is None:
-                    break
-                yield frame
-        finally:
-            cap.release()
     
     def _calculate_overlay_params(
         self,
@@ -271,17 +204,18 @@ class MapVisualizer(BasePlugin, IVisualizer):
                 # Update visited tiles
                 visited_tiles.add(int(current_tile_id))
                 
-                # Draw visited tiles
-                for tile_id in visited_tiles:
-                    self._highlight_tile_on_map(
-                        map_overlay,
-                        tile_id,
-                        viz_config['visited_tile_color'],
-                        viz_config['visited_tile_opacity'],
-                        map_config,
-                        overlay_params,
-                        map_img.shape[:2]
-                    )
+                # Draw visited tiles (if enabled)
+                if viz_config['show_visited_tiles']:
+                    for tile_id in visited_tiles:
+                        self._highlight_tile_on_map(
+                            map_overlay,
+                            tile_id,
+                            viz_config['visited_tile_color'],
+                            viz_config['visited_tile_opacity'],
+                            map_config,
+                            overlay_params,
+                            map_img.shape[:2]
+                        )
                 
                 # Highlight current tile
                 self._highlight_tile_on_map(

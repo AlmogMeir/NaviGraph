@@ -56,7 +56,7 @@ class VideoPublisher(Publisher):
         self, 
         frames: Iterator[np.ndarray],
         fps: float = 30.0,
-        codec: str = 'mp4v',
+        codec: str = 'mp4v',  # MP4 codec for better compatibility
         **kwargs
     ) -> Optional[str]:
         """Publish frames as a video file.
@@ -86,6 +86,18 @@ class VideoPublisher(Publisher):
                         fps,
                         (width, height)
                     )
+                    
+                    if not writer.isOpened():
+                        logger.error(f"Failed to open video writer with codec '{codec}'")
+                        if codec != 'XVID':
+                            logger.info("Trying fallback codec 'XVID'...")
+                            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                            writer = cv2.VideoWriter(
+                                str(output_file),
+                                fourcc,
+                                fps,
+                                (width, height)
+                            )
                 
                 writer.write(frame)
                 frame_count += 1

@@ -38,13 +38,7 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
         instance.initialize()
         return instance
     
-    def process(
-        self,
-        session_data: pd.DataFrame,
-        config: Dict[str, Any],
-        input_data: Optional[Union[Iterator[np.ndarray], str]] = None,
-        **kwargs
-    ) -> Iterator[np.ndarray]:
+    def process_frame(self, frame: np.ndarray, frame_index: int, session) -> np.ndarray:
         """Process video frames and add keypoint visualizations.
         
         Args:
@@ -69,50 +63,164 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
         """
         # Get visualization settings with defaults
         viz_config = {
-            'bodyparts': config.get('bodyparts', ['all']),
-            'point_size': config.get('point_size', 5),
-            'point_thickness': config.get('point_thickness', -1),
-            'point_colors': config.get('point_colors', {}),
-            'default_color': config.get('default_color', [0, 255, 0]),
-            'likelihood_threshold': config.get('likelihood_threshold', 0.0),
-            'show_labels': config.get('show_labels', False),
-            'label_font_scale': config.get('label_font_scale', 0.5),
-            'label_color': config.get('label_color', [255, 255, 255])
+            'bodyparts': self.config.get('bodyparts', ['all']),
+            'point_size': self.config.get('point_size', 5),
+            'point_thickness': self.config.get('point_thickness', -1),
+            'point_colors': self.config.get('point_colors', {}),
+            'default_color': self.config.get('default_color', [0, 255, 0]),
+            'likelihood_threshold': self.config.get('likelihood_threshold', 0.0),
+            'show_labels': self.config.get('show_labels', False),
+            'label_font_scale': self.config.get('label_font_scale', 0.5),
+            'label_color': self.config.get('label_color', [255, 255, 255])
         }
+        
+        # Get session data
+        try:
+            session_data = session.get_integrated_dataframe()
+        except Exception as e:
+            self.logger.error(f"Could not get session data: {str(e)}")
+            return frame
         
         # Extract keypoint column information
         keypoint_info = self._extract_keypoint_columns(session_data)
         if not keypoint_info:
-            self.logger.error("No keypoint data found in session DataFrame")
-            return
+            self.logger.debug("No keypoint data found in session DataFrame")
+            return frame
+        
+        # Check if frame_index is valid
+        if frame_index >= len(session_data):
+            self.logger.debug(f"Frame index {frame_index} beyond session data length {len(session_data)}")
+            return frame
         
         # Filter bodyparts based on config
-        if 'all' not in viz_config['bodyparts']:
-            keypoint_info = {
-                bp: info for bp, info in keypoint_info.items() 
-                if bp in viz_config['bodyparts']
-            }
+        available_bodyparts = list(keypoint_info.keys())
+        self.logger.debug(f"Available bodyparts: {available_bodyparts}")
         
-        if not keypoint_info:
-            self.logger.warning("No matching bodyparts found in data")
-            return
+        target_bodyparts = self._filter_target_bodyparts(
+            available_bodyparts, 
+            viz_config['bodyparts']
+        )
+        self.logger.debug(f"Target bodyparts to visualize: {target_bodyparts}")
         
-        # Get frame source
-        frame_source = self._get_frame_source(input_data, kwargs.get('session_path'))
-        if frame_source is None:
-            return
+        # Copy frame to avoid modifying original
+        output_frame = frame.copy()
         
-        # Process frames
-        frame_idx = 0
-        for frame in frame_source:
-            # Draw keypoints for this frame
-            if frame_idx in session_data.index:
-                frame = self._draw_keypoints_on_frame(
-                    frame, session_data, frame_idx, keypoint_info, viz_config
-                )
+        try:
+            # Get keypoint data for this frame
+            frame_data = session_data.iloc[frame_index]
             
-            yield frame
-            frame_idx += 1
+            # Draw keypoints for each target bodypart
+            for bodypart in target_bodyparts:
+                # Get coordinates for this bodypart
+                coords = self._get_bodypart_coordinates(
+                    frame_data, 
+                    bodypart, 
+                    keypoint_info
+                )
+                
+                if coords is None:
+                    continue
+                    
+                x, y, likelihood = coords
+                
+                # Skip if likelihood below threshold
+                if likelihood < viz_config['likelihood_threshold']:
+                    continue
+                
+                # Get color for this bodypart
+                color = viz_config['point_colors'].get(
+                    bodypart, 
+                    viz_config['default_color']
+                )
+                
+                # Draw keypoint circle
+                cv2.circle(
+                    output_frame,
+                    (int(x), int(y)),
+                    viz_config['point_size'],
+                    color,
+                    viz_config['point_thickness']
+                )
+                
+                # Draw label if enabled
+                if viz_config['show_labels']:
+                    label_pos = (int(x) + 10, int(y) - 10)
+                    cv2.putText(
+                        output_frame,
+                        bodypart,
+                        label_pos,
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        viz_config['label_font_scale'],
+                        viz_config['label_color'],
+                        1
+                    )
+            
+            return output_frame
+            
+        except Exception as e:
+            self.logger.error(f"Error processing frame {frame_index}: {str(e)}")
+            return frame  # Return unprocessed frame to continue pipeline
+    
+    def _filter_target_bodyparts(self, available_bodyparts: List[str], requested_bodyparts) -> List[str]:
+        """Filter bodyparts based on configuration.
+        
+        Args:
+            available_bodyparts: List of bodyparts available in data
+            requested_bodyparts: 'all', single bodypart name, or list of bodypart names
+            
+        Returns:
+            List of bodyparts to visualize
+        """
+        # Handle string input
+        if isinstance(requested_bodyparts, str):
+            if requested_bodyparts.lower() == 'all':
+                return available_bodyparts
+            else:
+                # Single bodypart name
+                return [requested_bodyparts] if requested_bodyparts in available_bodyparts else []
+        
+        # Handle list input
+        elif isinstance(requested_bodyparts, list):
+            if 'all' in requested_bodyparts:
+                return available_bodyparts
+            else:
+                return [bp for bp in requested_bodyparts if bp in available_bodyparts]
+        
+        # Default to all if input type is unexpected
+        else:
+            self.logger.warning(f"Unexpected bodyparts config type: {type(requested_bodyparts)}. Using all bodyparts.")
+            return available_bodyparts
+    
+    def _get_bodypart_coordinates(self, frame_data: pd.Series, bodypart: str, keypoint_info: Dict[str, Dict[str, str]]) -> Optional[tuple]:
+        """Get coordinates for a bodypart from frame data.
+        
+        Args:
+            frame_data: Data for current frame
+            bodypart: Name of bodypart
+            keypoint_info: Mapping of bodyparts to column names
+            
+        Returns:
+            Tuple of (x, y, likelihood) or None if not available
+        """
+        if bodypart not in keypoint_info:
+            return None
+            
+        cols = keypoint_info[bodypart]
+        
+        try:
+            x = frame_data[cols['x']]
+            y = frame_data[cols['y']]
+            likelihood = frame_data[cols['likelihood']] if 'likelihood' in cols and cols['likelihood'] else 1.0
+            
+            # Check for NaN values
+            if pd.isna(x) or pd.isna(y):
+                return None
+                
+            return (float(x), float(y), float(likelihood))
+            
+        except (KeyError, ValueError, TypeError) as e:
+            self.logger.debug(f"Could not get coordinates for {bodypart}: {str(e)}")
+            return None
     
     def _get_frame_source(
         self, 
@@ -234,7 +342,7 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
         """Extract keypoint column information from DataFrame.
         
         Handles various DataFrame formats including multi-level columns
-        from DeepLabCut and flat column formats.
+        from DeepLabCut and flat column formats. Excludes non-keypoint columns.
         
         Args:
             df: DataFrame with keypoint data
@@ -244,11 +352,21 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
         """
         keypoint_info = {}
         
+        # Define columns to exclude (these are not bodypart keypoints)
+        excluded_columns = {
+            'map', 'tile', 'graph', 'reward', 'calibration', 'timestamp', 
+            'frame', 'session', 'index', 'level', 'metric', 'analysis'
+        }
+        
         # Check for multi-level columns (DeepLabCut format)
         if isinstance(df.columns, pd.MultiIndex):
             if df.columns.nlevels >= 3:
                 # Format: (scorer, bodypart, coordinate)
                 for scorer, bodypart, coord in df.columns:
+                    # Skip if bodypart contains any excluded keywords
+                    if any(excluded in bodypart.lower() for excluded in excluded_columns):
+                        continue
+                        
                     if bodypart not in keypoint_info:
                         keypoint_info[bodypart] = {}
                     if coord in ['x', 'y', 'likelihood']:
@@ -256,6 +374,10 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
             elif df.columns.nlevels == 2:
                 # Format: (bodypart, coordinate)
                 for bodypart, coord in df.columns:
+                    # Skip if bodypart contains any excluded keywords
+                    if any(excluded in bodypart.lower() for excluded in excluded_columns):
+                        continue
+                        
                     if bodypart not in keypoint_info:
                         keypoint_info[bodypart] = {}
                     if coord in ['x', 'y', 'likelihood']:
@@ -263,18 +385,24 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
         else:
             # Flat columns - look for pattern: bodypart_x, bodypart_y, bodypart_likelihood
             if 'x' in df.columns and 'y' in df.columns:
-                # Simple format - single bodypart
-                keypoint_info['keypoint'] = {
-                    'x': 'x',
-                    'y': 'y',
-                    'likelihood': 'likelihood' if 'likelihood' in df.columns else None
-                }
+                # Simple format - single bodypart (only if no excluded keywords)
+                if not any(excluded in 'keypoint' for excluded in excluded_columns):
+                    keypoint_info['keypoint'] = {
+                        'x': 'x',
+                        'y': 'y',
+                        'likelihood': 'likelihood' if 'likelihood' in df.columns else None
+                    }
             else:
                 # Look for bodypart patterns
                 for col in df.columns:
                     for suffix in ['_x', '_y', '_likelihood']:
                         if col.endswith(suffix):
                             bodypart = col.replace(suffix, '')
+                            
+                            # Skip if bodypart contains any excluded keywords
+                            if any(excluded in bodypart.lower() for excluded in excluded_columns):
+                                continue
+                            
                             if bodypart not in keypoint_info:
                                 keypoint_info[bodypart] = {}
                             coord = suffix[1:]  # Remove underscore  
@@ -286,4 +414,5 @@ class KeypointVisualizer(BasePlugin, IVisualizer):
             if 'x' in cols and 'y' in cols:
                 valid_keypoints[bodypart] = cols
         
+        self.logger.debug(f"Extracted keypoint bodyparts: {list(valid_keypoints.keys())}")
         return valid_keypoints
