@@ -196,6 +196,7 @@ visualizations:
           current_tile_color: [255, 0, 0]  # Red
           visited_tile_color: [0, 255, 0]  # Green
           visited_tile_opacity: 0.3
+          show_visited_tiles: true  # Set to false to disable green trail of visited tiles
           show_tile_id: true
           tile_id_font_scale: 1.0
           tile_id_color: [0, 0, 255]  # Blue
