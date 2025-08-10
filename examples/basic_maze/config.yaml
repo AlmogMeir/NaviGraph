@@ -81,9 +81,19 @@ data_sources:
     config:
       reward_tile_id: 273  # Tile ID for reward location
 
+# Graph structure definition
+graph_structure:
+  type: binary_tree  # Options: binary_tree, custom
+  binary_tree_height: 7  # Height for binary tree
+  # custom_graph_function: "my_module.create_custom_graph"  # For custom type
+
+# Graph mapping configuration  
+graph_mapping:
+  mapping_file: ./resources/graph_mapping.pkl  # Where the mapping is saved/loaded
+
 # Graph visualization
 graph:
-  height: 7  # Binary tree height
+  height: 7  # Binary tree height (kept for backward compatibility)
   draw:
     with_labels: true
     font_weight: 'bold'
