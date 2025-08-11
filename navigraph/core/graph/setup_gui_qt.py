@@ -82,11 +82,17 @@ class MapWidget(QWidget):
         # Interaction state
         self.interaction_mode = 'none'  # 'place_grid', 'select_cells', 'draw_contour'
         self.show_all_mappings = True  # Toggle for showing all mapped regions
+        self.show_cell_labels = True  # Toggle for showing cell labels
+        self.adaptive_font_size = True  # Toggle for adaptive font sizing
         self.current_element_type = None
         self.current_element_id = None
         
         self.setMouseTracking(True)
         self.setMinimumSize(800, 600)
+        
+        # Enable tooltips
+        from PyQt5.QtWidgets import QToolTip
+        self.setToolTip("")
         
     def set_interaction_mode(self, mode: str):
         """Set the current interaction mode."""
@@ -222,8 +228,24 @@ class MapWidget(QWidget):
             
         # Draw grid if enabled
         if self.grid_enabled:
+            # Calculate adaptive font size based on cell size
+            cell_size = self.grid_config.cell_width * self.scale_factor
+            if self.adaptive_font_size:
+                if cell_size > 80:
+                    font_size = 9
+                elif cell_size > 60:
+                    font_size = 8
+                elif cell_size > 40:
+                    font_size = 7
+                elif cell_size > 30:
+                    font_size = 6
+                else:
+                    font_size = 5
+            else:
+                font_size = 8
+            
             font = painter.font()
-            font.setPointSize(8)
+            font.setPointSize(font_size)
             painter.setFont(font)
             
             for cell_id, rect in self.grid_cells.items():
@@ -246,15 +268,22 @@ class MapWidget(QWidget):
                     painter.setPen(QPen(color.darker(), 2))
                     painter.drawRect(scaled_rect)
                     
-                    # Draw element ID
-                    elem_type, elem_id = self.cell_mappings[cell_id]
-                    if elem_type == 'node':
-                        label = f"N:{elem_id}"
-                        painter.setPen(QPen(QColor(0, 100, 0), 1))
-                    else:
-                        label = f"E:{elem_id[0]},{elem_id[1]}" if isinstance(elem_id, tuple) else f"E:{elem_id}"
-                        painter.setPen(QPen(QColor(0, 0, 100), 1))
-                    painter.drawText(scaled_rect.center(), label)
+                    # Draw element ID if labels are enabled
+                    if self.show_cell_labels:
+                        elem_type, elem_id = self.cell_mappings[cell_id]
+                        if elem_type == 'node':
+                            label = f"N:{elem_id}"
+                            painter.setPen(QPen(QColor(0, 100, 0), 1))
+                        else:
+                            if isinstance(elem_id, tuple):
+                                label = f"E:{elem_id[0]},{elem_id[1]}"
+                            else:
+                                label = f"E:{elem_id}"
+                            painter.setPen(QPen(QColor(150, 75, 0), 1))  # Orange-brown for edges
+                        
+                        # Smart text positioning to fit in cell
+                        text_rect = scaled_rect.adjusted(2, 2, -2, -2)
+                        painter.drawText(text_rect, Qt.AlignCenter | Qt.TextWordWrap, label)
                     
                 elif is_selected:
                     # Currently selected for mapping - bright green
@@ -367,6 +396,29 @@ class MapWidget(QWidget):
         """Cancel the current contour drawing."""
         self.current_contour.clear()
         self.update()
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse move for tooltips."""
+        if self.grid_enabled:
+            # Convert to image coordinates
+            x = (event.x() - self.offset_x) / self.scale_factor
+            y = (event.y() - self.offset_y) / self.scale_factor
+            
+            # Check if mouse is over a mapped cell
+            tooltip_text = ""
+            for cell_id, rect in self.grid_cells.items():
+                if rect.contains(QPointF(x, y)) and cell_id in self.cell_mappings:
+                    elem_type, elem_id = self.cell_mappings[cell_id]
+                    if elem_type == 'node':
+                        tooltip_text = f"Node: {elem_id}\nCell: {cell_id}"
+                    else:
+                        if isinstance(elem_id, tuple):
+                            tooltip_text = f"Edge: {elem_id[0]} → {elem_id[1]}\nCell: {cell_id}"
+                        else:
+                            tooltip_text = f"Edge: {elem_id}\nCell: {cell_id}"
+                    break
+            
+            self.setToolTip(tooltip_text)
     
     def highlight_contour(self, region_id: str):
         """Highlight a specific contour on the map."""
@@ -837,6 +889,16 @@ class GraphSetupWindow(QMainWindow):
         self.show_mappings_checkbox.setChecked(True)
         self.show_mappings_checkbox.stateChanged.connect(self._on_toggle_mappings)
         viz_layout.addWidget(self.show_mappings_checkbox)
+        
+        self.show_labels_checkbox = QCheckBox("Show Cell Labels")
+        self.show_labels_checkbox.setChecked(True)
+        self.show_labels_checkbox.stateChanged.connect(self._on_toggle_labels)
+        viz_layout.addWidget(self.show_labels_checkbox)
+        
+        self.adaptive_font_checkbox = QCheckBox("Adaptive Font Size")
+        self.adaptive_font_checkbox.setChecked(True)
+        self.adaptive_font_checkbox.stateChanged.connect(self._on_toggle_adaptive_font)
+        viz_layout.addWidget(self.adaptive_font_checkbox)
         
         layout.addWidget(viz_group)
         
@@ -1729,6 +1791,16 @@ class GraphSetupWindow(QMainWindow):
     def _on_toggle_mappings(self, state):
         """Toggle visibility of all mappings."""
         self.map_widget.show_all_mappings = (state == Qt.Checked)
+        self.map_widget.update()
+        
+    def _on_toggle_labels(self, state):
+        """Toggle visibility of cell labels."""
+        self.map_widget.show_cell_labels = (state == Qt.Checked)
+        self.map_widget.update()
+        
+    def _on_toggle_adaptive_font(self, state):
+        """Toggle adaptive font sizing."""
+        self.map_widget.adaptive_font_size = (state == Qt.Checked)
         self.map_widget.update()
     
     def _on_clear_all(self):
