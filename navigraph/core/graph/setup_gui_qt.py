@@ -100,6 +100,10 @@ class MapWidget(QWidget):
         self.current_element_type = None
         self.current_element_id = None
         
+        # Contour highlighting state
+        self.highlighted_contour_id = None
+        self.original_contour_colors = {}  # Store original colors for unhighlighting
+        
         self.setMouseTracking(True)
         self.setMinimumSize(800, 600)
         self.setFocusPolicy(Qt.StrongFocus)  # Enable keyboard focus
@@ -505,28 +509,41 @@ class MapWidget(QWidget):
         self.update()
     
     def highlight_contour(self, region_id: str):
-        """Highlight a specific contour on the map."""
-        # Find and highlight the contour
+        """Highlight a specific contour on the map persistently."""
+        # First unhighlight any currently highlighted contour
+        self.unhighlight_current_contour()
+        
+        # Find and highlight the new contour
         for i, contour_data in enumerate(self.completed_contours):
             if contour_data[1] == region_id:  # region_id is at index 1
-                # Temporarily change the color to highlight
+                # Store original color before highlighting
                 original_color = contour_data[2]
-                highlight_color = QColor(255, 255, 0, 150)  # Yellow highlight
-                # Update the contour data
-                self.completed_contours[i] = (contour_data[0], contour_data[1], highlight_color) + contour_data[3:]
-                self.update()
+                self.original_contour_colors[region_id] = original_color
                 
-                # Reset color after a delay
-                QTimer.singleShot(2000, lambda: self._reset_contour_color(region_id, original_color))
+                # Apply persistent highlight
+                highlight_color = QColor(255, 255, 0, 150)  # Yellow highlight
+                self.completed_contours[i] = (contour_data[0], contour_data[1], highlight_color) + contour_data[3:]
+                
+                # Track currently highlighted contour
+                self.highlighted_contour_id = region_id
+                self.update()
                 break
     
-    def _reset_contour_color(self, region_id: str, original_color: QColor):
-        """Reset contour color after highlighting."""
-        for i, contour_data in enumerate(self.completed_contours):
-            if contour_data[1] == region_id:
-                self.completed_contours[i] = (contour_data[0], contour_data[1], original_color) + contour_data[3:]
-                self.update()
-                break
+    def unhighlight_current_contour(self):
+        """Remove highlighting from currently highlighted contour."""
+        if self.highlighted_contour_id and self.highlighted_contour_id in self.original_contour_colors:
+            # Restore original color
+            original_color = self.original_contour_colors[self.highlighted_contour_id]
+            for i, contour_data in enumerate(self.completed_contours):
+                if contour_data[1] == self.highlighted_contour_id:
+                    self.completed_contours[i] = (contour_data[0], contour_data[1], original_color) + contour_data[3:]
+                    break
+            
+            # Clean up tracking
+            del self.original_contour_colors[self.highlighted_contour_id]
+            self.highlighted_contour_id = None
+            self.update()
+    
     
     def remove_contour(self, region_id: str):
         """Remove a contour from the map."""
@@ -1721,18 +1738,29 @@ class GraphSetupWindow(QMainWindow):
         self.map_widget.cancel_current_contour()
         
     def _on_contour_selected(self, item):
-        """Handle contour selection from list."""
-        self.delete_contour_button.setEnabled(True)
+        """Handle contour selection from list with toggle support."""
         region_id = item.data(Qt.UserRole)
         if region_id:
-            # Highlight the selected contour on the map
-            self.map_widget.highlight_contour(region_id)
+            # Toggle behavior: if clicking the same contour, deselect it
+            if self.map_widget.highlighted_contour_id == region_id:
+                # Deselect: unhighlight and clear list selection
+                self.map_widget.unhighlight_current_contour()
+                self.contour_list.clearSelection()
+                self.delete_contour_button.setEnabled(False)
+            else:
+                # Select new contour: highlight it
+                self.map_widget.highlight_contour(region_id)
+                self.delete_contour_button.setEnabled(True)
         
     def _on_delete_contour(self):
         """Delete selected contour."""
         current_item = self.contour_list.currentItem()
         if current_item:
             region_id = current_item.data(Qt.UserRole)
+            
+            # Clean up highlighting if this contour is currently highlighted
+            if self.map_widget.highlighted_contour_id == region_id:
+                self.map_widget.unhighlight_current_contour()
             
             # Remove contour from map
             self.map_widget.remove_contour(region_id)
@@ -1784,9 +1812,9 @@ class GraphSetupWindow(QMainWindow):
                 
             self.status_bar.showMessage(f"Contour assigned to {elem_type} {elem_id}")
             
-            # Update progress and don't automatically move to next element
-            # Let user control when to move to next element with Next button
+            # Update progress and automatically move to next element
             self._update_progress_display()
+            self._on_next_element()  # Auto-advance to next element
             
     def _on_assign_contour(self):
         """Assign drawn contour to current element."""
@@ -2223,6 +2251,9 @@ class GraphSetupWindow(QMainWindow):
                                     "Are you sure you want to delete all contours?",
                                     QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
+            # Clean up any highlighting state
+            self.map_widget.unhighlight_current_contour()
+            
             # Clear from map
             self.map_widget.clear_contours()
             # Clear from list
