@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QTabWidget, QGroupBox, QMessageBox,
     QProgressBar, QToolBar, QStatusBar, QDockWidget, QTextEdit,
     QRadioButton, QButtonGroup, QStackedWidget, QDoubleSpinBox,
-    QCheckBox, QFileDialog
+    QCheckBox, QFileDialog, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QPixmap, QImage, QPen, QBrush, QColor, QPolygonF, QPainter
@@ -571,69 +571,130 @@ class GraphSetupWindow(QMainWindow):
         self.setWindowTitle("NaviGraph - Interactive Graph Mapping Setup")
         self.setGeometry(100, 100, 1600, 1000)
         
-        # Set application style
+        # Set application style with improved UI
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f5f5f5;
+                background-color: #fafafa;
             }
             QGroupBox {
-                font-weight: bold;
-                border: 2px solid #cccccc;
-                border-radius: 8px;
+                font-weight: 600;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
                 margin: 8px;
-                padding-top: 15px;
+                padding-top: 20px;
                 background-color: white;
+                font-size: 13px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 subcontrol-position: top left;
-                padding: 2px 8px;
-                color: #333333;
-                background-color: #f5f5f5;
-                border-radius: 4px;
+                padding: 4px 10px;
+                color: #424242;
+                background-color: white;
+                font-size: 13px;
+                font-weight: 600;
             }
             QPushButton {
-                background-color: #4CAF50;
-                color: #333333;
-                border: 2px solid #4CAF50;
-                padding: 8px 16px;
+                background-color: #ffffff;
+                color: #424242;
+                border: 2px solid #d0d0d0;
+                padding: 8px 15px;
                 border-radius: 6px;
-                font-weight: bold;
-                min-width: 80px;
-                font-size: 12px;
+                font-weight: 500;
+                font-size: 13px;
+                text-align: center;
             }
             QPushButton:hover {
-                background-color: #45a049;
-                border-color: #45a049;
-                color: white;
+                background-color: #f8f9fa;
+                border-color: #999999;
             }
             QPushButton:pressed {
-                background-color: #3d8b40;
-                border-color: #3d8b40;
-                color: white;
+                background-color: #e0e0e0;
+                border-color: #888888;
             }
             QPushButton:disabled {
-                background-color: #e0e0e0;
-                color: #9e9e9e;
+                background-color: #fafafa;
+                color: #b0b0b0;
                 border-color: #e0e0e0;
             }
             QPushButton:checked {
-                background-color: #2196F3;
-                border-color: #2196F3;
-                color: white;
+                background-color: #e8e8e8;
+                border: 2px solid #666666;
+                border-style: inset;
+                color: #212121;
+                font-weight: 600;
+                padding: 9px 15px 7px 15px;
             }
             QPushButton:checked:hover {
-                background-color: #1976D2;
-                border-color: #1976D2;
-                color: white;
+                background-color: #e0e0e0;
+                border-color: #555555;
             }
             QLabel {
-                color: #333333;
-                font-size: 12px;
+                color: #424242;
+                font-size: 13px;
             }
             QStatusBar {
-                background-color: #e8e8e8;
-                border-top: 1px solid #cccccc;
+                background-color: #f5f5f5;
+                border-top: 1px solid #e0e0e0;
+                color: #616161;
+                font-size: 12px;
+            }
+            QListWidget {
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                padding: 6px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            QListWidget::item:selected {
+                background-color: #e3f2fd;
+                color: #1976d2;
+            }
+            QListWidget::item:hover {
+                background-color: #f5f5f5;
+            }
+            QComboBox {
+                background-color: white;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: 13px;
+                min-width: 120px;
+            }
+            QComboBox:hover {
+                border-color: #b0b0b0;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QSpinBox, QDoubleSpinBox {
+                background-color: white;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 6px;
+                font-size: 13px;
+            }
+            QCheckBox {
+                font-size: 13px;
+                color: #424242;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QProgressBar {
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                background-color: #f5f5f5;
+                text-align: center;
+                font-size: 11px;
+            }
+            QProgressBar::chunk {
+                background-color: #2196f3;
+                border-radius: 3px;
             }
         """)
         
@@ -650,7 +711,7 @@ class GraphSetupWindow(QMainWindow):
         
         # Left panel - Controls (fixed width)
         self.control_panel = self._create_control_panel()
-        self.control_panel.setFixedWidth(380)
+        self.control_panel.setFixedWidth(420)
         self.control_panel.setStyleSheet(
             "QWidget { background-color: #f8f9fa; border-right: 2px solid #dee2e6; }"
         )
@@ -663,9 +724,9 @@ class GraphSetupWindow(QMainWindow):
         
         # Graph view (top, smaller)
         graph_group = QGroupBox("📊 Graph Structure")
-        graph_group.setStyleSheet("font-weight: bold; font-size: 15px; color: #1976D2;")
+        graph_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
         graph_layout = QVBoxLayout(graph_group)
-        graph_layout.setContentsMargins(5, 15, 5, 5)
+        graph_layout.setContentsMargins(8, 20, 8, 8)
         
         self.graph_widget = GraphWidget(self.graph)
         self.graph_widget.setMinimumHeight(200)
@@ -676,9 +737,9 @@ class GraphSetupWindow(QMainWindow):
         
         # Map view (bottom, larger)
         map_group = QGroupBox("🗺️ Interactive Mapping Area")
-        map_group.setStyleSheet("font-weight: bold; font-size: 15px; color: #1976D2;")
+        map_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
         map_layout = QVBoxLayout(map_group)
-        map_layout.setContentsMargins(5, 15, 5, 5)
+        map_layout.setContentsMargins(8, 20, 8, 8)
         
         self.map_widget = MapWidget(self.map_image)
         self.map_widget.setMinimumHeight(400)
@@ -708,26 +769,37 @@ class GraphSetupWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         
         # Mode Selection (Always Visible)
-        mode_group = QGroupBox("🔧 Setup Mode")
-        mode_layout = QHBoxLayout(mode_group)
+        mode_group = QGroupBox("Setup Mode")
+        mode_group.setStyleSheet("QGroupBox { font-size: 14px; font-weight: 600; }")
+        mode_layout = QVBoxLayout(mode_group)
+        mode_layout.setContentsMargins(10, 20, 10, 10)
         
-        self.grid_mode_button = QPushButton("📊 Grid Setup")
+        # Create button layout with proper spacing
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(5)
+        
+        self.grid_mode_button = QPushButton("Grid Setup")
         self.grid_mode_button.setCheckable(True)
         self.grid_mode_button.clicked.connect(self._on_grid_mode)
-        self.grid_mode_button.setStyleSheet("min-height: 40px; font-size: 14px;")
-        mode_layout.addWidget(self.grid_mode_button)
+        self.grid_mode_button.setFixedHeight(40)
+        self.grid_mode_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button_layout.addWidget(self.grid_mode_button)
         
-        self.manual_mode_button = QPushButton("✏️ Manual Drawing")
+        self.manual_mode_button = QPushButton("Manual Drawing")
         self.manual_mode_button.setCheckable(True)
         self.manual_mode_button.clicked.connect(self._on_manual_mode)
-        self.manual_mode_button.setStyleSheet("min-height: 40px; font-size: 14px;")
-        mode_layout.addWidget(self.manual_mode_button)
+        self.manual_mode_button.setFixedHeight(40)
+        self.manual_mode_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button_layout.addWidget(self.manual_mode_button)
         
-        self.test_mode_button = QPushButton("🧪 Test Mode")
+        self.test_mode_button = QPushButton("Test Mode")
         self.test_mode_button.setCheckable(True)
         self.test_mode_button.clicked.connect(self._on_test_mode)
-        self.test_mode_button.setStyleSheet("min-height: 40px; font-size: 14px;")
-        mode_layout.addWidget(self.test_mode_button)
+        self.test_mode_button.setFixedHeight(40)
+        self.test_mode_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button_layout.addWidget(self.test_mode_button)
+        
+        mode_layout.addLayout(button_layout)
         
         layout.addWidget(mode_group)
         
@@ -756,7 +828,9 @@ class GraphSetupWindow(QMainWindow):
         
         # Visualization options
         viz_group = QGroupBox("👁️ Display Options")
+        viz_group.setStyleSheet("QGroupBox { font-size: 14px; font-weight: 600; }")
         viz_layout = QVBoxLayout(viz_group)
+        viz_layout.setContentsMargins(10, 15, 10, 10)
         
         self.show_mappings_checkbox = QCheckBox("Show All Mappings")
         self.show_mappings_checkbox.setChecked(True)
@@ -813,11 +887,11 @@ class GraphSetupWindow(QMainWindow):
         
         # Apply and place buttons
         config_buttons = QHBoxLayout()
-        self.apply_grid_button = QPushButton("✅ Apply Config")
+        self.apply_grid_button = QPushButton("Apply Config")
         self.apply_grid_button.clicked.connect(self._on_apply_grid_config)
         config_buttons.addWidget(self.apply_grid_button)
         
-        self.place_grid_button = QPushButton("🎯 Place Grid")
+        self.place_grid_button = QPushButton("Place Grid")
         self.place_grid_button.clicked.connect(self._on_place_grid)
         config_buttons.addWidget(self.place_grid_button)
         config_layout.addLayout(config_buttons)
@@ -830,7 +904,7 @@ class GraphSetupWindow(QMainWindow):
         assign_group = QGroupBox("Cell Assignment")
         assign_layout = QVBoxLayout(assign_group)
         
-        self.assign_button = QPushButton("✅ Assign Selected Cells")
+        self.assign_button = QPushButton("Assign Selected Cells")
         self.assign_button.clicked.connect(self._on_assign_cells)
         self.assign_button.setEnabled(False)
         assign_layout.addWidget(self.assign_button)
@@ -882,13 +956,11 @@ class GraphSetupWindow(QMainWindow):
         drawing_layout = QVBoxLayout(drawing_group)
         
         control_layout = QHBoxLayout()
-        self.clear_contour_button = QPushButton("🗑️ Clear Contour")
-        self.clear_contour_button.setStyleSheet("background-color: #f44336;")
+        self.clear_contour_button = QPushButton("Clear Contour")
         self.clear_contour_button.clicked.connect(self._on_clear_contour)
         control_layout.addWidget(self.clear_contour_button)
         
-        self.commit_contour_button = QPushButton("✅ Commit Contour")
-        self.commit_contour_button.setStyleSheet("background-color: #4CAF50;")
+        self.commit_contour_button = QPushButton("Commit Contour")
         self.commit_contour_button.clicked.connect(self._on_commit_contour)
         control_layout.addWidget(self.commit_contour_button)
         
@@ -910,23 +982,13 @@ class GraphSetupWindow(QMainWindow):
         mgmt_layout.addWidget(self.contour_list)
         
         contour_buttons = QHBoxLayout()
-        self.delete_contour_button = QPushButton("🗑️ Delete")
+        self.delete_contour_button = QPushButton("Delete")
         self.delete_contour_button.clicked.connect(self._on_delete_contour)
         self.delete_contour_button.setEnabled(False)
-        self.delete_contour_button.setStyleSheet(
-            "QPushButton { background-color: #f44336; border-color: #f44336; }"
-            "QPushButton:hover { background-color: #d32f2f; border-color: #d32f2f; }"
-            "QPushButton:pressed { background-color: #c62828; border-color: #c62828; }"
-        )
         contour_buttons.addWidget(self.delete_contour_button)
         
-        self.clear_all_contours_button = QPushButton("🗑️ Clear All")
+        self.clear_all_contours_button = QPushButton("Clear All")
         self.clear_all_contours_button.clicked.connect(self._on_clear_all_contours)
-        self.clear_all_contours_button.setStyleSheet(
-            "QPushButton { background-color: #ff9800; border-color: #ff9800; }"
-            "QPushButton:hover { background-color: #f57c00; border-color: #f57c00; }"
-            "QPushButton:pressed { background-color: #ef6c00; border-color: #ef6c00; }"
-        )
         contour_buttons.addWidget(self.clear_all_contours_button)
         
         mgmt_layout.addLayout(contour_buttons)
@@ -957,44 +1019,42 @@ class GraphSetupWindow(QMainWindow):
         
         # Instructions
         instructions = QLabel(
-            "🧪 Test Mode Instructions:\n\n"
+            "Test Mode Instructions:\n\n"
             "• Click on the map to see which graph element is highlighted\n"
             "• Click on graph nodes/edges to see map regions\n"
             "• Use the load button to test with saved mappings\n"
             "• Current mapping is automatically available for testing"
         )
         instructions.setStyleSheet(
-            "background-color: #f3e5f5; border: 1px solid #9c27b0; "
-            "border-radius: 6px; padding: 12px; font-size: 11px;"
+            "background-color: #f8f9fa; border: 1px solid #dee2e6; "
+            "border-radius: 6px; padding: 12px; font-size: 12px; color: #495057;"
         )
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
         
         # Progress info
         self.progress_info = QLabel("No mappings yet")
-        self.progress_info.setStyleSheet("font-weight: bold; color: #9c27b0; padding: 8px;")
+        self.progress_info.setStyleSheet("font-weight: 600; color: #616161; padding: 8px;")
         layout.addWidget(self.progress_info)
         
         # File operations
-        file_group = QGroupBox("📁 File Operations")
+        file_group = QGroupBox("File Operations")
         file_layout = QVBoxLayout(file_group)
         
         file_buttons = QHBoxLayout()
-        self.save_button = QPushButton("💾 Save Mapping")
+        self.save_button = QPushButton("Save Mapping")
         self.save_button.clicked.connect(self._on_save_mapping)
-        self.save_button.setStyleSheet("background-color: #4caf50; border-color: #4caf50;")
         file_buttons.addWidget(self.save_button)
         
-        self.load_button = QPushButton("📂 Load Mapping")
+        self.load_button = QPushButton("Load Mapping")
         self.load_button.clicked.connect(self._on_load_mapping)
-        self.load_button.setStyleSheet("background-color: #2196f3; border-color: #2196f3;")
         file_buttons.addWidget(self.load_button)
         
         file_layout.addLayout(file_buttons)
         layout.addWidget(file_group)
         
         # Test results display
-        results_group = QGroupBox("🎯 Test Results")
+        results_group = QGroupBox("Test Results")
         results_layout = QVBoxLayout(results_group)
         
         self.test_result_label = QLabel("Click on map or graph to test...")
