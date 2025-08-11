@@ -547,7 +547,7 @@ class GraphWidget(FigureCanvas):
     
     def __init__(self, graph: GraphStructure, parent=None):
         self.graph = graph
-        self.figure = Figure(figsize=(8, 6))
+        self.figure = Figure(figsize=(24, 8))
         super().__init__(self.figure)
         self.setParent(parent)
         
@@ -569,8 +569,12 @@ class GraphWidget(FigureCanvas):
             # For binary trees, create a hierarchical layout manually
             if hasattr(self.graph, 'graph') and nx.is_tree(self.graph.graph):
                 try:
-                    # Try graphviz first
+                    # Try graphviz first - it creates the best tree layout
                     self.pos = nx.nx_agraph.graphviz_layout(self.graph.graph, prog='dot')
+                    # Scale horizontally to make it wider
+                    if self.pos:
+                        scale_factor = 4.0  # Make it much wider to spread leaf nodes
+                        self.pos = {node: (x * scale_factor, y) for node, (x, y) in self.pos.items()}
                 except:
                     # Manual hierarchical layout for binary trees
                     self.pos = self._create_binary_tree_layout()
@@ -609,14 +613,17 @@ class GraphWidget(FigureCanvas):
         # Position nodes with better spacing
         max_width = max(len(level_nodes) for level_nodes in levels.values()) if levels else 1
         for level, level_nodes in levels.items():
-            y = -level * 4  # Increased vertical spacing
+            y = -level * 5  # Increased vertical spacing
             for i, node in enumerate(level_nodes):
-                # Spread nodes horizontally with better spacing
+                # Spread nodes horizontally with much better spacing
                 if len(level_nodes) == 1:
                     x = 0
                 else:
-                    # Increased horizontal spacing multiplier
-                    spacing_factor = max(3, max_width / len(level_nodes)) * 3
+                    # Much wider horizontal spacing, especially for bottom levels
+                    base_spacing = max(4, max_width / len(level_nodes)) * 5
+                    # Increase spacing exponentially for lower levels to handle leaf nodes
+                    level_multiplier = 1 + (level * 1.0)
+                    spacing_factor = base_spacing * level_multiplier
                     x = (i - (len(level_nodes) - 1) / 2) * spacing_factor
                 pos[node] = (x, y)
         
@@ -638,18 +645,22 @@ class GraphWidget(FigureCanvas):
                 
         # Draw graph with appropriate sizing for large trees
         node_count = len(self.graph.nodes)
-        if node_count > 50:
+        if node_count > 100:
+            # Very small nodes for very large graphs
+            node_size = 250
+            font_size = 7
+        elif node_count > 50:
             # Small nodes for large graphs
-            node_size = 300
+            node_size = 400
             font_size = 8
         elif node_count > 20:
             # Medium nodes for medium graphs
-            node_size = 500
-            font_size = 9
+            node_size = 600
+            font_size = 10
         else:
             # Large nodes for small graphs
             node_size = 800
-            font_size = 11
+            font_size = 12
             
         nx.draw(self.graph.graph, pos=self.pos, ax=self.ax,
                node_color=node_colors, node_size=node_size,
@@ -664,6 +675,10 @@ class GraphWidget(FigureCanvas):
                                   edgelist=edge_list, edge_color='orange', width=2)
                                   
         self.ax.set_title(f"Graph Structure ({len(self.graph.nodes)} nodes, {len(self.graph.edges)} edges)")
+        
+        # Adjust subplot margins to prevent title truncation
+        self.figure.subplots_adjust(top=0.9, bottom=0.1, left=0.05, right=0.95)
+        
         self.draw()
         
     def highlight_nodes(self, nodes: Set, color: str = 'lightgreen'):
@@ -866,8 +881,8 @@ class GraphSetupWindow(QMainWindow):
         graph_layout.setContentsMargins(8, 20, 8, 8)
         
         self.graph_widget = GraphWidget(self.graph)
-        self.graph_widget.setMinimumHeight(200)
-        self.graph_widget.setMaximumHeight(300)
+        self.graph_widget.setMinimumHeight(300)
+        self.graph_widget.setMaximumHeight(500)
         graph_layout.addWidget(self.graph_widget)
         
         views_layout.addWidget(graph_group)
@@ -879,13 +894,13 @@ class GraphSetupWindow(QMainWindow):
         map_layout.setContentsMargins(8, 20, 8, 8)
         
         self.map_widget = MapWidget(self.map_image)
-        self.map_widget.setMinimumHeight(400)
+        self.map_widget.setMinimumHeight(350)
         map_layout.addWidget(self.map_widget)
         
         views_layout.addWidget(map_group)
         
-        # Set stretch factors (graph:map = 1:3)
-        views_layout.setStretchFactor(graph_group, 1)
+        # Set stretch factors (graph:map = 2:3 to give more space to graph)
+        views_layout.setStretchFactor(graph_group, 2)
         views_layout.setStretchFactor(map_group, 3)
         
         main_layout.addWidget(views_widget)
