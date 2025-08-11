@@ -18,7 +18,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QTabWidget, QGroupBox, QMessageBox,
     QProgressBar, QToolBar, QStatusBar, QDockWidget, QTextEdit,
     QRadioButton, QButtonGroup, QStackedWidget, QDoubleSpinBox,
-    QCheckBox, QFileDialog, QSizePolicy
+    QCheckBox, QFileDialog, QSizePolicy, QGridLayout
 )
 from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QPixmap, QImage, QPen, QBrush, QColor, QPolygonF, QPainter
@@ -674,8 +674,9 @@ class GraphSetupWindow(QMainWindow):
                 background-color: white;
                 border: 1px solid #d0d0d0;
                 border-radius: 4px;
-                padding: 6px;
+                padding: 4px;
                 font-size: 13px;
+                min-height: 24px;
             }
             QCheckBox {
                 font-size: 13px;
@@ -861,32 +862,100 @@ class GraphSetupWindow(QMainWindow):
         # Grid configuration
         config_group = QGroupBox("Grid Configuration")
         config_layout = QVBoxLayout(config_group)
+        config_layout.setSpacing(10)
         
-        # Grid dimensions and size in compact layout
-        grid_layout = QHBoxLayout()
-        grid_layout.addWidget(QLabel("Rows:"))
+        # Grid dimensions in a properly aligned grid
+        dims_layout = QGridLayout()
+        dims_layout.setColumnStretch(0, 1)
+        dims_layout.setColumnStretch(1, 2)
+        dims_layout.setColumnStretch(2, 1)
+        dims_layout.setColumnStretch(3, 2)
+        
+        # Rows
+        dims_layout.addWidget(QLabel("Rows:"), 0, 0, Qt.AlignRight)
         self.rows_spin = QSpinBox()
         self.rows_spin.setRange(1, 20)
         self.rows_spin.setValue(8)
-        grid_layout.addWidget(self.rows_spin)
+        self.rows_spin.setButtonSymbols(QSpinBox.NoButtons)  # Hide default buttons
         
-        grid_layout.addWidget(QLabel("Cols:"))
+        # Create custom buttons for rows
+        rows_button_layout = QHBoxLayout()
+        rows_button_layout.setSpacing(0)
+        rows_button_layout.addWidget(self.rows_spin)
+        
+        rows_minus_btn = QPushButton("-")
+        rows_minus_btn.setFixedSize(20, 24)
+        rows_minus_btn.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid #d0d0d0; font-weight: bold; font-size: 14px; }")
+        rows_minus_btn.clicked.connect(lambda: self.rows_spin.setValue(self.rows_spin.value() - 1))
+        rows_button_layout.addWidget(rows_minus_btn)
+        
+        rows_plus_btn = QPushButton("+")
+        rows_plus_btn.setFixedSize(20, 24)
+        rows_plus_btn.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid #d0d0d0; font-weight: bold; font-size: 14px; }")
+        rows_plus_btn.clicked.connect(lambda: self.rows_spin.setValue(self.rows_spin.value() + 1))
+        rows_button_layout.addWidget(rows_plus_btn)
+        
+        dims_layout.addLayout(rows_button_layout, 0, 1)
+        
+        # Columns
+        dims_layout.addWidget(QLabel("Cols:"), 0, 2, Qt.AlignRight)
         self.cols_spin = QSpinBox()
         self.cols_spin.setRange(1, 20)
         self.cols_spin.setValue(8)
-        grid_layout.addWidget(self.cols_spin)
-        config_layout.addLayout(grid_layout)
+        self.cols_spin.setButtonSymbols(QSpinBox.NoButtons)  # Hide default buttons
         
-        size_layout = QHBoxLayout()
-        size_layout.addWidget(QLabel("Cell Size:"))
+        # Create custom buttons for columns
+        cols_button_layout = QHBoxLayout()
+        cols_button_layout.setSpacing(0)
+        cols_button_layout.addWidget(self.cols_spin)
+        
+        cols_minus_btn = QPushButton("-")
+        cols_minus_btn.setFixedSize(20, 24)
+        cols_minus_btn.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid #d0d0d0; font-weight: bold; font-size: 14px; }")
+        cols_minus_btn.clicked.connect(lambda: self.cols_spin.setValue(self.cols_spin.value() - 1))
+        cols_button_layout.addWidget(cols_minus_btn)
+        
+        cols_plus_btn = QPushButton("+")
+        cols_plus_btn.setFixedSize(20, 24)
+        cols_plus_btn.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid #d0d0d0; font-weight: bold; font-size: 14px; }")
+        cols_plus_btn.clicked.connect(lambda: self.cols_spin.setValue(self.cols_spin.value() + 1))
+        cols_button_layout.addWidget(cols_plus_btn)
+        
+        dims_layout.addLayout(cols_button_layout, 0, 3)
+        
+        # Cell Size
+        dims_layout.addWidget(QLabel("Cell Size:"), 1, 0, Qt.AlignRight)
         self.width_spin = QDoubleSpinBox()
         self.width_spin.setRange(10, 200)
         self.width_spin.setValue(50)
-        size_layout.addWidget(self.width_spin)
-        config_layout.addLayout(size_layout)
+        self.width_spin.setSuffix(" px")
+        self.width_spin.setDecimals(1)
+        self.width_spin.setButtonSymbols(QDoubleSpinBox.NoButtons)  # Hide default buttons
+        
+        # Create custom buttons for cell size
+        size_button_layout = QHBoxLayout()
+        size_button_layout.setSpacing(0)
+        size_button_layout.addWidget(self.width_spin)
+        
+        size_minus_btn = QPushButton("-")
+        size_minus_btn.setFixedSize(20, 24)
+        size_minus_btn.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid #d0d0d0; font-weight: bold; font-size: 14px; }")
+        size_minus_btn.clicked.connect(lambda: self.width_spin.setValue(self.width_spin.value() - 5))
+        size_button_layout.addWidget(size_minus_btn)
+        
+        size_plus_btn = QPushButton("+")
+        size_plus_btn.setFixedSize(20, 24)
+        size_plus_btn.setStyleSheet("QPushButton { padding: 0px; margin: 0px; border: 1px solid #d0d0d0; font-weight: bold; font-size: 14px; }")
+        size_plus_btn.clicked.connect(lambda: self.width_spin.setValue(self.width_spin.value() + 5))
+        size_button_layout.addWidget(size_plus_btn)
+        
+        dims_layout.addLayout(size_button_layout, 1, 1)
+        
+        config_layout.addLayout(dims_layout)
         
         # Apply and place buttons
         config_buttons = QHBoxLayout()
+        config_buttons.setSpacing(8)
         self.apply_grid_button = QPushButton("Apply Config")
         self.apply_grid_button.clicked.connect(self._on_apply_grid_config)
         config_buttons.addWidget(self.apply_grid_button)
@@ -896,7 +965,10 @@ class GraphSetupWindow(QMainWindow):
         config_buttons.addWidget(self.place_grid_button)
         config_layout.addLayout(config_buttons)
         
-        self.grid_status_label = QLabel("Configure and place grid")
+        # Compact status label for grid origin only
+        self.grid_status_label = QLabel("")
+        self.grid_status_label.setStyleSheet("QLabel { color: #616161; font-size: 11px; padding: 2px; }")
+        self.grid_status_label.setMaximumHeight(20)
         config_layout.addWidget(self.grid_status_label)
         layout.addWidget(config_group)
         
@@ -1303,7 +1375,7 @@ class GraphSetupWindow(QMainWindow):
             cell_height=self.width_spin.value()  # Use same value for square cells
         )
         self.map_widget.set_grid_config(config)
-        self.grid_status_label.setText(f"Config: {config.rows}x{config.cols}, size {config.cell_width}")
+        self.grid_status_label.setText("")  # Clear status until grid is placed
         self.status_bar.showMessage("Grid configuration updated - click 'Place Grid' to position it")
         
     def _on_place_grid(self):
@@ -1313,7 +1385,7 @@ class GraphSetupWindow(QMainWindow):
         
     def _on_grid_placed(self, x: float, y: float):
         """Handle grid placement."""
-        self.grid_status_label.setText(f"Grid placed at ({x:.0f}, {y:.0f})")
+        self.grid_status_label.setText(f"Origin: ({x:.0f}, {y:.0f})")
         self.status_bar.showMessage("Grid placed - Click cells to select")
         
     def _on_cell_clicked(self, cell_id: str):
