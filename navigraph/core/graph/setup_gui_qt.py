@@ -1264,19 +1264,17 @@ class GraphSetupWindow(QMainWindow):
         mgmt_layout.addLayout(contour_buttons)
         layout.addWidget(mgmt_group)
         
-        # Control buttons
-        control_group = QGroupBox("Element Controls")
+        # File operations for manual mode
+        control_group = QGroupBox("File Operations")
         control_group_layout = QHBoxLayout(control_group)
         
-        self.manual_next_button = QPushButton("Next")
-        self.manual_next_button.clicked.connect(self._on_next_element)
-        self.manual_next_button.setEnabled(False)
-        control_group_layout.addWidget(self.manual_next_button)
+        self.manual_save_button = QPushButton("Save Current Mapping")
+        self.manual_save_button.clicked.connect(self._on_save_intermediate_mapping)
+        control_group_layout.addWidget(self.manual_save_button)
         
-        self.manual_undo_button = QPushButton("Undo")
-        self.manual_undo_button.clicked.connect(self._on_undo_last)
-        self.manual_undo_button.setEnabled(False)
-        control_group_layout.addWidget(self.manual_undo_button)
+        self.manual_load_button = QPushButton("Load Mapping")
+        self.manual_load_button.clicked.connect(self._on_load_intermediate_mapping)
+        control_group_layout.addWidget(self.manual_load_button)
         
         layout.addWidget(control_group)
         
@@ -1435,12 +1433,32 @@ class GraphSetupWindow(QMainWindow):
         self.grid_element_combo.clear()
         self.manual_element_combo.clear()
         
-        # Populate with all elements
+        # Get mapped elements to show status
+        mapped_elements = set()
+        if hasattr(self, 'mapping') and self.mapping:
+            # Check node mappings
+            for node_id, regions in getattr(self.mapping, '_node_to_regions', {}).items():
+                if regions:  # Has mapped regions
+                    mapped_elements.add(('node', node_id))
+            
+            # Check edge mappings  
+            for edge_id, regions in getattr(self.mapping, '_edge_to_regions', {}).items():
+                if regions:  # Has mapped regions
+                    mapped_elements.add(('edge', edge_id))
+        
+        # Populate with all elements, marking mapped ones
         for elem_type, elem_id in self.all_elements:
             if elem_type == 'node':
-                label = f"Node: {elem_id}"
+                base_label = f"Node: {elem_id}"
             else:
-                label = f"Edge: {elem_id}"
+                base_label = f"Edge: {elem_id}"
+            
+            # Add status indicator for mapped elements
+            if (elem_type, elem_id) in mapped_elements:
+                label = f"✓ {base_label} (mapped)"
+            else:
+                label = base_label
+                
             self.grid_element_combo.addItem(label)
             self.manual_element_combo.addItem(label)
     
@@ -1524,8 +1542,7 @@ class GraphSetupWindow(QMainWindow):
         # Reset button states
         if hasattr(self, 'undo_grid_button'):
             self.undo_grid_button.setEnabled(False)
-        if hasattr(self, 'manual_undo_button'):
-            self.manual_undo_button.setEnabled(False)
+        # Manual mode UI updates handled elsewhere
             
     def _select_next_element(self):
         """Select the next element to map."""
@@ -1547,7 +1564,8 @@ class GraphSetupWindow(QMainWindow):
             self.next_element_button.setEnabled(True)
             
         elif self.setup_mode == 'manual':
-            self.manual_next_button.setEnabled(True)
+            # Manual mode navigation handled via jump functionality
+            pass
             
         # Highlight in graph
         self.graph_widget.clear_highlights()
@@ -1805,7 +1823,7 @@ class GraphSetupWindow(QMainWindow):
                 'region': region,
                 'region_id': region_id
             })
-            self.manual_undo_button.setEnabled(True)
+            # Manual mode undo functionality removed
             
             # Reset drawing state but keep drawing mode active for next element
             # Drawing mode stays active for continuous element mapping
@@ -2031,13 +2049,20 @@ class GraphSetupWindow(QMainWindow):
                     # Update map widget with current element
                     self.map_widget.set_current_element(elem_type, elem_id)
                     
-                    # Update combo box selection
+                    # Update combo box selection based on mode
                     if loaded_mode == 'grid' and hasattr(self, 'grid_element_combo'):
-                        # Find the element in the combo box
+                        # Find the element in the grid combo box
                         for i in range(self.grid_element_combo.count()):
                             combo_text = self.grid_element_combo.itemText(i)
                             if f"{elem_type.title()}: {elem_id}" in combo_text:
                                 self.grid_element_combo.setCurrentIndex(i)
+                                break
+                    elif loaded_mode == 'manual' and hasattr(self, 'manual_element_combo'):
+                        # Find the element in the manual combo box
+                        for i in range(self.manual_element_combo.count()):
+                            combo_text = self.manual_element_combo.itemText(i)
+                            if f"{elem_type.title()}: {elem_id}" in combo_text:
+                                self.manual_element_combo.setCurrentIndex(i)
                                 break
                 
                 
@@ -2091,7 +2116,7 @@ class GraphSetupWindow(QMainWindow):
                     # Restore contour mappings
                     contour_color = QColor(color.red(), color.green(), color.blue(), 150)
                     self.map_widget.completed_contours.append(
-                        (region.contour, region_id, contour_color, (element_type, element_id))
+                        (region.contour, region_id, contour_color, element_type, element_id)
                     )
                     self.map_widget.contour_mappings[region_id] = (element_type, element_id)
         
@@ -2141,7 +2166,8 @@ class GraphSetupWindow(QMainWindow):
                 self.assign_button.setEnabled(True)
                 self.next_element_button.setEnabled(True)
             elif self.setup_mode == 'manual':
-                self.manual_next_button.setEnabled(True)
+                # Manual mode navigation handled via jump functionality
+                pass
                 
             # Highlight in graph
             self.graph_widget.clear_highlights()
