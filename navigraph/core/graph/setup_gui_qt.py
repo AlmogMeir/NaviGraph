@@ -559,7 +559,7 @@ class GraphWidget(FigureCanvas):
         
         self._compute_layout()
         self.draw_graph()
-        
+
     def _compute_layout(self):
         """Compute graph layout for visualization."""
         # Use stored positions if available, otherwise compute
@@ -1168,6 +1168,20 @@ class GraphSetupWindow(QMainWindow):
         assign_layout.addLayout(control_layout)
         layout.addWidget(assign_group)
         
+        # Save/Load Mapping buttons
+        mapping_group = QGroupBox("Intermediate Mappings")
+        mapping_layout = QHBoxLayout(mapping_group)
+        
+        self.save_intermediate_button = QPushButton("Save Current Mapping")
+        self.save_intermediate_button.clicked.connect(self._on_save_intermediate_mapping)
+        mapping_layout.addWidget(self.save_intermediate_button)
+        
+        self.load_intermediate_button = QPushButton("Load Mapping")
+        self.load_intermediate_button.clicked.connect(self._on_load_intermediate_mapping)
+        mapping_layout.addWidget(self.load_intermediate_button)
+        
+        layout.addWidget(mapping_group)
+        
         return widget
         
     def _create_manual_controls(self) -> QWidget:
@@ -1319,7 +1333,9 @@ class GraphSetupWindow(QMainWindow):
                 
                 # Reset and initialize for grid mode with better error handling
                 try:
-                    self._reset_mapping_state()
+                    # Skip reset if we're loading an intermediate mapping
+                    if not getattr(self, '_loading_intermediate', False):
+                        self._reset_mapping_state()
                     self._init_element_queue()
                     self._populate_element_combos()
                     self._update_progress_display()
@@ -1351,7 +1367,9 @@ class GraphSetupWindow(QMainWindow):
                 
                 # Reset and initialize for manual mode with better error handling
                 try:
-                    self._reset_mapping_state()
+                    # Skip reset if we're loading an intermediate mapping
+                    if not getattr(self, '_loading_intermediate', False):
+                        self._reset_mapping_state()
                     self._init_element_queue()
                     self._populate_element_combos()
                     self._update_progress_display()
@@ -1847,6 +1865,225 @@ class GraphSetupWindow(QMainWindow):
                 if isinstance(region, ContourRegion):
                     self.map_widget.add_contour(region.points, region.region_id, 'edge', edge, color)
     
+    def _on_save_intermediate_mapping(self):
+        """Save current mapping with complete state to file."""
+        file_dialog = QFileDialog()
+        file_path, _ = file_dialog.getSaveFileName(
+            self, "Save Intermediate Mapping", "", "Mapping Files (*.pkl);;All Files (*)")
+        
+        if file_path:
+            try:
+                # Create complete state dict
+                mapping_state = {
+                    'format_version': '2.0',
+                    'mapping': self.mapping,
+                    'grid_config': {
+                        'structure_type': self.map_widget.grid_config.structure_type,
+                        'rows': self.map_widget.grid_config.rows,
+                        'cols': self.map_widget.grid_config.cols,
+                        'cell_width': self.map_widget.grid_config.cell_width,
+                        'cell_height': self.map_widget.grid_config.cell_height,
+                        'origin_x': self.map_widget.grid_config.origin_x,
+                        'origin_y': self.map_widget.grid_config.origin_y,
+                    },
+                    'grid_enabled': self.map_widget.grid_enabled,
+                    'current_mode': getattr(self, 'setup_mode', 'grid'),
+                    'element_queue_index': getattr(self, 'element_queue_index', 0),
+                    'mapping_history': len(self.mapping_history) if hasattr(self, 'mapping_history') else 0
+                }
+                
+                # Save to pickle file
+                import pickle
+                with open(file_path, 'wb') as f:
+                    pickle.dump(mapping_state, f)
+                
+                self.status_bar.showMessage(f"Intermediate mapping saved to {file_path}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save mapping: {str(e)}")
+    
+    def _on_load_intermediate_mapping(self):
+        """Load mapping with complete state from file."""
+        file_dialog = QFileDialog()
+        file_path, _ = file_dialog.getOpenFileName(
+            self, "Load Intermediate Mapping", "", "Mapping Files (*.pkl);;All Files (*)")
+        
+        if file_path:
+            try:
+                import pickle
+                with open(file_path, 'rb') as f:
+                    mapping_state = pickle.load(f)
+                
+                # Validate format
+                if not isinstance(mapping_state, dict) or 'mapping' not in mapping_state:
+                    QMessageBox.warning(self, "Error", "Invalid mapping file format")
+                    return
+                
+                # Load the mapping
+                self.mapping = mapping_state['mapping']
+                
+                # Restore grid configuration if present
+                if 'grid_config' in mapping_state:
+                    grid_config = mapping_state['grid_config']
+                    self.map_widget.grid_config.structure_type = grid_config.get('structure_type', 'rectangle')
+                    self.map_widget.grid_config.rows = grid_config.get('rows', 8)
+                    self.map_widget.grid_config.cols = grid_config.get('cols', 8)
+                    self.map_widget.grid_config.cell_width = grid_config.get('cell_width', 50.0)
+                    self.map_widget.grid_config.cell_height = grid_config.get('cell_height', 50.0)
+                    self.map_widget.grid_config.origin_x = grid_config.get('origin_x', 0.0)
+                    self.map_widget.grid_config.origin_y = grid_config.get('origin_y', 0.0)
+                    
+                    # Update UI controls with loaded grid config
+                    self._update_grid_ui_from_config()
+                
+                # Restore grid if it was enabled
+                if mapping_state.get('grid_enabled', False):
+                    self.map_widget.enable_grid(
+                        self.map_widget.grid_config.origin_x,
+                        self.map_widget.grid_config.origin_y
+                    )
+                    # Update grid UI elements
+                    self._update_grid_status_after_load()
+                    # Set interaction mode to allow cell selection
+                    self.map_widget.set_interaction_mode('select_cells')
+                
+                # Validate mode compatibility
+                loaded_mode = mapping_state.get('current_mode', 'grid')
+                
+                # Check if mapping contains incompatible region types
+                has_grid_regions = False
+                has_contour_regions = False
+                for region in self.mapping._regions.values():
+                    from .regions import RectangleRegion, ContourRegion
+                    if isinstance(region, RectangleRegion):
+                        has_grid_regions = True
+                    elif isinstance(region, ContourRegion):
+                        has_contour_regions = True
+                
+                if has_grid_regions and loaded_mode != 'grid':
+                    QMessageBox.warning(self, "Mode Mismatch", 
+                                      "This mapping was created in Grid mode and cannot be loaded in Manual mode.")
+                    return
+                elif has_contour_regions and loaded_mode != 'manual':
+                    QMessageBox.warning(self, "Mode Mismatch", 
+                                      "This mapping was created in Manual mode and cannot be loaded in Grid mode.")
+                    return
+                
+                # Switch to appropriate mode without resetting mapping
+                self._loading_intermediate = True  # Flag to prevent reset during mode switch
+                if loaded_mode == 'grid':
+                    self._on_grid_mode(True)
+                    # Ensure interaction mode is correct for grid
+                    if self.map_widget.grid_enabled:
+                        self.map_widget.set_interaction_mode('select_cells')
+                else:
+                    self._on_manual_mode(True)
+                    # Ensure interaction mode is correct for manual drawing
+                    self.map_widget.set_interaction_mode('draw_contour')
+                self._loading_intermediate = False
+                
+                # Visualize loaded mapping
+                self._visualize_loaded_intermediate_mapping()
+                
+                # Update progress
+                self._update_progress_display()
+                
+                # Restore element queue position if available
+                if 'element_queue_index' in mapping_state:
+                    self.element_queue_index = mapping_state['element_queue_index']
+                    
+                # Always repopulate element combos to ensure proper state
+                self._populate_element_combos()
+                
+                # Set current element to continue mapping from where we left off
+                if hasattr(self, 'element_queue') and self.element_queue and len(self.element_queue) > 0:
+                    self.current_element = self.element_queue[0]
+                    elem_type, elem_id = self.current_element
+                    
+                    # Update map widget with current element
+                    self.map_widget.set_current_element(elem_type, elem_id)
+                    
+                    # Update combo box selection
+                    if loaded_mode == 'grid' and hasattr(self, 'grid_element_combo'):
+                        # Find the element in the combo box
+                        for i in range(self.grid_element_combo.count()):
+                            combo_text = self.grid_element_combo.itemText(i)
+                            if f"{elem_type.title()}: {elem_id}" in combo_text:
+                                self.grid_element_combo.setCurrentIndex(i)
+                                break
+                
+                
+                self.status_bar.showMessage(f"Intermediate mapping loaded from {file_path}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load mapping: {str(e)}")
+    
+    def _update_grid_ui_from_config(self):
+        """Update UI controls to reflect loaded grid configuration."""
+        if hasattr(self, 'rows_spinbox'):
+            self.rows_spinbox.setValue(self.map_widget.grid_config.rows)
+        if hasattr(self, 'cols_spinbox'):
+            self.cols_spinbox.setValue(self.map_widget.grid_config.cols)
+        if hasattr(self, 'cell_size_spinbox'):
+            self.cell_size_spinbox.setValue(self.map_widget.grid_config.cell_width)
+    
+    def _visualize_loaded_intermediate_mapping(self):
+        """Visualize loaded intermediate mapping on the map."""
+        # Clear only selections, not mappings
+        self.map_widget.selected_cells.clear()
+        self.map_widget.completed_contours.clear()
+        
+        # Restore all mapped regions
+        for region_id, region in self.mapping._regions.items():
+            element_info = self.mapping._region_to_element.get(region_id)
+            if element_info:
+                element_type, element_id = element_info
+                
+                # Determine color based on element type
+                if element_type == 'node':
+                    color = QColor(0, 255, 0, 100)  # Green for nodes
+                else:
+                    color = QColor(255, 165, 0, 100)  # Orange for edges
+                
+                # Handle different region types
+                from .regions import RectangleRegion, ContourRegion
+                
+                if isinstance(region, RectangleRegion):  # Grid-based region
+                    # Find which cell this rectangle corresponds to
+                    for cell_id, cell_rect in self.map_widget.grid_cells.items():
+                        # Check if this region matches this cell
+                        if (abs(region.x - cell_rect.x()) < 1 and 
+                            abs(region.y - cell_rect.y()) < 1 and
+                            abs(region.width - cell_rect.width()) < 1 and
+                            abs(region.height - cell_rect.height()) < 1):
+                            self.map_widget.add_cell_mapping(cell_id, element_type, element_id, color)
+                            break
+                
+                elif isinstance(region, ContourRegion):  # Contour-based region
+                    # Restore contour mappings
+                    contour_color = QColor(color.red(), color.green(), color.blue(), 150)
+                    self.map_widget.completed_contours.append(
+                        (region.contour, region_id, contour_color, (element_type, element_id))
+                    )
+                    self.map_widget.contour_mappings[region_id] = (element_type, element_id)
+        
+        # Force widget update
+        self.map_widget.update()
+        
+    def _update_grid_status_after_load(self):
+        """Update grid-related UI elements after loading."""
+        if self.map_widget.grid_enabled:
+            # Update grid status
+            origin_text = f"({self.map_widget.grid_config.origin_x:.1f}, {self.map_widget.grid_config.origin_y:.1f})"
+            if hasattr(self, 'grid_status_label'):
+                self.grid_status_label.setText(f"Origin: {origin_text}")
+            
+            # Enable relevant buttons
+            if hasattr(self, 'clear_grid_button'):
+                self.clear_grid_button.setEnabled(True)
+            if hasattr(self, 'place_grid_button'):
+                self.place_grid_button.setEnabled(False)  # Grid already placed
+
     def _on_jump_to_element(self):
         """Jump to selected element from combo box."""
         # Determine which combo box to use based on current mode
