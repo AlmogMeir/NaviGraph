@@ -20,8 +20,8 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QStackedWidget, QDoubleSpinBox,
     QCheckBox, QFileDialog, QSizePolicy, QGridLayout
 )
-from PyQt5.QtCore import Qt, QPointF, QRectF, pyqtSignal, QTimer, QSize
-from PyQt5.QtGui import QPixmap, QImage, QPen, QBrush, QColor, QPolygonF, QPainter
+from PyQt5.QtCore import Qt, QPointF, QRectF, QPoint, pyqtSignal, QTimer, QSize
+from PyQt5.QtGui import QPixmap, QImage, QPen, QBrush, QColor, QPolygonF, QPainter, QCursor
 
 import networkx as nx
 import matplotlib
@@ -49,7 +49,14 @@ class GridConfig:
 
 
 class MapWidget(QWidget):
-    """Widget for displaying and interacting with the map image."""
+    """Widget for displaying and interacting with the map image.
+    
+    Features:
+    - Mouse scroll wheel to zoom in/out (0.1x to 10x)
+    - Right mouse button drag to pan the image
+    - Press 'R' key to reset zoom and center image
+    - Left mouse button for grid placement and cell selection
+    """
     
     gridPlaced = pyqtSignal(float, float)  # Emitted when grid origin is placed
     cellClicked = pyqtSignal(str)  # Emitted when a grid cell is clicked
@@ -62,8 +69,14 @@ class MapWidget(QWidget):
         
         # Display state
         self.scale_factor = 1.0
+        self.user_scale_factor = 1.0  # User-controlled zoom
+        self.base_scale_factor = 1.0  # Auto-calculated fit-to-widget scale
         self.offset_x = 0
         self.offset_y = 0
+        
+        # Panning state
+        self.panning = False
+        self.last_pan_point = QPoint()
         
         # Grid state
         self.grid_config = GridConfig()
@@ -89,6 +102,7 @@ class MapWidget(QWidget):
         
         self.setMouseTracking(True)
         self.setMinimumSize(800, 600)
+        self.setFocusPolicy(Qt.StrongFocus)  # Enable keyboard focus
         
         # Enable tooltips
         from PyQt5.QtWidgets import QToolTip
@@ -206,25 +220,27 @@ class MapWidget(QWidget):
             available_width = widget_size.width() - 40
             available_height = widget_size.height() - 40
             
-            # Calculate scale factor to fit both dimensions
+            # Calculate base scale factor to fit both dimensions
             scale_x = available_width / width if width > 0 else 1.0
             scale_y = available_height / height if height > 0 else 1.0
-            scale_factor = min(scale_x, scale_y, 1.0)  # Don't upscale
+            self.base_scale_factor = min(scale_x, scale_y, 1.0)  # Don't upscale
+            
+            # Calculate combined scale factor (base * user zoom)
+            self.scale_factor = self.base_scale_factor * self.user_scale_factor
             
             # Calculate final dimensions
-            final_width = int(width * scale_factor)
-            final_height = int(height * scale_factor)
+            final_width = int(width * self.scale_factor)
+            final_height = int(height * self.scale_factor)
             
             # Scale the pixmap
             scaled_pixmap = pixmap.scaled(final_width, final_height, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             
-            # Center the image
-            self.offset_x = (widget_size.width() - final_width) // 2
-            self.offset_y = (widget_size.height() - final_height) // 2
-            painter.drawPixmap(self.offset_x, self.offset_y, scaled_pixmap)
+            # If user hasn't zoomed yet, center the image
+            if self.user_scale_factor == 1.0:
+                self.offset_x = (widget_size.width() - final_width) // 2
+                self.offset_y = (widget_size.height() - final_height) // 2
             
-            # Store scale factor for coordinate conversion
-            self.scale_factor = scale_factor
+            painter.drawPixmap(int(self.offset_x), int(self.offset_y), scaled_pixmap)
             
         # Draw grid if enabled
         if self.grid_enabled:
@@ -344,6 +360,13 @@ class MapWidget(QWidget):
                 
     def mousePressEvent(self, event):
         """Handle mouse press events."""
+        if event.button() == Qt.RightButton:
+            # Start panning
+            self.panning = True
+            self.last_pan_point = event.pos()
+            self.setCursor(Qt.ClosedHandCursor)
+            return
+            
         if event.button() == Qt.LeftButton:
             # Convert to image coordinates
             x = (event.x() - self.offset_x) / self.scale_factor
@@ -397,8 +420,23 @@ class MapWidget(QWidget):
         self.current_contour.clear()
         self.update()
     
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release events."""
+        if event.button() == Qt.RightButton and self.panning:
+            self.panning = False
+            self.setCursor(Qt.ArrowCursor)
+    
     def mouseMoveEvent(self, event):
-        """Handle mouse move for tooltips."""
+        """Handle mouse move for panning and tooltips."""
+        if self.panning:
+            # Pan the image
+            delta = event.pos() - self.last_pan_point
+            self.offset_x += delta.x()
+            self.offset_y += delta.y()
+            self.last_pan_point = event.pos()
+            self.update()
+            return
+            
         if self.grid_enabled:
             # Convert to image coordinates
             x = (event.x() - self.offset_x) / self.scale_factor
@@ -419,6 +457,52 @@ class MapWidget(QWidget):
                     break
             
             self.setToolTip(tooltip_text)
+    
+    def wheelEvent(self, event):
+        """Handle mouse wheel events for zooming."""
+        # Get mouse position relative to widget
+        mouse_x = event.x()
+        mouse_y = event.y()
+        
+        # Get mouse position in image coordinates before zoom
+        image_x = (mouse_x - self.offset_x) / self.scale_factor
+        image_y = (mouse_y - self.offset_y) / self.scale_factor
+        
+        # Calculate zoom factor
+        zoom_delta = event.angleDelta().y() / 120.0  # Standard wheel delta is 120
+        zoom_factor = 1.1 ** zoom_delta
+        
+        # Apply zoom with limits (0.1x to 10x)
+        new_user_scale = self.user_scale_factor * zoom_factor
+        new_user_scale = max(0.1, min(10.0, new_user_scale))
+        
+        # Update user scale factor
+        self.user_scale_factor = new_user_scale
+        
+        # Calculate new combined scale factor
+        self.scale_factor = self.base_scale_factor * self.user_scale_factor
+        
+        # Adjust offsets to keep the mouse position fixed during zoom
+        new_offset_x = mouse_x - image_x * self.scale_factor
+        new_offset_y = mouse_y - image_y * self.scale_factor
+        
+        self.offset_x = new_offset_x
+        self.offset_y = new_offset_y
+        
+        self.update()
+    
+    def keyPressEvent(self, event):
+        """Handle key press events."""
+        if event.key() == Qt.Key_R:
+            # Reset zoom and center image
+            self.reset_zoom()
+        else:
+            super().keyPressEvent(event)
+    
+    def reset_zoom(self):
+        """Reset zoom to fit image in widget."""
+        self.user_scale_factor = 1.0
+        self.update()
     
     def highlight_contour(self, region_id: str):
         """Highlight a specific contour on the map."""
@@ -1063,7 +1147,7 @@ class GraphSetupWindow(QMainWindow):
         
         self.clear_all_grid_button = QPushButton("Clear All")
         self.clear_all_grid_button.clicked.connect(self._on_clear_all)
-        self.clear_all_grid_button.setEnabled(False)
+        self.clear_all_grid_button.setEnabled(True)  # Always enabled
         control_layout.addWidget(self.clear_all_grid_button)
         
         assign_layout.addLayout(control_layout)
@@ -1501,7 +1585,7 @@ class GraphSetupWindow(QMainWindow):
             # Update UI
             self.grid_status_label.setText("")
             self.clear_grid_button.setEnabled(False)
-            self.clear_all_grid_button.setEnabled(False)
+            # Keep clear_all_grid_button always enabled
             self.assign_button.setEnabled(False)
             self.next_element_button.setEnabled(False)
             self.undo_grid_button.setEnabled(False)
@@ -1805,8 +1889,8 @@ class GraphSetupWindow(QMainWindow):
     
     def _on_clear_all(self):
         """Clear all mappings and start fresh."""
-        reply = QMessageBox.question(self, "Clear All", 
-                                    "Are you sure you want to clear all mappings?",
+        reply = QMessageBox.question(self, "Clear All Mappings", 
+                                    "Are you sure you want to clear all mappings? This will reset all progress and start fresh.",
                                     QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
             self._reset_mapping_state()
