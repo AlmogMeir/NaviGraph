@@ -494,7 +494,7 @@ class GraphWidget(FigureCanvas):
         node_colors = []
         for node in self.graph.nodes:
             if node in self.highlighted_nodes:
-                node_colors.append('lightgreen')
+                node_colors.append('lightgreen')  # Keep green for nodes
             elif node in self.node_colors:
                 node_colors.append(self.node_colors[node])
             else:
@@ -525,7 +525,7 @@ class GraphWidget(FigureCanvas):
         if self.highlighted_edges:
             edge_list = list(self.highlighted_edges)
             nx.draw_networkx_edges(self.graph.graph, pos=self.pos, ax=self.ax,
-                                  edgelist=edge_list, edge_color='green', width=2)
+                                  edgelist=edge_list, edge_color='orange', width=2)
                                   
         self.ax.set_title(f"Graph Structure ({len(self.graph.nodes)} nodes, {len(self.graph.edges)} edges)")
         self.draw()
@@ -535,7 +535,7 @@ class GraphWidget(FigureCanvas):
         self.highlighted_nodes = nodes
         self.draw_graph()
         
-    def highlight_edges(self, edges: Set[Tuple], color: str = 'green'):
+    def highlight_edges(self, edges: Set[Tuple], color: str = 'orange'):
         """Highlight specific edges."""
         self.highlighted_edges = edges
         self.draw_graph()
@@ -961,8 +961,14 @@ class GraphSetupWindow(QMainWindow):
         config_buttons.addWidget(self.apply_grid_button)
         
         self.place_grid_button = QPushButton("Place Grid")
+        self.place_grid_button.setCheckable(True)  # Make it toggleable
         self.place_grid_button.clicked.connect(self._on_place_grid)
         config_buttons.addWidget(self.place_grid_button)
+        
+        self.clear_grid_button = QPushButton("Clear Grid")
+        self.clear_grid_button.clicked.connect(self._on_clear_grid)
+        self.clear_grid_button.setEnabled(False)  # Disabled until grid is placed
+        config_buttons.addWidget(self.clear_grid_button)
         config_layout.addLayout(config_buttons)
         
         # Compact status label for grid origin only
@@ -993,10 +999,10 @@ class GraphSetupWindow(QMainWindow):
         self.undo_grid_button.setEnabled(False)
         control_layout.addWidget(self.undo_grid_button)
         
-        self.clear_grid_button = QPushButton("Clear All")
-        self.clear_grid_button.clicked.connect(self._on_clear_all)
-        self.clear_grid_button.setEnabled(False)
-        control_layout.addWidget(self.clear_grid_button)
+        self.clear_all_grid_button = QPushButton("Clear All")
+        self.clear_all_grid_button.clicked.connect(self._on_clear_all)
+        self.clear_all_grid_button.setEnabled(False)
+        control_layout.addWidget(self.clear_all_grid_button)
         
         assign_layout.addLayout(control_layout)
         layout.addWidget(assign_group)
@@ -1378,15 +1384,70 @@ class GraphSetupWindow(QMainWindow):
         self.grid_status_label.setText("")  # Clear status until grid is placed
         self.status_bar.showMessage("Grid configuration updated - click 'Place Grid' to position it")
         
+        # Enable Clear Grid button if grid is already placed
+        if hasattr(self.map_widget, 'grid_enabled') and self.map_widget.grid_enabled:
+            self.clear_grid_button.setEnabled(True)
+        
     def _on_place_grid(self):
-        """Start grid placement mode."""
-        self.map_widget.set_interaction_mode('place_grid')
-        self.status_bar.showMessage("Click on the map to place grid origin")
+        """Start or cancel grid placement mode."""
+        if self.place_grid_button.isChecked():
+            # Button was pressed - start placement mode
+            self.map_widget.set_interaction_mode('place_grid')
+            self.status_bar.showMessage("Click on the map to place grid origin")
+        else:
+            # Button was unpressed - cancel placement mode
+            self.map_widget.set_interaction_mode('none')
+            self.status_bar.showMessage("Grid placement cancelled")
         
     def _on_grid_placed(self, x: float, y: float):
         """Handle grid placement."""
         self.grid_status_label.setText(f"Origin: ({x:.0f}, {y:.0f})")
         self.status_bar.showMessage("Grid placed - Click cells to select")
+        # Uncheck the Place Grid button after placement
+        self.place_grid_button.setChecked(False)
+        # Enable Clear Grid button
+        self.clear_grid_button.setEnabled(True)
+        
+    def _on_clear_grid(self):
+        """Clear the grid and reset all mappings."""
+        from PyQt5.QtWidgets import QMessageBox
+        
+        # Ask for confirmation
+        reply = QMessageBox.question(
+            self, "Clear Grid", 
+            "This will remove the grid and clear all mappings. Are you sure?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            # Reset the map widget
+            self.map_widget.reset_all()
+            
+            # Reset mapping state
+            self.mapping = SpatialMapping(self.graph)
+            self.mapped_elements.clear()
+            self.mapping_history.clear()
+            
+            # Reset element queue to start fresh
+            self._init_element_queue()
+            self._populate_element_combos()
+            
+            # Clear graph highlights
+            self.graph_widget.clear_highlights()
+            
+            # Update UI
+            self.grid_status_label.setText("")
+            self.clear_grid_button.setEnabled(False)
+            self.clear_all_grid_button.setEnabled(False)
+            self.assign_button.setEnabled(False)
+            self.next_element_button.setEnabled(False)
+            self.undo_grid_button.setEnabled(False)
+            
+            # Update progress
+            self._update_progress_display()
+            
+            self.status_bar.showMessage("Grid cleared - all mappings reset")
         
     def _on_cell_clicked(self, cell_id: str):
         """Handle cell click."""
@@ -1423,7 +1484,7 @@ class GraphSetupWindow(QMainWindow):
                     color = QColor(150, 255, 150, 100)  # Light green for nodes
                 elif elem_type == 'edge':
                     self.mapping.add_edge_region(region, elem_id)
-                    color = QColor(150, 150, 255, 100)  # Light blue for edges
+                    color = QColor(255, 200, 120, 100)  # Light orange for edges
                     
                 # Update map widget with mapping
                 self.map_widget.add_cell_mapping(cell_id, elem_type, elem_id, color)
@@ -1513,7 +1574,7 @@ class GraphSetupWindow(QMainWindow):
             region_id = f"{elem_type}_{elem_id}_contour_{len(self.map_widget.completed_contours)}"
             
             # Add to map display
-            color = QColor(150, 255, 150, 100) if elem_type == 'node' else QColor(150, 150, 255, 100)
+            color = QColor(150, 255, 150, 100) if elem_type == 'node' else QColor(255, 200, 120, 100)
             self.map_widget.add_contour(points, region_id, elem_type, elem_id, color)
             
             # Add to contour list
@@ -1620,7 +1681,7 @@ class GraphSetupWindow(QMainWindow):
                     
         # Visualize edge regions
         for edge, regions in self.mapping.edge_to_regions.items():
-            color = QColor(150, 150, 255, 100)
+            color = QColor(255, 200, 120, 100)
             for region in regions:
                 if isinstance(region, ContourRegion):
                     self.map_widget.add_contour(region.points, region.region_id, 'edge', edge, color)
