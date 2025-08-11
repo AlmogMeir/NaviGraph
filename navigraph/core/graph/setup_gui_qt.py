@@ -2086,6 +2086,10 @@ class GraphSetupWindow(QMainWindow):
         self.map_widget.selected_cells.clear()
         self.map_widget.completed_contours.clear()
         
+        # Clear contour list if it exists (manual mode)
+        if hasattr(self, 'contour_list') and self.contour_list is not None:
+            self.contour_list.clear()
+        
         # Restore all mapped regions
         for region_id, region in self.mapping._regions.items():
             element_info = self.mapping._region_to_element.get(region_id)
@@ -2119,6 +2123,13 @@ class GraphSetupWindow(QMainWindow):
                         (region.contour, region_id, contour_color, element_type, element_id)
                     )
                     self.map_widget.contour_mappings[region_id] = (element_type, element_id)
+                    
+                    # Add to contour list if we're in manual mode
+                    if hasattr(self, 'contour_list') and self.contour_list is not None:
+                        list_label = f"{element_type.title()} {element_id}: {region_id}"
+                        item = QListWidgetItem(list_label)
+                        item.setData(Qt.UserRole, region_id)  # Store region_id for reference
+                        self.contour_list.addItem(item)
         
         # Force widget update
         self.map_widget.update()
