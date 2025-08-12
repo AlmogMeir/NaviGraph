@@ -14,8 +14,10 @@ The Graph Setup GUI (`navigraph/core/graph/setup_gui_qt.py`) is a sophisticated 
 ### 2. Map Widget (`MapWidget`)
 - Interactive canvas for placing grids and drawing contours
 - Handles mouse events for cell selection and contour drawing
-- Visualizes mapped regions with color coding (green for nodes, blue for edges)
-- Supports zoom/pan through automatic scaling
+- Visualizes mapped regions with color coding (green for nodes, orange for edges)
+- **Zoom/Pan Support**: Mouse wheel zoom (cursor-centered) + right-click pan
+- **Hover Tooltips**: Shows element information when hovering over mapped regions
+- **Adaptive Labels**: Font sizing based on region size with centered positioning
 
 ### 3. Graph Widget (`GraphWidget`)
 - Matplotlib-based graph visualization
@@ -49,6 +51,9 @@ The Graph Setup GUI (`navigraph/core/graph/setup_gui_qt.py`) is a sophisticated 
    - **Jump**: Select specific element from dropdown
    - **Undo**: Revert last assignment
    - **Clear All**: Reset all mappings
+7. **File Operations**:
+   - **Save Mapping**: Save current progress with all mappings and state
+   - **Load Mapping**: Restore previous session with mappings and progress
 
 ### Grid Configuration (`GridConfig`)
 ```python
@@ -84,12 +89,17 @@ class GridConfig:
    - **✅ Commit Contour**: Save contour for current element
 5. **Contour Management**:
    - Committed contours listed in sidebar
-   - Click contour in list to highlight on map
+   - Click contour in list to highlight on map (persistent highlighting)
    - Delete individual contours or clear all
+   - **Auto-advance**: Automatically jumps to next element after contour commit
 6. **Element Navigation**:
-   - **Next**: Move to next element
-   - **Jump**: Select specific element
-   - **Undo**: Revert last contour
+   - **Jump**: Select specific element from dropdown (shows ✓ for mapped elements)
+7. **File Operations**:
+   - **Save Mapping**: Save current progress with all contours and state  
+   - **Load Mapping**: Restore previous session with all contours visible in list
+8. **Interactive Features**:
+   - **Hover Tooltips**: Hover over contours to see element and region information
+   - **Adaptive Labels**: Contour labels scale with zoom and are centered properly
 
 ### Contour Storage
 - Contours stored as list of (x, y) points
@@ -138,23 +148,26 @@ class SpatialMapping:
 ```
 
 ## Color Coding System
-- **Light Green (150, 255, 150, 100)**: Node regions
-- **Light Blue (150, 150, 255, 100)**: Edge regions
+- **Light Green (0, 255, 0, 100)**: Node regions
+- **Light Orange (255, 165, 0, 100)**: Edge regions  
 - **Bright Green (0, 255, 0, 100)**: Currently selected cells
 - **Yellow (255, 255, 0, 150)**: Temporary highlight
 - **Red contour lines**: Active drawing
+- **Blue contour highlight**: Selected/highlighted contour in manual mode
 
 ## File Operations
 
-### Saving Mappings
-- Format: Python pickle (`.pkl`)
-- Contains complete `SpatialMapping` object
-- Preserves all regions and associations
+### Saving Intermediate Mappings
+- Format: Python pickle (`.pkl`) with comprehensive state preservation
+- **Includes**: Complete `SpatialMapping` object, grid configuration, current mode, element queue state
+- **Mode-specific data**: Grid dimensions and position OR contour mappings
+- **UI state**: Progress tracking, element selection, mapping history
 
-### Loading Mappings
-- Restores `SpatialMapping` object
-- Automatically visualizes loaded regions
-- Updates progress indicators
+### Loading Intermediate Mappings  
+- **Mode compatibility validation**: Prevents loading grid mappings in manual mode and vice versa
+- **Complete state restoration**: Grid placement, contour list population, combo box updates
+- **Visual restoration**: All mapped regions displayed with proper colors and labels
+- **Progress continuation**: Resumes from exact point where work was saved
 
 ## Key Event Handlers
 
@@ -171,16 +184,22 @@ class SpatialMapping:
 - `mousePressEvent()`: Add contour points
 - `_on_contour_drawn()`: Process completed contour
 - `_on_clear_contour()`: Clear current drawing
-- `_on_commit_contour()`: Save contour
+- `_on_commit_contour()`: Save contour (with auto-advance to next element)
 - `_on_delete_contour()`: Remove selected contour
+- `_on_contour_selected()`: Handle contour list selection with persistent highlighting
+- `mouseMoveEvent()`: Handle hover tooltips for contours (with immediate clearing)
 
 ### Common Controls
 - `_on_next_element()`: Advance to next element
-- `_on_jump_to_element()`: Jump to specific element
-- `_on_undo_last()`: Revert last action
-- `_on_toggle_mappings()`: Show/hide all mappings
-- `_on_save_mapping()`: Export to file
-- `_on_load_mapping()`: Import from file
+- `_on_jump_to_element()`: Jump to specific element (works in both modes)
+- `_on_undo_last()`: Revert last action (grid mode only)
+- `_on_toggle_mappings()`: Show/hide all mappings (both modes)
+- `_on_toggle_labels()`: Show/hide element labels (both modes)
+- `_on_toggle_adaptive_font()`: Toggle adaptive font sizing (both modes)
+- `_on_save_intermediate_mapping()`: Save current state to file
+- `_on_load_intermediate_mapping()`: Load state from file
+- `wheelEvent()`: Handle mouse wheel zoom (cursor-centered)
+- `mouseMoveEvent()`: Handle hover tooltips and panning
 
 ## State Management
 
@@ -197,16 +216,21 @@ class SpatialMapping:
 - Tracks completion progress
 
 ### Visual State
-- `show_all_mappings`: Toggle mapped region visibility
-- `interaction_mode`: Current mouse interaction type
+- `show_all_mappings`: Toggle mapped region visibility (both modes)
+- `show_cell_labels`: Toggle element labels on regions (both modes) 
+- `adaptive_font_size`: Toggle adaptive font sizing (both modes)
+- `interaction_mode`: Current mouse interaction type (`select_cells`, `draw_contour`, `test`)
 - `current_element`: Active element being mapped
-- `scale_factor`: Map zoom level
+- `scale_factor`: Map zoom level with user zoom controls
+- `highlighted_contour_id`: Currently selected contour in manual mode (persistent)
+- `current_tooltip`: Current hover tooltip state for responsive updates
 
 ## Progress Tracking
 - Progress bar shows mapped/total elements
 - Percentage completion displayed
 - Separate counts for nodes and edges
 - Real-time updates after each action
+- **Element combo boxes show mapping status**: ✓ indicators for completed elements
 
 ## GUI Layout Hierarchy
 ```
@@ -215,9 +239,18 @@ GraphSetupWindow
 │   ├── Mode Selection (Grid/Manual/Test)
 │   ├── Mode Stack (Dynamic content)
 │   │   ├── Grid Controls
-│   │   ├── Manual Controls
+│   │   │   ├── Configuration (dimensions, cell size)
+│   │   │   ├── Assignment (element combo, assign/next buttons)
+│   │   │   └── File Operations (Save/Load Mapping)
+│   │   ├── Manual Controls  
+│   │   │   ├── Element Selection (combo + jump button)
+│   │   │   ├── Contour Management (list + delete/clear)
+│   │   │   └── File Operations (Save/Load Mapping)
 │   │   └── Test Controls
-│   └── Display Options
+│   │       ├── Instructions
+│   │       ├── File Operations (Save/Load Mapping) 
+│   │       └── Test Results Display
+│   └── Display Options (Show Mappings, Labels, Adaptive Font)
 └── View Panel (Right, expandable)
     ├── Graph Widget (Top, 1/4 height)
     └── Map Widget (Bottom, 3/4 height)
@@ -229,10 +262,21 @@ GraphSetupWindow
 - Mode switching validation
 - File I/O error messages
 
-## Keyboard Shortcuts (Planned)
+## Mouse and Keyboard Controls
+
+### Current Controls
+- **Mouse Wheel**: Zoom in/out (cursor-centered)
+- **Right-click + Drag**: Pan the map view
+- **R Key**: Reset zoom and pan to original position
+- **Left-click**: 
+  - Grid mode: Select/deselect cells
+  - Manual mode: Add contour points
+- **Hover**: Show element information tooltips
+
+### Planned Keyboard Shortcuts  
 - **V**: Vertex/node mode
 - **E**: Edge mode
-- **R**: Region mode
+- **R**: Region mode  
 - **Delete**: Remove selected
 - **Ctrl+Z**: Undo
 - **Ctrl+S**: Save mapping
@@ -243,15 +287,29 @@ GraphSetupWindow
 - Efficient contour point storage
 - Scaled visualization for large graphs
 - Batched UI updates
+- **Conditional tooltip updates**: Only update when tooltip text changes
+- **Scale-aware font sizing**: Calculates font size based on actual region dimensions
+- **Optimized hover detection**: Efficient path-based point-in-polygon testing
+
+## Recent Enhancements (Completed)
+1. ✅ **Mouse wheel zoom and pan**: Cursor-centered zoom + right-click pan with 'R' key reset
+2. ✅ **Save/Load intermediate mappings**: Complete state preservation across sessions
+3. ✅ **Hover tooltips**: Information display for both grid cells and contours
+4. ✅ **Adaptive font sizing**: Scale-aware label sizing with proper centering
+5. ✅ **Visual improvements**: Wider graph display, persistent contour highlighting
+6. ✅ **Auto-advance workflow**: Automatic progression after contour commit in manual mode
+7. ✅ **Mode compatibility**: Validation to prevent incompatible mapping loads
+8. ✅ **UI consistency**: Standardized "File Operations" with "Save/Load Mapping" buttons
 
 ## Future Enhancements
 1. **Hexagonal grid support**: Already structured in `GridConfig`
-2. **Multi-select elements**: Map multiple elements simultaneously
+2. **Multi-select elements**: Map multiple elements simultaneously  
 3. **Region templates**: Save and reuse common region patterns
 4. **Auto-mapping**: Suggest regions based on graph topology
-5. **Keyboard shortcuts**: Full keyboard navigation
+5. **Keyboard shortcuts**: Full keyboard navigation (V/E/R keys planned)
 6. **Region editing**: Modify existing regions after creation
 7. **Import/export formats**: JSON, XML support beyond pickle
+8. **Undo system for manual mode**: Stack-based undo for contour operations
 
 ## Integration Points
 
