@@ -394,6 +394,49 @@ class MapWidget(QWidget):
             painter.setBrush(QBrush(QColor(255, 0, 0)))
             for point in scaled_points:
                 painter.drawEllipse(QPointF(*point), 3, 3)
+        
+        # Draw test mode highlights
+        if hasattr(self, 'test_highlights'):
+            try:
+                for region_id, highlight_color in self.test_highlights:
+                    # Find the region in completed contours or grid cells
+                    found_region = False
+                    
+                    # Check completed contours first
+                    for contour_data in self.completed_contours:
+                        if contour_data[1] == region_id:  # region_id matches
+                            points = contour_data[0]
+                            if len(points) > 2:
+                                poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
+                                                     self.offset_y + p[1] * self.scale_factor) 
+                                             for p in points]
+                                polygon = QPolygonF(poly_points)
+                                
+                                # Draw highlight with transparent color
+                                painter.setPen(QPen(QColor(*highlight_color[:3]), 3))
+                                painter.setBrush(QBrush(QColor(*highlight_color)))
+                                painter.drawPolygon(polygon)
+                                found_region = True
+                                break
+                    
+                    # Check grid cells if not found in contours
+                    if not found_region and region_id in self.grid_cells:
+                        rect = self.grid_cells[region_id]
+                        scaled_rect = QRectF(
+                            self.offset_x + rect.x() * self.scale_factor,
+                            self.offset_y + rect.y() * self.scale_factor,
+                            rect.width() * self.scale_factor,
+                            rect.height() * self.scale_factor
+                        )
+                        
+                        # Draw highlight with transparent color
+                        painter.setPen(QPen(QColor(*highlight_color[:3]), 3))
+                        painter.setBrush(QBrush(QColor(*highlight_color)))
+                        painter.drawRect(scaled_rect)
+            except Exception as e:
+                print(f"Error drawing test highlights: {e}")
+                # Clear the problematic highlights to prevent repeated crashes
+                self.test_highlights = []
                 
     def mousePressEvent(self, event):
         """Handle mouse press events."""
@@ -634,6 +677,40 @@ class MapWidget(QWidget):
             del self.contour_mappings[region_id]
         self.update()
 
+    def clear_highlights(self):
+        """Clear all test mode highlights."""
+        try:
+            if hasattr(self, 'test_highlights'):
+                self.test_highlights = []
+            self.update()
+        except Exception as e:
+            print(f"Error clearing highlights: {e}")
+            # Don't crash, just continue
+    
+    def highlight_region(self, region_id: str, color_type='highlight'):
+        """Highlight a specific region in test mode."""
+        try:
+            if not hasattr(self, 'test_highlights'):
+                self.test_highlights = []
+            
+            # Define color schemes (avoiding green/orange of mapping contours and blue nodes)
+            colors = {
+                'selected': (255, 150, 150, 180),    # Light coral/pink for selection
+                'highlight': (160, 100, 255, 140)    # Darker purple for better visibility
+            }
+            
+            color = colors.get(color_type, colors['highlight'])
+            
+            # Remove existing highlight for this region
+            self.test_highlights = [h for h in self.test_highlights if h[0] != region_id]
+            
+            # Add new highlight
+            self.test_highlights.append((region_id, color))
+            self.update()
+        except Exception as e:
+            print(f"Error highlighting region {region_id}: {e}")
+            # Don't crash, just continue
+
 
 class GraphWidget(FigureCanvas):
     """Widget for displaying the graph structure using matplotlib."""
@@ -655,6 +732,8 @@ class GraphWidget(FigureCanvas):
         
         self._compute_layout()
         self.draw_graph()
+        
+        # Note: Graph click detection removed - using dropdown selection in test mode instead
 
     def _compute_layout(self):
         """Compute graph layout for visualization."""
@@ -732,9 +811,7 @@ class GraphWidget(FigureCanvas):
         # Prepare node colors
         node_colors = []
         for node in self.graph.nodes:
-            if node in self.highlighted_nodes:
-                node_colors.append('lightgreen')  # Keep green for nodes
-            elif node in self.node_colors:
+            if node in self.node_colors:
                 node_colors.append(self.node_colors[node])
             else:
                 node_colors.append('lightblue')
@@ -767,8 +844,10 @@ class GraphWidget(FigureCanvas):
         # Highlight specific edges if needed
         if self.highlighted_edges:
             edge_list = list(self.highlighted_edges)
+            # Get colors for highlighted edges
+            edge_colors_list = [self.edge_colors.get(edge, 'orange') for edge in edge_list]
             nx.draw_networkx_edges(self.graph.graph, pos=self.pos, ax=self.ax,
-                                  edgelist=edge_list, edge_color='orange', width=2)
+                                  edgelist=edge_list, edge_color=edge_colors_list, width=2)
                                   
         self.ax.set_title(f"Graph Structure ({len(self.graph.nodes)} nodes, {len(self.graph.edges)} edges)")
         
@@ -780,11 +859,33 @@ class GraphWidget(FigureCanvas):
     def highlight_nodes(self, nodes: Set, color: str = 'lightgreen'):
         """Highlight specific nodes."""
         self.highlighted_nodes = nodes
+        # Map color names to actual colors (avoiding green/orange of mapping contours and blue nodes)
+        color_map = {
+            'selected': 'lightcoral',
+            'highlight': 'mediumorchid',  # Darker purple for better visibility
+            'lightgreen': 'lightgreen'
+        }
+        actual_color = color_map.get(color, color)
+        
+        # Store colors for highlighted nodes
+        for node in nodes:
+            self.node_colors[node] = actual_color
         self.draw_graph()
         
     def highlight_edges(self, edges: Set[Tuple], color: str = 'orange'):
         """Highlight specific edges."""
         self.highlighted_edges = edges
+        # Map color names to actual colors (avoiding green/orange of mapping contours and blue nodes)
+        color_map = {
+            'selected': 'lightcoral',
+            'highlight': 'mediumorchid',  # Darker purple for better visibility
+            'orange': 'orange'
+        }
+        actual_color = color_map.get(color, color)
+        
+        # Store colors for highlighted edges
+        for edge in edges:
+            self.edge_colors[edge] = actual_color
         self.draw_graph()
         
     def clear_highlights(self):
@@ -1095,6 +1196,35 @@ class GraphSetupWindow(QMainWindow):
         self.adaptive_font_checkbox.stateChanged.connect(self._on_toggle_adaptive_font)
         viz_layout.addWidget(self.adaptive_font_checkbox)
         
+        # Test Mode Layout Options (only visible in test mode)
+        self.test_layout_spacer = QLabel("")  # Spacer
+        viz_layout.addWidget(self.test_layout_spacer)
+        
+        self.test_layout_label = QLabel("Test Mode Layout:")
+        self.test_layout_label.setStyleSheet("font-size: 12px; color: #616161; margin-top: 8px;")
+        viz_layout.addWidget(self.test_layout_label)
+        
+        self.test_layout_vertical = QRadioButton("Vertical (Graph Top, Map Bottom)")
+        self.test_layout_vertical.setChecked(True)  # Default
+        self.test_layout_vertical.toggled.connect(self._on_test_layout_changed)
+        viz_layout.addWidget(self.test_layout_vertical)
+        
+        self.test_layout_horizontal = QRadioButton("Horizontal (Map Left, Graph Right)")
+        self.test_layout_horizontal.toggled.connect(self._on_test_layout_changed)
+        viz_layout.addWidget(self.test_layout_horizontal)
+        
+        # Store test mode widgets for show/hide
+        self.test_mode_widgets = [
+            self.test_layout_spacer,
+            self.test_layout_label,
+            self.test_layout_vertical,
+            self.test_layout_horizontal
+        ]
+        
+        # Initially hide test mode widgets (will be shown when test mode is activated)
+        for widget in self.test_mode_widgets:
+            widget.hide()
+        
         layout.addWidget(viz_group)
         
         return panel
@@ -1360,59 +1490,65 @@ class GraphSetupWindow(QMainWindow):
         return widget
         
     def _create_test_controls(self) -> QWidget:
-        """Create test mode controls."""
+        """Create simplified test mode controls."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         
-        # Instructions
+        # Simple Instructions
         instructions = QLabel(
-            "Test Mode Instructions:\n\n"
-            "• Click on the map to see which graph element is highlighted\n"
-            "• Click on graph nodes/edges to see map regions\n"
-            "• Use the load button to test with saved mappings\n"
-            "• Current mapping is automatically available for testing"
+            "Test Mode:\n"
+            "• Click map to highlight graph element\n"
+            "• Select element below to highlight map regions"
         )
         instructions.setStyleSheet(
             "background-color: #f8f9fa; border: 1px solid #dee2e6; "
-            "border-radius: 6px; padding: 12px; font-size: 12px; color: #495057;"
+            "border-radius: 6px; padding: 8px; font-size: 11px;"
         )
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
         
-        # Progress info
-        self.progress_info = QLabel("No mappings yet")
-        self.progress_info.setStyleSheet("font-weight: 600; color: #616161; padding: 8px;")
-        layout.addWidget(self.progress_info)
+        # Element selection
+        element_group = QGroupBox("Graph Element Selection")
+        element_layout = QVBoxLayout(element_group)
         
-        # File operations
-        file_group = QGroupBox("File Operations")
-        file_layout = QVBoxLayout(file_group)
+        # Dropdown and select button
+        selection_layout = QHBoxLayout()
+        selection_layout.addWidget(QLabel("Element:"))
         
-        file_buttons = QHBoxLayout()
-        self.save_button = QPushButton("Save Mapping")
-        self.save_button.clicked.connect(self._on_save_mapping)
-        file_buttons.addWidget(self.save_button)
+        self.test_element_combo = QComboBox()
+        self.test_element_combo.setMinimumWidth(200)
+        selection_layout.addWidget(self.test_element_combo)
         
-        self.load_button = QPushButton("Load Mapping")
-        self.load_button.clicked.connect(self._on_load_mapping)
-        file_buttons.addWidget(self.load_button)
+        self.test_select_button = QPushButton("Select")
+        self.test_select_button.clicked.connect(self._on_test_select_element)
+        selection_layout.addWidget(self.test_select_button)
         
-        file_layout.addLayout(file_buttons)
-        layout.addWidget(file_group)
+        element_layout.addLayout(selection_layout)
+        layout.addWidget(element_group)
         
-        # Test results display
-        results_group = QGroupBox("Test Results")
-        results_layout = QVBoxLayout(results_group)
+        # Control buttons
+        control_layout = QHBoxLayout()
         
-        self.test_result_label = QLabel("Click on map or graph to test...")
-        self.test_result_label.setStyleSheet(
+        self.test_load_button = QPushButton("Load Mapping")
+        self.test_load_button.clicked.connect(self._on_load_intermediate_mapping)
+        control_layout.addWidget(self.test_load_button)
+        
+        self.test_clear_button = QPushButton("Clear All")
+        self.test_clear_button.clicked.connect(self._on_clear_test_markings)
+        control_layout.addWidget(self.test_clear_button)
+        
+        layout.addLayout(control_layout)
+        
+        # Current selection info
+        self.test_info_label = QLabel("No selection")
+        self.test_info_label.setStyleSheet(
             "background-color: white; border: 1px solid #ccc; "
-            "border-radius: 4px; padding: 8px; min-height: 60px;"
+            "border-radius: 4px; padding: 6px; font-size: 11px;"
         )
-        self.test_result_label.setWordWrap(True)
-        results_layout.addWidget(self.test_result_label)
+        layout.addWidget(self.test_info_label)
         
-        layout.addWidget(results_group)
+        # Add stretch to push everything to top
+        layout.addStretch()
         
         return widget
         
@@ -1420,27 +1556,42 @@ class GraphSetupWindow(QMainWindow):
         """Handle grid mode selection."""
         try:
             if checked:
+                # Check for unsaved progress before switching
+                if not self._confirm_mode_switch("Grid Setup"):
+                    # User cancelled, revert button state
+                    self.grid_mode_button.setChecked(False)
+                    return
                 self.manual_mode_button.setChecked(False)
                 self.test_mode_button.setChecked(False)
                 self.setup_mode = 'grid'
                 self.mode_stack.setCurrentIndex(1)  # Grid controls
                 
-                # Reset and initialize for grid mode with better error handling
+                # Always reset to fresh state when switching modes
                 try:
-                    # Skip reset if we're loading an intermediate mapping
-                    if not getattr(self, '_loading_intermediate', False):
-                        self._reset_mapping_state()
+                    self._reset_mapping_state()
                     self._init_element_queue()
                     self._populate_element_combos()
                     self._update_progress_display()
+                    
+                    # Set mode-specific visualization defaults
+                    self._set_mode_specific_defaults('grid')
                 except Exception as init_error:
                     self.status_bar.showMessage(f"Error initializing grid mode: {str(init_error)}")
                     print(f"Grid mode initialization error: {init_error}")
                     return
                 
+                # Ensure we're back to normal layout after test mode
+                if hasattr(self, 'test_splitter'):
+                    self._restore_normal_layout()
+                
                 # Enable drawing mode
                 if hasattr(self.map_widget, 'set_interaction_mode'):
                     self.map_widget.set_interaction_mode('none')
+                elif self.map_widget:
+                    pass  # Grid mode doesn't need special interaction mode
+                else:
+                    print("Warning: map_widget not available after layout restoration")
+                    
                 self.status_bar.showMessage("Grid Setup Mode - Configure and place grid")
             else:
                 self.mode_stack.setCurrentIndex(0)  # Empty
@@ -1454,28 +1605,53 @@ class GraphSetupWindow(QMainWindow):
         """Handle manual drawing mode selection."""
         try:
             if checked:
+                # Check for unsaved progress before switching
+                if not self._confirm_mode_switch("Manual Drawing"):
+                    # User cancelled, revert button state
+                    self.manual_mode_button.setChecked(False)
+                    return
                 self.grid_mode_button.setChecked(False)
                 self.test_mode_button.setChecked(False)
                 self.setup_mode = 'manual'
                 self.mode_stack.setCurrentIndex(2)  # Manual controls
                 
-                # Reset and initialize for manual mode with better error handling
+                # Always reset to fresh state when switching modes
                 try:
-                    # Skip reset if we're loading an intermediate mapping
-                    if not getattr(self, '_loading_intermediate', False):
-                        self._reset_mapping_state()
+                    self._reset_mapping_state()
                     self._init_element_queue()
                     self._populate_element_combos()
                     self._update_progress_display()
+                    
+                    # Set mode-specific visualization defaults
+                    self._set_mode_specific_defaults('manual')
                 except Exception as init_error:
                     self.status_bar.showMessage(f"Error initializing manual mode: {str(init_error)}")
                     print(f"Manual mode initialization error: {init_error}")
                     return
                 
+                # Ensure we're back to normal layout after test mode
+                if hasattr(self, 'test_splitter'):
+                    self._restore_normal_layout()
+                
                 # Enable drawing mode
                 if hasattr(self.map_widget, 'set_interaction_mode'):
-                    self.map_widget.set_interaction_mode('draw_contour')
-                self.status_bar.showMessage("Manual Drawing Mode - Left click to draw points")
+                    try:
+                        self.map_widget.set_interaction_mode('draw_contour')
+                        self.status_bar.showMessage("Manual Drawing Mode - Left click to draw points")
+                        
+                        # Connect map widget mouse events to update button states
+                        if not hasattr(self, '_original_map_mouse_press'):
+                            self._original_map_mouse_press = self.map_widget.mousePressEvent
+                        self.map_widget.mousePressEvent = self._wrap_map_mouse_press(self._original_map_mouse_press)
+                        
+                    except RuntimeError as e:
+                        print(f"Error setting map widget interaction mode: {e}")
+                        self.status_bar.showMessage("Manual mode activated - but drawing may not work properly")
+                elif self.map_widget:
+                    # If set_interaction_mode doesn't exist, just show the status
+                    self.status_bar.showMessage("Manual Drawing Mode - Left click to draw points")
+                else:
+                    print("Warning: map_widget not available after layout restoration")
             else:
                 self.mode_stack.setCurrentIndex(0)  # Empty
         except Exception as e:
@@ -1488,17 +1664,45 @@ class GraphSetupWindow(QMainWindow):
         """Handle test mode selection."""
         try:
             if checked:
+                # Check for unsaved progress before switching
+                if not self._confirm_mode_switch("Test"):
+                    # User cancelled, revert button state
+                    self.test_mode_button.setChecked(False)
+                    return
                 self.grid_mode_button.setChecked(False)
                 self.manual_mode_button.setChecked(False)
                 self.setup_mode = 'test'
                 self.mode_stack.setCurrentIndex(3)  # Test controls
                 
+                # Always reset to fresh state when switching modes
+                try:
+                    self._reset_mapping_state()
+                except Exception as reset_error:
+                    self.status_bar.showMessage(f"Error resetting state for test mode: {str(reset_error)}")
+                    print(f"Test mode reset error: {reset_error}")
+                
+                # Switch to test mode layout
+                self._setup_test_layout()
+                
                 # Enable test interactions
-                if hasattr(self.map_widget, 'set_interaction_mode'):
-                    self.map_widget.set_interaction_mode('test')
+                if hasattr(self.test_map_widget, 'set_interaction_mode'):
+                    self.test_map_widget.set_interaction_mode('test')
+                    
+                # Initialize test mode state
+                self.test_selected_point = None  # Selected point on map
+                self.test_selected_element = None  # Selected graph element (node or edge)
+                
+                # Set mode-specific visualization defaults
+                self._set_mode_specific_defaults('test')
+                
+                # Populate element selection dropdown
+                self._populate_test_element_combo()
+                    
                 self._update_progress_display()
-                self.status_bar.showMessage("Test Mode - Click map or graph to test mapping")
+                self.status_bar.showMessage("Test Mode - Click map or select element to test mapping")
             else:
+                # Restore normal layout
+                self._restore_normal_layout()
                 self.mode_stack.setCurrentIndex(0)  # Empty
         except Exception as e:
             self.status_bar.showMessage(f"Error switching to test mode: {str(e)}")
@@ -1608,20 +1812,104 @@ class GraphSetupWindow(QMainWindow):
     
     
     def _reset_mapping_state(self):
-        """Reset all mapping state when switching modes."""
+        """Reset all mapping state when switching modes to fresh initial state."""
+        # Clear all visual elements from map widget (this handles grid, contours, mappings)
         self.map_widget.reset_all()
+        
+        # Reset core mapping data
         self.mapping = SpatialMapping(self.graph)
         self.mapped_elements.clear()
         self.mapping_history.clear()
         self.element_queue.clear()
         self.current_element = None
+        
+        # Clear graph highlights
         self.graph_widget.clear_highlights()
-        self._update_progress()
+        
+        # Reset grid-specific state
+        if hasattr(self, 'grid_placed'):
+            self.grid_placed = False
+        if hasattr(self, 'selected_cells'):
+            self.selected_cells.clear()
+        
+        # Reset manual mode specific state
+        if hasattr(self, 'contour_list'):
+            self.contour_list.clear()
+        if hasattr(self, 'highlighted_contour_id'):
+            self.highlighted_contour_id = None
         
         # Reset button states
         if hasattr(self, 'undo_grid_button'):
             self.undo_grid_button.setEnabled(False)
-        # Manual mode UI updates handled elsewhere
+        if hasattr(self, 'assign_button'):
+            self.assign_button.setEnabled(False)
+        if hasattr(self, 'next_element_button'):
+            self.next_element_button.setEnabled(False)
+        if hasattr(self, 'place_grid_button'):
+            self.place_grid_button.setEnabled(True)
+        if hasattr(self, 'clear_contour_button'):
+            self.clear_contour_button.setEnabled(False)
+        if hasattr(self, 'commit_contour_button'):
+            self.commit_contour_button.setEnabled(False)
+            
+        # Update progress display
+        self._update_progress()
+        
+        # Clear status bar
+        self.status_bar.clearMessage()
+    
+    def _set_mode_specific_defaults(self, mode: str):
+        """Set mode-specific default visualization options."""
+        if mode == 'grid':
+            # Grid mode: Show mappings and labels, adaptive font enabled
+            self.show_mappings_checkbox.setChecked(True)
+            self.show_labels_checkbox.setChecked(True) 
+            self.adaptive_font_checkbox.setChecked(True)
+            # Hide test mode widgets
+            for widget in self.test_mode_widgets:
+                widget.hide()
+                
+        elif mode == 'manual':
+            # Manual mode: Show mappings and labels, adaptive font enabled
+            self.show_mappings_checkbox.setChecked(True)
+            self.show_labels_checkbox.setChecked(True)
+            self.adaptive_font_checkbox.setChecked(True)
+            # Hide test mode widgets
+            for widget in self.test_mode_widgets:
+                widget.hide()
+                
+        elif mode == 'test':
+            # Test mode: Start clean (unchecked) for testing clarity
+            self.show_mappings_checkbox.setChecked(False)
+            self.show_labels_checkbox.setChecked(False)
+            self.adaptive_font_checkbox.setChecked(False)
+            # Show test mode widgets
+            for widget in self.test_mode_widgets:
+                widget.show()
+    
+    def _wrap_map_mouse_press(self, original_mouse_press):
+        """Wrap the map widget's mouse press event to update button states."""
+        def wrapper(event):
+            # Call original mouse press handler
+            result = original_mouse_press(event)
+            
+            # Update button states after mouse press in manual mode
+            if self.setup_mode == 'manual':
+                self._update_manual_mode_buttons()
+                
+            return result
+        return wrapper
+    
+    def _update_manual_mode_buttons(self):
+        """Update manual mode button states based on current contour."""
+        if hasattr(self, 'map_widget') and hasattr(self.map_widget, 'current_contour'):
+            has_points = len(self.map_widget.current_contour) > 0
+            
+            # Enable clear/commit buttons if there are points
+            if hasattr(self, 'clear_contour_button'):
+                self.clear_contour_button.setEnabled(has_points)
+            if hasattr(self, 'commit_contour_button'):
+                self.commit_contour_button.setEnabled(has_points and len(self.map_widget.current_contour) > 2)
             
     def _select_next_element(self):
         """Select the next element to map."""
@@ -2094,21 +2382,38 @@ class GraphSetupWindow(QMainWindow):
                                       "This mapping was created in Manual mode and cannot be loaded in Grid mode.")
                     return
                 
-                # Switch to appropriate mode without resetting mapping
-                self._loading_intermediate = True  # Flag to prevent reset during mode switch
-                if loaded_mode == 'grid':
-                    self._on_grid_mode(True)
-                    # Ensure interaction mode is correct for grid
-                    if self.map_widget.grid_enabled:
-                        self.map_widget.set_interaction_mode('select_cells')
-                else:
-                    self._on_manual_mode(True)
-                    # Ensure interaction mode is correct for manual drawing
-                    self.map_widget.set_interaction_mode('draw_contour')
-                self._loading_intermediate = False
+                # Switch to appropriate mode without resetting mapping (unless in test mode)
+                current_mode = None
+                if self.grid_mode_button.isChecked():
+                    current_mode = 'grid'
+                elif self.manual_mode_button.isChecked():
+                    current_mode = 'manual'  
+                elif self.test_mode_button.isChecked():
+                    current_mode = 'test'
                 
-                # Visualize loaded mapping
-                self._visualize_loaded_intermediate_mapping()
+                if current_mode != 'test':  # Only switch modes if not in test mode
+                    self._loading_intermediate = True  # Flag to prevent reset during mode switch
+                    if loaded_mode == 'grid':
+                        self._on_grid_mode(True)
+                        # Ensure interaction mode is correct for grid
+                        if self.map_widget.grid_enabled:
+                            self.map_widget.set_interaction_mode('select_cells')
+                    else:
+                        self._on_manual_mode(True)
+                        # Ensure interaction mode is correct for manual drawing
+                        self.map_widget.set_interaction_mode('draw_contour')
+                    self._loading_intermediate = False
+                else:
+                    # In test mode, just load the mapping without switching modes
+                    # Don't auto-visualize - let user control via Display Options
+                    current_mode = 'test'
+                
+                # Visualize loaded mapping only if not in test mode
+                if current_mode != 'test':
+                    self._visualize_loaded_intermediate_mapping()
+                else:
+                    # In test mode, copy the mapping data to test_map_widget so it can be shown via Display Options
+                    self._copy_mapping_to_test_widget()
                 
                 # Update progress
                 self._update_progress_display()
@@ -2161,9 +2466,17 @@ class GraphSetupWindow(QMainWindow):
     
     def _visualize_loaded_intermediate_mapping(self):
         """Visualize loaded intermediate mapping on the map."""
+        # Determine which map widget to use
+        current_mode = None
+        if self.test_mode_button.isChecked():
+            current_mode = 'test'
+            map_widget = self.test_map_widget
+        else:
+            map_widget = self.map_widget
+            
         # Clear only selections, not mappings
-        self.map_widget.selected_cells.clear()
-        self.map_widget.completed_contours.clear()
+        map_widget.selected_cells.clear()
+        map_widget.completed_contours.clear()
         
         # Clear contour list if it exists (manual mode)
         if hasattr(self, 'contour_list') and self.contour_list is not None:
@@ -2186,22 +2499,22 @@ class GraphSetupWindow(QMainWindow):
                 
                 if isinstance(region, RectangleRegion):  # Grid-based region
                     # Find which cell this rectangle corresponds to
-                    for cell_id, cell_rect in self.map_widget.grid_cells.items():
+                    for cell_id, cell_rect in map_widget.grid_cells.items():
                         # Check if this region matches this cell
                         if (abs(region.x - cell_rect.x()) < 1 and 
                             abs(region.y - cell_rect.y()) < 1 and
                             abs(region.width - cell_rect.width()) < 1 and
                             abs(region.height - cell_rect.height()) < 1):
-                            self.map_widget.add_cell_mapping(cell_id, element_type, element_id, color)
+                            map_widget.add_cell_mapping(cell_id, element_type, element_id, color)
                             break
                 
                 elif isinstance(region, ContourRegion):  # Contour-based region
                     # Restore contour mappings
                     contour_color = QColor(color.red(), color.green(), color.blue(), 150)
-                    self.map_widget.completed_contours.append(
+                    map_widget.completed_contours.append(
                         (region.contour, region_id, contour_color, element_type, element_id)
                     )
-                    self.map_widget.contour_mappings[region_id] = (element_type, element_id)
+                    map_widget.contour_mappings[region_id] = (element_type, element_id)
                     
                     # Add to contour list if we're in manual mode
                     if hasattr(self, 'contour_list') and self.contour_list is not None:
@@ -2211,7 +2524,7 @@ class GraphSetupWindow(QMainWindow):
                         self.contour_list.addItem(item)
         
         # Force widget update
-        self.map_widget.update()
+        map_widget.update()
         
     def _update_grid_status_after_load(self):
         """Update grid-related UI elements after loading."""
@@ -2270,18 +2583,59 @@ class GraphSetupWindow(QMainWindow):
     
     def _on_toggle_mappings(self, state):
         """Toggle visibility of all mappings."""
-        self.map_widget.show_all_mappings = (state == Qt.Checked)
-        self.map_widget.update()
+        try:
+            show_mappings = (state == Qt.Checked)
+            
+            # Clear any test highlights before toggling to avoid conflicts
+            if hasattr(self, 'test_map_widget') and hasattr(self.test_map_widget, 'clear_highlights'):
+                self.test_map_widget.clear_highlights()
+            
+            # Update both map widgets
+            self.map_widget.show_all_mappings = show_mappings
+            self.map_widget.update()
+            
+            # Also update test mode widget if it exists
+            if hasattr(self, 'test_map_widget'):
+                self.test_map_widget.show_all_mappings = show_mappings
+                self.test_map_widget.update()
+                
+        except Exception as e:
+            print(f"Error toggling mappings: {e}")
+            # Don't crash the app, just log the error
         
     def _on_toggle_labels(self, state):
         """Toggle visibility of cell labels."""
-        self.map_widget.show_cell_labels = (state == Qt.Checked)
-        self.map_widget.update()
+        try:
+            show_labels = (state == Qt.Checked)
+            self.map_widget.show_cell_labels = show_labels
+            self.map_widget.update()
+            
+            # Also update test mode widget if it exists
+            if hasattr(self, 'test_map_widget'):
+                self.test_map_widget.show_cell_labels = show_labels
+                self.test_map_widget.update()
+        except Exception as e:
+            print(f"Error toggling labels: {e}")
         
     def _on_toggle_adaptive_font(self, state):
         """Toggle adaptive font sizing."""
-        self.map_widget.adaptive_font_size = (state == Qt.Checked)
-        self.map_widget.update()
+        try:
+            adaptive_font = (state == Qt.Checked)
+            self.map_widget.adaptive_font_size = adaptive_font
+            self.map_widget.update()
+            
+            # Also update test mode widget if it exists  
+            if hasattr(self, 'test_map_widget'):
+                self.test_map_widget.adaptive_font_size = adaptive_font
+                self.test_map_widget.update()
+        except Exception as e:
+            print(f"Error toggling adaptive font: {e}")
+    
+    def _on_test_layout_changed(self):
+        """Handle test mode layout orientation change."""
+        if self.setup_mode == 'test':
+            # Re-setup the test layout with new orientation
+            self._setup_test_layout()
     
     def _on_clear_all(self):
         """Clear all mappings and start fresh."""
@@ -2401,9 +2755,361 @@ class GraphSetupWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to launch test mode: {e}")
                     
+    def _setup_test_layout(self):
+        """Setup test mode layout based on orientation preference."""
+        if not hasattr(self, 'original_layout'):
+            # Store the original layout for restoration
+            self.original_control_panel = self.control_panel
+            self.original_views_widget = self.centralWidget().layout().itemAt(1).widget()
+            
+        # Create test layout widgets if they don't exist
+        if not hasattr(self, 'test_map_widget'):
+            self.test_map_widget = MapWidget(self.map_image)
+            self.test_map_widget.setMinimumSize(400, 300)
+        
+        if not hasattr(self, 'test_graph_widget'):
+            self.test_graph_widget = GraphWidget(self.graph)
+            self.test_graph_widget.setMinimumSize(400, 300)
+        
+        # Clear the main layout
+        main_layout = self.centralWidget().layout()
+        while main_layout.count():
+            child = main_layout.takeAt(0)
+            if child.widget():
+                child.widget().setParent(None)
+        
+        # Determine orientation
+        is_vertical = self.test_layout_vertical.isChecked()
+        
+        # Create the test splitter
+        if not hasattr(self, 'test_splitter'):
+            self.test_splitter = QSplitter()
+        
+        # Set orientation
+        if is_vertical:
+            self.test_splitter.setOrientation(Qt.Vertical)
+            # Graph on top, map on bottom
+            self.test_splitter.addWidget(self.test_graph_widget)
+            self.test_splitter.addWidget(self.test_map_widget)
+            self.test_splitter.setSizes([1, 1])  # Equal sizes
+        else:
+            self.test_splitter.setOrientation(Qt.Horizontal)
+            # Map on left, graph on right
+            self.test_splitter.addWidget(self.test_map_widget)
+            self.test_splitter.addWidget(self.test_graph_widget)
+            self.test_splitter.setSizes([1, 1])  # Equal sizes
+        
+        # Add control panel (minimal) and test splitter to main layout
+        main_layout.addWidget(self.control_panel)
+        main_layout.addWidget(self.test_splitter)
+        
+        # Connect test mode events
+        # Store original mousePressEvent for restoration
+        self.original_mouse_press = self.test_map_widget.mousePressEvent
+        self.test_map_widget.mousePressEvent = self._on_test_map_click
+        # Note: Graph click events removed - using dropdown selection instead
+        
+    def _restore_normal_layout(self):
+        """Restore the normal layout when leaving test mode."""
+        if hasattr(self, 'original_control_panel') and hasattr(self, 'original_views_widget'):
+            # Clear current layout more carefully - only remove what we added
+            main_layout = self.centralWidget().layout()
+            
+            # Store widgets we want to preserve
+            widgets_to_preserve = [self.original_control_panel, self.original_views_widget]
+            
+            # Remove only test mode widgets, not the originals
+            widgets_to_remove = []
+            for i in range(main_layout.count()):
+                item = main_layout.itemAt(i)
+                if item and item.widget():
+                    widget = item.widget()
+                    # Only remove if it's not one of our preserved widgets
+                    if widget not in widgets_to_preserve:
+                        widgets_to_remove.append(widget)
+            
+            # Remove the test mode widgets
+            for widget in widgets_to_remove:
+                main_layout.removeWidget(widget)
+                # Don't delete - just remove from layout
+            
+            # Make sure our original widgets are in the layout
+            if main_layout.indexOf(self.original_control_panel) == -1:
+                main_layout.addWidget(self.original_control_panel)
+            if main_layout.indexOf(self.original_views_widget) == -1:
+                main_layout.addWidget(self.original_views_widget)
+            
+            # Restore original map widget reference to self.map_widget
+            if hasattr(self, 'original_views_widget'):
+                # The map widget should be the second child (index 1) of the splitter
+                views_splitter = self.original_views_widget
+                if hasattr(views_splitter, 'widget') and views_splitter.widget(1):
+                    self.map_widget = views_splitter.widget(1)
+                else:
+                    # Try to find the map widget by name/type
+                    for child in views_splitter.findChildren(MapWidget):
+                        self.map_widget = child
+                        break
+            
+            # Restore original mousePressEvent if it was stored
+            if hasattr(self, 'test_map_widget') and hasattr(self, 'original_mouse_press'):
+                self.test_map_widget.mousePressEvent = self.original_mouse_press
+            
+            # Clean up test mode references
+            if hasattr(self, 'test_splitter'):
+                del self.test_splitter
+            if hasattr(self, 'test_map_widget'):
+                del self.test_map_widget
+            
+    def _on_test_map_click(self, event):
+        """Handle map click in test mode."""
+        # Handle non-left clicks with original functionality (panning, etc.)
+        if event.button() != Qt.LeftButton:
+            if hasattr(self, 'original_mouse_press'):
+                self.original_mouse_press(event)
+            return
+        
+        # Get click position in image coordinates
+        x = (event.x() - self.test_map_widget.offset_x) / self.test_map_widget.scale_factor
+        y = (event.y() - self.test_map_widget.offset_y) / self.test_map_widget.scale_factor
+        
+        # Clear previous selection
+        self._clear_test_selections()
+        
+        # Find mapped element at this position
+        element_found = self._find_element_at_position(x, y)
+        
+        if element_found:
+            elem_type, elem_id = element_found
+            self.test_selected_element = (elem_type, elem_id)
+            self.test_selected_point = (x, y)
+            
+            # Highlight graph element with highlight color (yellow)
+            self.test_graph_widget.clear_highlights()
+            if elem_type == 'node':
+                self.test_graph_widget.highlight_nodes({elem_id}, color='highlight')
+                self.test_info_label.setText(f"Found: Node {elem_id}")
+            else:
+                self.test_graph_widget.highlight_edges({elem_id}, color='highlight')
+                self.test_info_label.setText(f"Found: Edge {elem_id}")
+        else:
+            self.test_info_label.setText(f"No mapping at ({x:.0f}, {y:.0f})")
+            
+    def _on_test_node_click(self, node_id):
+        """Handle node click in test mode."""
+        # Clear previous selection
+        self._clear_test_selections()
+        
+        self.test_selected_element = ('node', node_id)
+        
+        # Highlight node with selection color
+        self.test_graph_widget.clear_highlights()
+        self.test_graph_widget.highlight_nodes({node_id}, color='selected')
+        
+        # Highlight mapped regions on map
+        self._highlight_element_regions('node', node_id)
+        
+        self.test_info_label.setText(f"Selected: Node {node_id}")
+        
+    def _on_test_edge_click(self, edge):
+        """Handle edge click in test mode."""
+        # Clear previous selection
+        self._clear_test_selections()
+        
+        self.test_selected_element = ('edge', edge)
+        
+        # Highlight edge with selection color
+        self.test_graph_widget.clear_highlights()
+        self.test_graph_widget.highlight_edges({edge}, color='selected')
+        
+        # Highlight mapped regions on map
+        self._highlight_element_regions('edge', edge)
+        
+        self.test_info_label.setText(f"Selected: Edge {edge}")
+        
+    def _on_clear_test_markings(self):
+        """Clear all test mode markings."""
+        self._clear_test_selections()
+        self.test_info_label.setText("No selection")
+        
+    def _on_test_select_element(self):
+        """Handle element selection from dropdown in test mode."""
+        if not hasattr(self, 'test_element_combo'):
+            return
+            
+        selected_text = self.test_element_combo.currentText()
+        if not selected_text or selected_text == "-- Select Element --":
+            return
+            
+        # Parse the selected text to get element type and id
+        # Format: "Node: 1" or "Edge: (1, 2)"
+        if selected_text.startswith("Node: "):
+            elem_type = 'node'
+            elem_id = int(selected_text.replace("Node: ", ""))
+            self._on_test_node_click(elem_id)
+        elif selected_text.startswith("Edge: "):
+            elem_type = 'edge'
+            edge_str = selected_text.replace("Edge: ", "")
+            # Parse tuple format "(1, 2)" 
+            edge_str = edge_str.strip("()")
+            parts = edge_str.split(", ")
+            elem_id = (int(parts[0]), int(parts[1]))
+            self._on_test_edge_click(elem_id)
+    
+    def _populate_test_element_combo(self):
+        """Populate the test mode element dropdown with all graph elements."""
+        if not hasattr(self, 'test_element_combo') or not hasattr(self, 'graph'):
+            return
+            
+        self.test_element_combo.clear()
+        self.test_element_combo.addItem("-- Select Element --")
+        
+        # Add all nodes
+        for node in sorted(self.graph.nodes):
+            self.test_element_combo.addItem(f"Node: {node}")
+            
+        # Add all edges  
+        for edge in sorted(self.graph.edges):
+            self.test_element_combo.addItem(f"Edge: {edge}")
+        
+    def _clear_test_selections(self):
+        """Clear current test selections and highlights."""
+        try:
+            if hasattr(self, 'test_graph_widget'):
+                self.test_graph_widget.clear_highlights()
+            if hasattr(self, 'test_map_widget') and hasattr(self.test_map_widget, 'clear_highlights'):
+                self.test_map_widget.clear_highlights()
+            self.test_selected_point = None
+            self.test_selected_element = None
+        except Exception as e:
+            print(f"Error clearing test selections: {e}")
+            # Don't crash, reset state anyway
+            self.test_selected_point = None
+            self.test_selected_element = None
+        
+    def _find_element_at_position(self, x, y):
+        """Find which graph element is mapped at the given position."""
+        # Check node regions first
+        for node_id, regions in getattr(self.mapping, '_node_to_regions', {}).items():
+            for region_id in regions:
+                region = self.mapping._regions.get(region_id)
+                if region and region.contains_point(x, y):
+                    return ('node', node_id)
+        
+        # Check edge regions
+        for edge_id, regions in getattr(self.mapping, '_edge_to_regions', {}).items():
+            for region_id in regions:
+                region = self.mapping._regions.get(region_id)
+                if region and region.contains_point(x, y):
+                    return ('edge', edge_id)
+        
+        return None
+        
+    def _highlight_element_regions(self, elem_type, elem_id):
+        """Highlight all regions mapped to the given element."""
+        if not hasattr(self, 'mapping') or self.mapping is None:
+            return
+            
+        try:
+            if elem_type == 'node':
+                regions_dict = getattr(self.mapping, '_node_to_regions', {})
+                regions = regions_dict.get(elem_id, [])
+            else:
+                regions_dict = getattr(self.mapping, '_edge_to_regions', {})
+                regions = regions_dict.get(elem_id, [])
+                
+            for region_id in regions:
+                if hasattr(self.mapping, '_regions'):
+                    region = self.mapping._regions.get(region_id)
+                    if region:
+                        # Highlight region on map with corresponding color (yellow)
+                        self.test_map_widget.highlight_region(region_id, color_type='highlight')
+                
+        except AttributeError as e:
+            # Don't fail the whole operation
+            pass
+                
     def get_mapping(self) -> SpatialMapping:
         """Get the current mapping."""
         return self.mapping
+    
+    def _has_unsaved_progress(self) -> bool:
+        """Check if there's any unsaved progress that would be lost."""
+        # Check if there are any mapped regions
+        if hasattr(self, 'mapping') and self.mapping:
+            has_regions = bool(getattr(self.mapping, '_regions', {}))
+            if has_regions:
+                return True
+        
+        # Check if there are selected cells in grid mode
+        if hasattr(self, 'map_widget') and hasattr(self.map_widget, 'selected_cells'):
+            if self.map_widget.selected_cells:
+                return True
+                
+        # Check if there's a current contour being drawn
+        if hasattr(self, 'map_widget') and hasattr(self.map_widget, 'current_contour'):
+            if self.map_widget.current_contour:
+                return True
+                
+        # Check if there are completed contours
+        if hasattr(self, 'map_widget') and hasattr(self.map_widget, 'completed_contours'):
+            if self.map_widget.completed_contours:
+                return True
+                
+        return False
+    
+    def _confirm_mode_switch(self, new_mode: str) -> bool:
+        """Ask user to confirm mode switch since we always reset to fresh state."""
+        if not self._has_unsaved_progress():
+            return True
+            
+        reply = QMessageBox.question(
+            self, 
+            "Switch Mode", 
+            f"Switching to {new_mode} mode will clear all current progress and start fresh.\n\nDo you want to continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        return reply == QMessageBox.Yes
+    
+    def _copy_mapping_to_test_widget(self):
+        """Copy mapping data to test_map_widget for display via Show All Mappings toggle."""
+        if not hasattr(self, 'test_map_widget') or not hasattr(self, 'mapping'):
+            return
+            
+        # Clear existing data
+        self.test_map_widget.completed_contours.clear()
+        self.test_map_widget.grid_cells.clear()
+        
+        # Copy all mapped regions to test_map_widget
+        for region_id, region in self.mapping._regions.items():
+            element_info = self.mapping._region_to_element.get(region_id)
+            if element_info:
+                element_type, element_id = element_info
+                
+                # Determine color based on element type
+                if element_type == 'node':
+                    color = QColor(0, 255, 0, 100)  # Green for nodes
+                else:
+                    color = QColor(255, 165, 0, 100)  # Orange for edges
+                
+                # Handle different region types
+                from .regions import RectangleRegion, ContourRegion
+                
+                if isinstance(region, RectangleRegion):  # Grid-based region
+                    # Convert to grid cell format
+                    cell_id = f"cell_{region_id}"
+                    cell_rect = QRectF(region.x, region.y, region.width, region.height)
+                    self.test_map_widget.grid_cells[cell_id] = cell_rect
+                    self.test_map_widget.add_cell_mapping(cell_id, element_type, element_id, color)
+                
+                elif isinstance(region, ContourRegion):  # Contour-based region
+                    # Add to completed contours
+                    contour_color = QColor(color.red(), color.green(), color.blue(), 150)
+                    self.test_map_widget.completed_contours.append(
+                        (region.contour, region_id, contour_color, element_type, element_id)
+                    )
+                    self.test_map_widget.contour_mappings[region_id] = (element_type, element_id)
 
 
 def launch_setup_gui(graph: GraphStructure, map_image: np.ndarray) -> Optional[SpatialMapping]:
