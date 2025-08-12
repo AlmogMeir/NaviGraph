@@ -108,9 +108,10 @@ class MapWidget(QWidget):
         self.setMinimumSize(800, 600)
         self.setFocusPolicy(Qt.StrongFocus)  # Enable keyboard focus
         
-        # Enable tooltips
+        # Enable tooltips with faster response
         from PyQt5.QtWidgets import QToolTip
         self.setToolTip("")
+        self.current_tooltip = ""  # Track tooltip state for immediate updates
         
     def set_interaction_mode(self, mode: str):
         """Set the current interaction mode."""
@@ -317,10 +318,6 @@ class MapWidget(QWidget):
                 
         # Draw completed contours
         if self.show_all_mappings:
-            font = painter.font()
-            font.setPointSize(10)
-            painter.setFont(font)
-            
             for contour_data in self.completed_contours:
                 points, region_id, color = contour_data[:3]
                 if len(contour_data) > 3:
@@ -338,15 +335,51 @@ class MapWidget(QWidget):
                     painter.setBrush(QBrush(color))
                     painter.drawPolygon(polygon)
                     
-                    # Draw element ID at centroid
-                    if elem_type and elem_id:
-                        centroid = polygon.boundingRect().center()
+                    # Draw element label at centroid with adaptive font size
+                    if elem_type and elem_id is not None and self.show_cell_labels:
+                        bounding_rect = polygon.boundingRect()
+                        centroid = bounding_rect.center()
+                        
+                        # Calculate adaptive font size based on contour size
+                        contour_area = bounding_rect.width() * bounding_rect.height()
+                        if self.adaptive_font_size:
+                            # Scale-aware font sizing
+                            scale_adjusted_area = contour_area / (self.scale_factor * self.scale_factor)
+                            if scale_adjusted_area > 5000:
+                                font_size = 14
+                            elif scale_adjusted_area > 2000:
+                                font_size = 12
+                            elif scale_adjusted_area > 1000:
+                                font_size = 10
+                            elif scale_adjusted_area > 500:
+                                font_size = 9
+                            elif scale_adjusted_area > 200:
+                                font_size = 8
+                            elif scale_adjusted_area > 100:
+                                font_size = 7
+                            else:
+                                font_size = 6
+                        else:
+                            font_size = 9
+                        
+                        font = painter.font()
+                        font.setPointSize(font_size)
+                        painter.setFont(font)
+                        
                         if elem_type == 'node':
                             label = f"N:{elem_id}"
                         else:
                             label = f"E:{elem_id[0]},{elem_id[1]}" if isinstance(elem_id, tuple) else f"E:{elem_id}"
+                        
+                        # Calculate text size for centering
+                        text_rect = painter.fontMetrics().boundingRect(label)
+                        text_center = QPointF(
+                            centroid.x() - text_rect.width() / 2,
+                            centroid.y() + text_rect.height() / 4  # Adjust for vertical centering
+                        )
+                        
                         painter.setPen(QPen(color.darker().darker(), 1))
-                        painter.drawText(centroid, label)
+                        painter.drawText(text_center, label)
                 
         # Draw current contour being drawn
         if self.current_contour:
@@ -441,13 +474,13 @@ class MapWidget(QWidget):
             self.update()
             return
             
+        # Convert to image coordinates
+        x = (event.x() - self.offset_x) / self.scale_factor
+        y = (event.y() - self.offset_y) / self.scale_factor
+        tooltip_text = ""
+        
         if self.grid_enabled:
-            # Convert to image coordinates
-            x = (event.x() - self.offset_x) / self.scale_factor
-            y = (event.y() - self.offset_y) / self.scale_factor
-            
             # Check if mouse is over a mapped cell
-            tooltip_text = ""
             for cell_id, rect in self.grid_cells.items():
                 if rect.contains(QPointF(x, y)) and cell_id in self.cell_mappings:
                     elem_type, elem_id = self.cell_mappings[cell_id]
@@ -459,8 +492,54 @@ class MapWidget(QWidget):
                         else:
                             tooltip_text = f"Edge: {elem_id}\nCell: {cell_id}"
                     break
+        else:
+            # Check if mouse is over a contour (manual mode)
+            from PyQt5.QtGui import QPainterPath
+            point = QPointF(x, y)
+            found_contour = False
             
+            for contour_data in self.completed_contours:
+                if len(contour_data) >= 5:
+                    points, region_id, color, elem_type, elem_id = contour_data[:5]
+                elif len(contour_data) >= 3:
+                    points, region_id, color = contour_data[:3]
+                    elem_type, elem_id = self.contour_mappings.get(region_id, (None, None))
+                else:
+                    continue
+                    
+                if elem_type and elem_id is not None and len(points) > 2:
+                    # Create path from contour points
+                    path = QPainterPath()
+                    path.moveTo(points[0][0], points[0][1])
+                    for pt in points[1:]:
+                        path.lineTo(pt[0], pt[1])
+                    path.closeSubpath()
+                    
+                    # Check if point is inside contour
+                    if path.contains(point):
+                        if elem_type == 'node':
+                            tooltip_text = f"Node: {elem_id}\nRegion: {region_id}"
+                        else:
+                            if isinstance(elem_id, tuple):
+                                tooltip_text = f"Edge: {elem_id[0]} → {elem_id[1]}\nRegion: {region_id}"
+                            else:
+                                tooltip_text = f"Edge: {elem_id}\nRegion: {region_id}"
+                        found_contour = True
+                        break
+            
+            # Clear tooltip if not over any contour
+            if not found_contour:
+                tooltip_text = ""
+                        
+        # Only update tooltip if it changed (improves responsiveness)
+        if tooltip_text != self.current_tooltip:
+            self.current_tooltip = tooltip_text
             self.setToolTip(tooltip_text)
+            
+            # Force immediate hide when clearing tooltip
+            if not tooltip_text:
+                from PyQt5.QtWidgets import QToolTip
+                QToolTip.hideText()
     
     def wheelEvent(self, event):
         """Handle mouse wheel events for zooming."""
@@ -1186,10 +1265,10 @@ class GraphSetupWindow(QMainWindow):
         layout.addWidget(assign_group)
         
         # Save/Load Mapping buttons
-        mapping_group = QGroupBox("Intermediate Mappings")
+        mapping_group = QGroupBox("File Operations")
         mapping_layout = QHBoxLayout(mapping_group)
         
-        self.save_intermediate_button = QPushButton("Save Current Mapping")
+        self.save_intermediate_button = QPushButton("Save Mapping")
         self.save_intermediate_button.clicked.connect(self._on_save_intermediate_mapping)
         mapping_layout.addWidget(self.save_intermediate_button)
         
@@ -1268,7 +1347,7 @@ class GraphSetupWindow(QMainWindow):
         control_group = QGroupBox("File Operations")
         control_group_layout = QHBoxLayout(control_group)
         
-        self.manual_save_button = QPushButton("Save Current Mapping")
+        self.manual_save_button = QPushButton("Save Mapping")
         self.manual_save_button.clicked.connect(self._on_save_intermediate_mapping)
         control_group_layout.addWidget(self.manual_save_button)
         
