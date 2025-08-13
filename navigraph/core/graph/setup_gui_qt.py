@@ -2374,7 +2374,7 @@ class GraphSetupWindow(QMainWindow):
         self.map_widget.clear_contours()
         
         # Visualize node regions
-        for node_id, regions in self.mapping.node_to_regions.items():
+        for node_id, regions in getattr(self.mapping, '_node_to_regions', {}).items():
             color = QColor(150, 255, 150, 100)
             for region in regions:
                 if isinstance(region, RectangleRegion):
@@ -2386,7 +2386,7 @@ class GraphSetupWindow(QMainWindow):
                     self.map_widget.add_contour(region.points, region.region_id, 'node', node_id, color)
                     
         # Visualize edge regions
-        for edge, regions in self.mapping.edge_to_regions.items():
+        for edge, regions in getattr(self.mapping, '_edge_to_regions', {}).items():
             color = QColor(255, 200, 120, 100)
             for region in regions:
                 if isinstance(region, ContourRegion):
@@ -2805,15 +2805,17 @@ class GraphSetupWindow(QMainWindow):
                         
                 # Remove from mapping safely
                 if elem_type == 'node':
-                    if hasattr(self.mapping, 'node_to_regions') and elem_id in self.mapping.node_to_regions:
+                    node_to_regions = getattr(self.mapping, '_node_to_regions', {})
+                    if elem_id in node_to_regions:
                         for region in last_action.get('regions', []):
-                            if region in self.mapping.node_to_regions[elem_id]:
-                                self.mapping.node_to_regions[elem_id].remove(region)
+                            if region in node_to_regions[elem_id]:
+                                node_to_regions[elem_id].remove(region)
                 elif elem_type == 'edge':
-                    if hasattr(self.mapping, 'edge_to_regions') and elem_id in self.mapping.edge_to_regions:
+                    edge_to_regions = getattr(self.mapping, '_edge_to_regions', {})
+                    if elem_id in edge_to_regions:
                         for region in last_action.get('regions', []):
-                            if region in self.mapping.edge_to_regions[elem_id]:
-                                self.mapping.edge_to_regions[elem_id].remove(region)
+                            if region in edge_to_regions[elem_id]:
+                                edge_to_regions[elem_id].remove(region)
                                 
                 # Add element back to queue safely
                 if hasattr(self, 'element_queue') and self.element_queue is not None:
@@ -2996,6 +2998,8 @@ class GraphSetupWindow(QMainWindow):
                 del self.test_splitter
             if hasattr(self, 'test_map_widget'):
                 del self.test_map_widget
+            if hasattr(self, 'test_graph_widget'):
+                del self.test_graph_widget
             
     def _on_test_map_click(self, event):
         """Handle map click in test mode."""

@@ -659,46 +659,8 @@ def setup_graph(config_path: Path):
             click.echo(f"Error: Failed to launch interface: {e}", err=True)
             sys.exit(1)
         
-        try:
-            if mapping:
-                mapped_count = len(mapping.node_to_regions) + len(mapping.edge_to_regions)
-                click.echo(f"Mapping completed: {mapped_count} elements mapped")
-            
-            # Get output path from config or use default
-            output_path = config.get('graph_mapping', {}).get('mapping_file')
-            if output_path:
-                # Resolve relative to config directory
-                if not Path(output_path).is_absolute():
-                    output_path = Path(config._config_dir) / output_path
-            else:
-                # Default save location
-                timestamp = __import__('datetime').datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = Path(config._config_dir) / f"graph_mapping_{timestamp}.pkl"
-            
-            # Save mapping
-            from ..core.graph.storage import MappingStorage
-            success = MappingStorage.save_mapping(mapping, output_path)
-            if success:
-                click.echo(f"Saved: {output_path}")
-            else:
-                click.echo(f"Error: Failed to save mapping to: {output_path}", err=True)
-                sys.exit(1)
-                
-            # Show validation summary
-            stats = mapping.validate_mapping()
-            click.echo(f"Summary: {stats.mapped_nodes}/{stats.total_nodes} nodes, {stats.mapped_edges}/{stats.total_edges} edges mapped")
-            
-            if stats.node_conflicts or stats.overlaps:
-                warnings = []
-                if stats.node_conflicts:
-                    warnings.append(f"{len(stats.node_conflicts)} node conflicts")
-                if stats.overlaps:
-                    warnings.append(f"{len(stats.overlaps)} region overlaps")
-                click.echo(f"Warnings: {', '.join(warnings)}")
-                
-        except Exception as e:
-            click.echo(f"Error: {str(e)}", err=True)
-            sys.exit(1)
+        # GUI closed
+        click.echo("Closing GUI...")
         
     except Exception as e:
         click.echo(f"Error: {str(e)}", err=True)
