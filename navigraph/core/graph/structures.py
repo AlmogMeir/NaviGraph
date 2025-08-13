@@ -1,49 +1,74 @@
 """Graph structure classes for NaviGraph.
 
-This module provides the base classes and implementations for navigation graphs,
-supporting arbitrary graph topologies through NetworkX.
+This module provides a wrapper for NetworkX graphs with builder pattern support.
 """
 
-from typing import Dict, Any, List, Tuple, Optional, Set, Union
-from abc import ABC, abstractmethod
+from typing import Dict, Any, List, Tuple, Optional, Set, Union, TYPE_CHECKING
 import networkx as nx
 import numpy as np
-import matplotlib.pyplot as plt
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from .builders.base import GraphBuilder
 
 
 class GraphStructure:
-    """Base class for navigation graphs.
+    """Wrapper for NetworkX graphs with builder pattern support.
     
-    This class wraps a NetworkX graph and provides common operations
-    for spatial navigation analysis. It supports any graph topology
-    that can be represented in NetworkX.
+    This class provides a consistent interface for graphs created by different builders,
+    caching the built graph and providing navigation analysis operations.
     
     Attributes:
-        graph: NetworkX graph object
-        metadata: Dictionary of graph-level metadata
-        node_positions: Dictionary mapping node IDs to (x, y) positions for visualization
+        builder: The graph builder instance used to create this structure
+        _graph: Cached NetworkX graph (built lazily)
+        _visualization: Cached visualization array
     """
     
-    def __init__(self, graph: nx.Graph, metadata: Optional[Dict[str, Any]] = None):
-        """Initialize graph structure.
+    def __init__(self, builder: 'GraphBuilder'):
+        """Initialize graph structure with a builder.
         
         Args:
-            graph: NetworkX graph object
-            metadata: Optional metadata about the graph
+            builder: Graph builder instance
         """
-        self.graph = graph
-        self.metadata = metadata or {}
-        self.node_positions = {}
-        
-        # Generate default positions if not provided
-        if not self.node_positions:
-            self._generate_default_positions()
+        self.builder = builder
+        self._graph: Optional[nx.Graph] = None
+        self._visualization: Optional[np.ndarray] = None
     
-    def _generate_default_positions(self):
-        """Generate default node positions using spring layout."""
-        if len(self.graph.nodes()) > 0:
-            self.node_positions = nx.spring_layout(self.graph)
+    @property
+    def graph(self) -> nx.Graph:
+        """Get the NetworkX graph, building it if necessary."""
+        if self._graph is None:
+            self._graph = self.builder.build_graph()
+        return self._graph
+    
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """Get metadata from the builder."""
+        return self.builder.get_metadata()
+    
+    def get_visualization(self, **kwargs) -> np.ndarray:
+        """Get visualization of the graph as an image array.
+        
+        Args:
+            **kwargs: Additional visualization parameters
+            
+        Returns:
+            RGB image array with shape (height, width, 3)
+        """
+        # Use cached visualization if no parameters changed
+        if not kwargs and self._visualization is not None:
+            return self._visualization
+        
+        # Generate new visualization
+        visualization = self.builder.get_visualization(**kwargs)
+        
+        # Cache if using default parameters
+        if not kwargs:
+            self._visualization = visualization
+        
+        return visualization
+    
+    # Basic graph properties
     
     @property
     def num_nodes(self) -> int:
@@ -64,6 +89,8 @@ class GraphStructure:
     def edges(self) -> List[Tuple[Any, Any]]:
         """Get list of all edges."""
         return list(self.graph.edges())
+    
+    # Node operations
     
     def get_node_data(self, node: Any) -> Dict[str, Any]:
         """Get data associated with a node.
@@ -119,6 +146,19 @@ class GraphStructure:
         """
         return self.graph.has_edge(node1, node2)
     
+    def get_degree(self, node: Any) -> int:
+        """Get degree of a node.
+        
+        Args:
+            node: Node identifier
+            
+        Returns:
+            Node degree
+        """
+        return self.graph.degree(node)
+    
+    # Path finding
+    
     def get_shortest_path(self, source: Any, target: Any, 
                          weight: Optional[str] = None) -> List[Any]:
         """Calculate shortest path between two nodes.
@@ -170,6 +210,8 @@ class GraphStructure:
         except nx.NetworkXNoPath:
             return []
     
+    # Graph structure analysis
+    
     def get_connected_components(self) -> List[Set[Any]]:
         """Get connected components of the graph.
         
@@ -192,157 +234,25 @@ class GraphStructure:
         else:
             return nx.is_connected(self.graph)
     
-    def get_degree(self, node: Any) -> int:
-        """Get degree of a node.
-        
-        Args:
-            node: Node identifier
-            
-        Returns:
-            Node degree
-        """
-        return self.graph.degree(node)
-    
-    def get_subgraph(self, nodes: List[Any]) -> 'GraphStructure':
+    def get_subgraph(self, nodes: List[Any]) -> nx.Graph:
         """Create subgraph containing only specified nodes.
         
         Args:
             nodes: List of node identifiers to include
             
         Returns:
-            New GraphStructure with subgraph
+            NetworkX subgraph (view)
         """
-        subgraph = self.graph.subgraph(nodes).copy()
-        sub_positions = {n: self.node_positions.get(n) for n in nodes 
-                        if n in self.node_positions}
-        
-        result = GraphStructure(subgraph, metadata=self.metadata.copy())
-        result.node_positions = sub_positions
-        return result
+        return self.graph.subgraph(nodes)
     
-    def set_node_positions(self, positions: Dict[Any, Tuple[float, float]]):
-        """Set node positions for visualization.
-        
-        Args:
-            positions: Dictionary mapping node IDs to (x, y) coordinates
-        """
-        self.node_positions = positions
-    
-    def get_node_position(self, node: Any) -> Optional[Tuple[float, float]]:
-        """Get position of a specific node.
-        
-        Args:
-            node: Node identifier
-            
-        Returns:
-            (x, y) tuple or None if position not set
-        """
-        return self.node_positions.get(node)
-    
-    def visualize(self, figsize: Tuple[int, int] = (10, 8),
-                  node_color: str = 'lightblue',
-                  edge_color: str = 'gray',
-                  node_size: int = 500,
-                  with_labels: bool = True,
-                  font_size: int = 12,
-                  layout: Optional[str] = None,
-                  ax: Optional[plt.Axes] = None) -> plt.Figure:
-        """Visualize the graph.
-        
-        Args:
-            figsize: Figure size as (width, height)
-            node_color: Color for nodes
-            edge_color: Color for edges
-            node_size: Size of nodes
-            with_labels: Whether to show node labels
-            font_size: Font size for labels
-            layout: Layout algorithm ('spring', 'circular', 'kamada_kawai', etc.)
-            ax: Existing axes to draw on
-            
-        Returns:
-            Matplotlib figure object
-        """
-        if ax is None:
-            fig, ax = plt.subplots(figsize=figsize)
-        else:
-            fig = ax.figure
-        
-        # Determine positions
-        if layout and len(self.graph.nodes()) > 0:
-            if layout == 'spring':
-                pos = nx.spring_layout(self.graph)
-            elif layout == 'circular':
-                pos = nx.circular_layout(self.graph)
-            elif layout == 'kamada_kawai':
-                pos = nx.kamada_kawai_layout(self.graph)
-            elif layout == 'spectral':
-                pos = nx.spectral_layout(self.graph)
-            else:
-                pos = self.node_positions
-        else:
-            pos = self.node_positions
-        
-        # Draw graph
-        nx.draw(self.graph, pos=pos, ax=ax,
-                node_color=node_color,
-                edge_color=edge_color,
-                node_size=node_size,
-                with_labels=with_labels,
-                font_size=font_size,
-                font_weight='bold')
-        
-        ax.set_title(self.metadata.get('name', 'Graph Structure'))
-        ax.axis('off')
-        
-        return fig
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert graph to dictionary representation.
-        
-        Returns:
-            Dictionary with graph data
-        """
-        return {
-            'nodes': list(self.graph.nodes(data=True)),
-            'edges': list(self.graph.edges(data=True)),
-            'metadata': self.metadata,
-            'node_positions': self.node_positions,
-            'directed': self.graph.is_directed()
-        }
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'GraphStructure':
-        """Create graph from dictionary representation.
-        
-        Args:
-            data: Dictionary with graph data
-            
-        Returns:
-            New GraphStructure instance
-        """
-        if data.get('directed', False):
-            graph = nx.DiGraph()
-        else:
-            graph = nx.Graph()
-        
-        # Add nodes
-        graph.add_nodes_from(data['nodes'])
-        
-        # Add edges
-        graph.add_edges_from(data['edges'])
-        
-        # Create structure
-        structure = cls(graph, metadata=data.get('metadata', {}))
-        structure.node_positions = data.get('node_positions', {})
-        
-        return structure
+    # Export method
     
     def save(self, filepath: Union[str, Path], format: str = 'graphml'):
-        """Save graph to file.
+        """Save graph to file in various formats.
         
         Args:
             filepath: Path to save file
-            format: File format ('graphml', 'gexf', 'json')
+            format: File format ('graphml', 'gexf', 'gml', 'adjlist', 'edgelist')
         """
         filepath = Path(filepath)
         
@@ -350,36 +260,11 @@ class GraphStructure:
             nx.write_graphml(self.graph, str(filepath))
         elif format == 'gexf':
             nx.write_gexf(self.graph, str(filepath))
-        elif format == 'json':
-            import json
-            with open(filepath, 'w') as f:
-                json.dump(self.to_dict(), f, indent=2)
+        elif format == 'gml':
+            nx.write_gml(self.graph, str(filepath))
+        elif format == 'adjlist':
+            nx.write_adjlist(self.graph, str(filepath))
+        elif format == 'edgelist':
+            nx.write_edgelist(self.graph, str(filepath))
         else:
-            raise ValueError(f"Unsupported format: {format}")
-    
-    @classmethod
-    def load(cls, filepath: Union[str, Path], format: str = 'graphml') -> 'GraphStructure':
-        """Load graph from file.
-        
-        Args:
-            filepath: Path to load file
-            format: File format ('graphml', 'gexf', 'json')
-            
-        Returns:
-            New GraphStructure instance
-        """
-        filepath = Path(filepath)
-        
-        if format == 'graphml':
-            graph = nx.read_graphml(str(filepath))
-        elif format == 'gexf':
-            graph = nx.read_gexf(str(filepath))
-        elif format == 'json':
-            import json
-            with open(filepath, 'r') as f:
-                data = json.load(f)
-            return cls.from_dict(data)
-        else:
-            raise ValueError(f"Unsupported format: {format}")
-        
-        return cls(graph)
+            raise ValueError(f"Unsupported format: {format}. Supported: graphml, gexf, gml, adjlist, edgelist")

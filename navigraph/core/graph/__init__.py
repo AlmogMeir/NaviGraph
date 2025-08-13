@@ -32,9 +32,10 @@ Quick Start:
 
 from .structures import GraphStructure
 from .builders import (
-    build_binary_tree, build_grid_graph, build_hexagonal_grid,
-    build_hierarchical_graph, build_from_function, build_custom_graph,
-    build_from_adjacency
+    GraphBuilder,
+    register_graph_builder,
+    get_graph_builder,
+    list_graph_builders
 )
 from .regions import (
     SpatialRegion, Point, ContourRegion, RectangleRegion,
@@ -51,14 +52,11 @@ __all__ = [
     # Core structures
     'GraphStructure',
     
-    # Builders
-    'build_binary_tree',
-    'build_grid_graph', 
-    'build_hexagonal_grid',
-    'build_hierarchical_graph',
-    'build_from_function',
-    'build_custom_graph',
-    'build_from_adjacency',
+    # Builder system
+    'GraphBuilder',
+    'register_graph_builder',
+    'get_graph_builder',
+    'list_graph_builders',
     
     # Regions
     'SpatialRegion',
