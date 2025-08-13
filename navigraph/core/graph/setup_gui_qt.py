@@ -437,6 +437,29 @@ class MapWidget(QWidget):
                 print(f"Error drawing test highlights: {e}")
                 # Clear the problematic highlights to prevent repeated crashes
                 self.test_highlights = []
+        
+        # Draw test highlight contours (for selected elements in test mode)
+        if hasattr(self, 'test_highlight_contours'):
+            try:
+                for highlight_data in self.test_highlight_contours:
+                    points = highlight_data['points']
+                    color = highlight_data['color']
+                    
+                    if len(points) > 2:
+                        # Convert points to scaled polygon
+                        poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor,
+                                             self.offset_y + p[1] * self.scale_factor)
+                                     for p in points]
+                        polygon = QPolygonF(poly_points)
+                        
+                        # Draw with highlight color
+                        painter.setPen(QPen(color, 3))
+                        painter.setBrush(QBrush(color))
+                        painter.drawPolygon(polygon)
+            except Exception as e:
+                print(f"Error drawing test highlight contours: {e}")
+                # Clear problematic data
+                self.test_highlight_contours = []
                 
     def mousePressEvent(self, event):
         """Handle mouse press events."""
@@ -1858,6 +1881,80 @@ class GraphSetupWindow(QMainWindow):
         # Clear status bar
         self.status_bar.clearMessage()
     
+    def _create_standardized_contour_mapping(self):
+        """Create standardized contour representation for test mode compatibility.
+        
+        Returns:
+            dict: {
+                'nodes': {node_id: [list_of_contours]},
+                'edges': {edge_tuple_str: [list_of_contours]}
+            }
+            where each contour is a list of (x,y) points
+        """
+        from navigraph.core.graph.regions import GridCell, RectangleRegion, ContourRegion
+        
+        standardized = {
+            'nodes': {},
+            'edges': {}
+        }
+        
+        if not hasattr(self, 'mapping') or not self.mapping:
+            return standardized
+            
+        # Process node mappings
+        for node_id in self.mapping.get_mapped_nodes():
+            regions = self.mapping.get_node_regions(node_id)
+            contour_list = []
+            
+            for region in regions:
+                if isinstance(region, ContourRegion):
+                    # Already a contour - use as-is
+                    contour_list.append(region.contour_points)
+                elif isinstance(region, (GridCell, RectangleRegion)):
+                    # Convert rectangle/grid cell to 4-point contour
+                    x, y = region.x, region.y
+                    w, h = region.width, region.height
+                    rect_contour = [
+                        (x, y),        # top-left
+                        (x + w, y),    # top-right  
+                        (x + w, y + h), # bottom-right
+                        (x, y + h)     # bottom-left
+                    ]
+                    contour_list.append(rect_contour)
+                # Add other region types as needed
+                    
+            if contour_list:
+                standardized['nodes'][str(node_id)] = contour_list
+        
+        # Process edge mappings  
+        for edge_tuple in self.mapping.get_mapped_edges():
+            regions = self.mapping.get_edge_regions(edge_tuple)
+            contour_list = []
+            
+            for region in regions:
+                if isinstance(region, ContourRegion):
+                    # Already a contour - use as-is
+                    contour_list.append(region.contour_points)
+                elif isinstance(region, (GridCell, RectangleRegion)):
+                    # Convert rectangle/grid cell to 4-point contour
+                    x, y = region.x, region.y
+                    w, h = region.width, region.height
+                    rect_contour = [
+                        (x, y),        # top-left
+                        (x + w, y),    # top-right  
+                        (x + w, y + h), # bottom-right
+                        (x, y + h)     # bottom-left
+                    ]
+                    contour_list.append(rect_contour)
+                # Add other region types as needed
+                    
+            if contour_list:
+                # Convert edge tuple to string for JSON serialization
+                edge_str = f"{edge_tuple[0]}_{edge_tuple[1]}"
+                standardized['edges'][edge_str] = contour_list
+                
+        return standardized
+    
     def _set_mode_specific_defaults(self, mode: str):
         """Set mode-specific default visualization options."""
         if mode == 'grid':
@@ -2286,10 +2383,14 @@ class GraphSetupWindow(QMainWindow):
         
         if file_path:
             try:
+                # Create standardized contour representation for test mode compatibility
+                standardized_contours = self._create_standardized_contour_mapping()
+                
                 # Create complete state dict
                 mapping_state = {
-                    'format_version': '2.0',
-                    'mapping': self.mapping,
+                    'format_version': '2.1',  # Increment version for new standardized format
+                    'mapping': self.mapping,  # Original mapping (preserved for mode compatibility)
+                    'standardized_contours': standardized_contours,  # Universal test mode format
                     'grid_config': {
                         'structure_type': self.map_widget.grid_config.structure_type,
                         'rows': self.map_widget.grid_config.rows,
@@ -2332,8 +2433,20 @@ class GraphSetupWindow(QMainWindow):
                     QMessageBox.warning(self, "Error", "Invalid mapping file format")
                     return
                 
+                # Handle format versions and backward compatibility
+                format_version = mapping_state.get('format_version', '1.0')
+                
                 # Load the mapping
                 self.mapping = mapping_state['mapping']
+                
+                # For test mode, always ensure standardized contours are available
+                if hasattr(self, 'setup_mode') and self.setup_mode == 'test':
+                    if 'standardized_contours' in mapping_state:
+                        # Use pre-computed standardized contours (v2.1+)
+                        self._test_mode_standardized_contours = mapping_state['standardized_contours']
+                    else:
+                        # Create standardized contours from loaded mapping (backward compatibility)
+                        self._test_mode_standardized_contours = self._create_standardized_contour_mapping()
                 
                 # Restore grid configuration if present
                 if 'grid_config' in mapping_state:
@@ -2411,9 +2524,7 @@ class GraphSetupWindow(QMainWindow):
                 # Visualize loaded mapping only if not in test mode
                 if current_mode != 'test':
                     self._visualize_loaded_intermediate_mapping()
-                else:
-                    # In test mode, copy the mapping data to test_map_widget so it can be shown via Display Options
-                    self._copy_mapping_to_test_widget()
+                # In test mode, don't auto-display anything - let user control via Show All Mappings toggle
                 
                 # Update progress
                 self._update_progress_display()
@@ -2586,18 +2697,26 @@ class GraphSetupWindow(QMainWindow):
         try:
             show_mappings = (state == Qt.Checked)
             
-            # Clear any test highlights before toggling to avoid conflicts
-            if hasattr(self, 'test_map_widget') and hasattr(self.test_map_widget, 'clear_highlights'):
-                self.test_map_widget.clear_highlights()
-            
-            # Update both map widgets
-            self.map_widget.show_all_mappings = show_mappings
-            self.map_widget.update()
-            
-            # Also update test mode widget if it exists
-            if hasattr(self, 'test_map_widget'):
-                self.test_map_widget.show_all_mappings = show_mappings
-                self.test_map_widget.update()
+            # In test mode, handle Show All Mappings specially
+            if hasattr(self, 'setup_mode') and self.setup_mode == 'test' and hasattr(self, 'test_map_widget'):
+                if show_mappings:
+                    # Clear test selections first
+                    self._clear_test_selections()
+                    
+                    # Display all saved mappings using standardized contours
+                    if hasattr(self, '_test_mode_standardized_contours'):
+                        self._display_all_standardized_mappings()
+                else:
+                    # Clear all displayed mappings
+                    if hasattr(self.test_map_widget, 'completed_contours'):
+                        self.test_map_widget.completed_contours.clear()
+                    if hasattr(self.test_map_widget, 'grid_cells'):
+                        self.test_map_widget.grid_cells.clear()
+                    self.test_map_widget.update()
+            else:
+                # Normal mode - just toggle visibility flag
+                self.map_widget.show_all_mappings = show_mappings
+                self.map_widget.update()
                 
         except Exception as e:
             print(f"Error toggling mappings: {e}")
@@ -2977,8 +3096,13 @@ class GraphSetupWindow(QMainWindow):
         try:
             if hasattr(self, 'test_graph_widget'):
                 self.test_graph_widget.clear_highlights()
-            if hasattr(self, 'test_map_widget') and hasattr(self.test_map_widget, 'clear_highlights'):
-                self.test_map_widget.clear_highlights()
+            if hasattr(self, 'test_map_widget'):
+                if hasattr(self.test_map_widget, 'clear_highlights'):
+                    self.test_map_widget.clear_highlights()
+                # Clear test highlight contours
+                if hasattr(self.test_map_widget, 'test_highlight_contours'):
+                    self.test_map_widget.test_highlight_contours = []
+                    self.test_map_widget.update()
             self.test_selected_point = None
             self.test_selected_element = None
         except Exception as e:
@@ -2989,6 +3113,11 @@ class GraphSetupWindow(QMainWindow):
         
     def _find_element_at_position(self, x, y):
         """Find which graph element is mapped at the given position."""
+        # Use standardized contours if available (more reliable for test mode)
+        if hasattr(self, '_test_mode_standardized_contours'):
+            return self._find_element_using_standardized_contours(x, y)
+        
+        # Fallback to original mapping method
         # Check node regions first
         for node_id, regions in getattr(self.mapping, '_node_to_regions', {}).items():
             for region_id in regions:
@@ -3004,12 +3133,65 @@ class GraphSetupWindow(QMainWindow):
                     return ('edge', edge_id)
         
         return None
+    
+    def _find_element_using_standardized_contours(self, x, y):
+        """Find element at position using standardized contour representation."""
+        import cv2
+        import numpy as np
+        
+        if not hasattr(self, '_test_mode_standardized_contours'):
+            return None
+            
+        standardized = self._test_mode_standardized_contours
+        
+        # Check nodes first
+        for node_id_str, contour_list in standardized.get('nodes', {}).items():
+            node_id = int(node_id_str) if node_id_str.isdigit() else node_id_str
+            
+            for contour_points in contour_list:
+                # Convert to numpy array for OpenCV
+                contour_array = np.array(contour_points, dtype=np.float32)
+                
+                # Use OpenCV point in polygon test
+                result = cv2.pointPolygonTest(contour_array, (x, y), False)
+                if result >= 0:  # Point is inside or on the boundary
+                    return ('node', node_id)
+        
+        # Check edges
+        for edge_str, contour_list in standardized.get('edges', {}).items():
+            # Parse edge string back to tuple
+            parts = edge_str.split('_')
+            if len(parts) >= 2:
+                try:
+                    edge_id = (int(parts[0]) if parts[0].isdigit() else parts[0],
+                              int(parts[1]) if parts[1].isdigit() else parts[1])
+                except ValueError:
+                    edge_id = (parts[0], parts[1])
+            else:
+                continue
+                
+            for contour_points in contour_list:
+                # Convert to numpy array for OpenCV
+                contour_array = np.array(contour_points, dtype=np.float32)
+                
+                # Use OpenCV point in polygon test
+                result = cv2.pointPolygonTest(contour_array, (x, y), False)
+                if result >= 0:  # Point is inside or on the boundary
+                    return ('edge', edge_id)
+        
+        return None
         
     def _highlight_element_regions(self, elem_type, elem_id):
         """Highlight all regions mapped to the given element."""
         if not hasattr(self, 'mapping') or self.mapping is None:
             return
             
+        # Use standardized contours if available (for better test mode compatibility)
+        if hasattr(self, '_test_mode_standardized_contours'):
+            self._highlight_using_standardized_contours(elem_type, elem_id)
+            return
+            
+        # Fallback to original method
         try:
             if elem_type == 'node':
                 regions_dict = getattr(self.mapping, '_node_to_regions', {})
@@ -3028,6 +3210,53 @@ class GraphSetupWindow(QMainWindow):
         except AttributeError as e:
             # Don't fail the whole operation
             pass
+    
+    def _highlight_using_standardized_contours(self, elem_type, elem_id):
+        """Highlight element regions using standardized contour representation."""
+        if not hasattr(self, '_test_mode_standardized_contours'):
+            return
+            
+        standardized = self._test_mode_standardized_contours
+        
+        # Clear existing test highlights first (but not the Show All Mappings display)
+        if hasattr(self.test_map_widget, 'test_highlights'):
+            self.test_map_widget.test_highlights = []
+        if hasattr(self.test_map_widget, 'test_highlight_contours'):
+            self.test_map_widget.test_highlight_contours = []
+        
+        if elem_type == 'node':
+            node_id_str = str(elem_id)
+            contour_list = standardized.get('nodes', {}).get(node_id_str, [])
+        else:  # edge
+            # Convert edge tuple to string format
+            edge_str = f"{elem_id[0]}_{elem_id[1]}"
+            contour_list = standardized.get('edges', {}).get(edge_str, [])
+        
+        # Add each contour as a temporary highlight on the map
+        from PyQt5.QtGui import QColor
+        
+        # Use selection colors - purple for highlight
+        highlight_color = QColor(160, 100, 255, 140)
+        
+        for i, contour_points in enumerate(contour_list):
+            # Create a unique region ID for this highlight
+            region_id = f"test_highlight_{elem_type}_{elem_id}_{i}"
+            
+            # Add the contour temporarily for display (not to the permanent mapping)
+            if not hasattr(self.test_map_widget, 'test_highlight_contours'):
+                self.test_map_widget.test_highlight_contours = []
+            
+            # Store as a test highlight that will be drawn on top
+            self.test_map_widget.test_highlight_contours.append({
+                'points': contour_points,
+                'region_id': region_id,
+                'elem_type': elem_type,
+                'elem_id': elem_id,
+                'color': highlight_color
+            })
+        
+        # Trigger repaint
+        self.test_map_widget.update()
                 
     def get_mapping(self) -> SpatialMapping:
         """Get the current mapping."""
@@ -3071,6 +3300,50 @@ class GraphSetupWindow(QMainWindow):
             QMessageBox.No
         )
         return reply == QMessageBox.Yes
+    
+    def _display_all_standardized_mappings(self):
+        """Display all standardized mappings on test map widget with original colors."""
+        if not hasattr(self, '_test_mode_standardized_contours') or not hasattr(self, 'test_map_widget'):
+            return
+            
+        from PyQt5.QtGui import QColor
+        
+        # Clear existing displays
+        self.test_map_widget.completed_contours.clear()
+        
+        # Display all node mappings in green
+        for node_id_str, contour_list in self._test_mode_standardized_contours.get('nodes', {}).items():
+            node_id = int(node_id_str) if node_id_str.isdigit() else node_id_str
+            color = QColor(0, 255, 0, 100)  # Green for nodes
+            
+            for i, contour_points in enumerate(contour_list):
+                region_id = f"node_{node_id}_region_{i}"
+                # Add to completed contours for display
+                self.test_map_widget.completed_contours.append(
+                    (contour_points, region_id, color, 'node', node_id)
+                )
+        
+        # Display all edge mappings in orange
+        for edge_str, contour_list in self._test_mode_standardized_contours.get('edges', {}).items():
+            # Parse edge string back to tuple
+            parts = edge_str.split('_')
+            if len(parts) >= 2:
+                edge_id = (int(parts[0]) if parts[0].isdigit() else parts[0],
+                          int(parts[1]) if parts[1].isdigit() else parts[1])
+            else:
+                continue
+                
+            color = QColor(255, 165, 0, 100)  # Orange for edges
+            
+            for i, contour_points in enumerate(contour_list):
+                region_id = f"edge_{edge_str}_region_{i}"
+                # Add to completed contours for display
+                self.test_map_widget.completed_contours.append(
+                    (contour_points, region_id, color, 'edge', edge_id)
+                )
+        
+        # Trigger repaint
+        self.test_map_widget.update()
     
     def _copy_mapping_to_test_widget(self):
         """Copy mapping data to test_map_widget for display via Show All Mappings toggle."""
