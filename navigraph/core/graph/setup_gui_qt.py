@@ -460,6 +460,23 @@ class MapWidget(QWidget):
                 print(f"Error drawing test highlight contours: {e}")
                 # Clear problematic data
                 self.test_highlight_contours = []
+        
+        # Draw click position indicator in test mode
+        if hasattr(self, 'test_click_position') and self.test_click_position:
+            x, y = self.test_click_position
+            # Convert to screen coordinates
+            screen_x = self.offset_x + x * self.scale_factor
+            screen_y = self.offset_y + y * self.scale_factor
+            
+            # Draw a circle at the click position with selected color (coral/pink)
+            painter.setPen(QPen(QColor(255, 150, 150), 3))  # Light coral/pink for selection
+            painter.setBrush(Qt.NoBrush)  # No fill, just outline
+            painter.drawEllipse(QPointF(screen_x, screen_y), 8, 8)  # 8 pixel radius circle
+            
+            # Draw a smaller filled center point
+            painter.setPen(QPen(QColor(255, 150, 150), 1))
+            painter.setBrush(QBrush(QColor(255, 150, 150)))
+            painter.drawEllipse(QPointF(screen_x, screen_y), 3, 3)  # 3 pixel radius filled circle
                 
     def mousePressEvent(self, event):
         """Handle mouse press events."""
@@ -2995,13 +3012,20 @@ class GraphSetupWindow(QMainWindow):
         # Clear previous selection
         self._clear_test_selections()
         
+        # Store click position for visual indicator
+        self.test_selected_point = (x, y)
+        
+        # Store click position in test map widget for drawing
+        if hasattr(self, 'test_map_widget'):
+            self.test_map_widget.test_click_position = (x, y)
+            self.test_map_widget.update()
+        
         # Find mapped element at this position
         element_found = self._find_element_at_position(x, y)
         
         if element_found:
             elem_type, elem_id = element_found
             self.test_selected_element = (elem_type, elem_id)
-            self.test_selected_point = (x, y)
             
             # Highlight graph element with highlight color (yellow)
             self.test_graph_widget.clear_highlights()
@@ -3102,7 +3126,10 @@ class GraphSetupWindow(QMainWindow):
                 # Clear test highlight contours
                 if hasattr(self.test_map_widget, 'test_highlight_contours'):
                     self.test_map_widget.test_highlight_contours = []
-                    self.test_map_widget.update()
+                # Clear click position indicator
+                if hasattr(self.test_map_widget, 'test_click_position'):
+                    self.test_map_widget.test_click_position = None
+                self.test_map_widget.update()
             self.test_selected_point = None
             self.test_selected_element = None
         except Exception as e:
