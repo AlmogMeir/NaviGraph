@@ -1818,13 +1818,28 @@ class GraphSetupWindow(QMainWindow):
         self.element_queue = []
         self.all_elements = []
         
-        # Add all nodes
-        for node in self.graph.nodes:
+        # Sort nodes and edges numerically 
+        def numeric_sort_key(x):
+            """Sort key that handles numeric node IDs properly."""
+            try:
+                return int(x)
+            except (ValueError, TypeError):
+                return float('inf')
+        
+        def edge_sort_key(edge):
+            """Sort key for edges based on numeric node IDs."""
+            try:
+                return (int(edge[0]), int(edge[1]))
+            except (ValueError, TypeError):
+                return (float('inf'), float('inf'))
+        
+        # Add all nodes (sorted)
+        for node in sorted(self.graph.nodes, key=numeric_sort_key):
             self.element_queue.append(('node', node))
             self.all_elements.append(('node', node))
             
-        # Add all edges
-        for edge in self.graph.edges:
+        # Add all edges (sorted)
+        for edge in sorted(self.graph.edges, key=edge_sort_key):
             self.element_queue.append(('edge', edge))
             self.all_elements.append(('edge', edge))
             
@@ -3093,20 +3108,28 @@ class GraphSetupWindow(QMainWindow):
         self.test_element_combo.clear()
         self.test_element_combo.addItem("-- Select Element --")
         
-        # Add all nodes (sort numerically if possible, fallback to string sort)
-        try:
-            sorted_nodes = sorted(self.graph.nodes, key=lambda x: int(x) if str(x).isdigit() else x)
-        except (ValueError, TypeError):
-            sorted_nodes = sorted(self.graph.nodes)
-            
+        # Add all nodes (sort numerically)
+        def numeric_sort_key(x):
+            """Sort key that handles numeric node IDs properly."""
+            try:
+                return int(x)
+            except (ValueError, TypeError):
+                return float('inf')  # Put non-numeric items at the end
+        
+        sorted_nodes = sorted(self.graph.nodes, key=numeric_sort_key)
+        
         for node in sorted_nodes:
             self.test_element_combo.addItem(f"Node: {node}")
             
-        # Add all edges (sort by first node numerically)
-        try:
-            sorted_edges = sorted(self.graph.edges, key=lambda x: (int(x[0]) if str(x[0]).isdigit() else x[0], int(x[1]) if str(x[1]).isdigit() else x[1]))
-        except (ValueError, TypeError):
-            sorted_edges = sorted(self.graph.edges)
+        # Add all edges (sort by both nodes numerically)
+        def edge_sort_key(edge):
+            """Sort key for edges based on numeric node IDs."""
+            try:
+                return (int(edge[0]), int(edge[1]))
+            except (ValueError, TypeError):
+                return (float('inf'), float('inf'))
+        
+        sorted_edges = sorted(self.graph.edges, key=edge_sort_key)
             
         for edge in sorted_edges:
             self.test_element_combo.addItem(f"Edge: {edge}")
