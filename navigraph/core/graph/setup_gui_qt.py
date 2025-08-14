@@ -24,10 +24,6 @@ from PyQt5.QtCore import Qt, QPointF, QRectF, QPoint, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QPixmap, QImage, QPen, QBrush, QColor, QPolygonF, QPainter, QCursor
 
 import networkx as nx
-import matplotlib
-matplotlib.use('Qt5Agg')
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 
 from .structures import GraphStructure
 from .mapping import SpatialMapping
@@ -752,153 +748,136 @@ class MapWidget(QWidget):
             # Don't crash, just continue
 
 
-class GraphWidget(FigureCanvas):
-    """Widget for displaying the graph structure using matplotlib."""
+class GraphWidget(QWidget):
+    """Widget for displaying the graph structure using the builder's visualization."""
     
     nodeClicked = pyqtSignal(object)  # Emitted when a node is clicked
     edgeClicked = pyqtSignal(tuple)  # Emitted when an edge is clicked
     
     def __init__(self, graph: GraphStructure, parent=None):
-        self.graph = graph
-        self.figure = Figure(figsize=(24, 8))
-        super().__init__(self.figure)
-        self.setParent(parent)
+        super().__init__(parent)
         
-        self.ax = self.figure.add_subplot(111)
+        self.graph = graph
         self.node_colors = {}
         self.edge_colors = {}
         self.highlighted_nodes = set()
         self.highlighted_edges = set()
         
-        self._compute_layout()
+        # Default colors
+        self.default_node_color = 'lightblue'
+        self.default_edge_color = 'gray'
+        
+        # Setup UI
+        from PyQt5.QtWidgets import QVBoxLayout, QLabel
+        from PyQt5.QtCore import Qt
+        
+        layout = QVBoxLayout()
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("border: 1px solid #ddd; background-color: white;")
+        layout.addWidget(self.image_label)
+        self.setLayout(layout)
+        
+        self.setMinimumSize(800, 600)
         self.draw_graph()
         
         # Note: Graph click detection removed - using dropdown selection in test mode instead
 
-    def _compute_layout(self):
-        """Compute graph layout for visualization."""
-        # Use stored positions if available, otherwise compute
-        if self.graph.node_positions:
-            self.pos = self.graph.node_positions
-        else:
-            # For binary trees, create a hierarchical layout manually
-            if hasattr(self.graph, 'graph') and nx.is_tree(self.graph.graph):
-                try:
-                    # Try graphviz first - it creates the best tree layout
-                    self.pos = nx.nx_agraph.graphviz_layout(self.graph.graph, prog='dot')
-                    # Scale horizontally to make it wider
-                    if self.pos:
-                        scale_factor = 4.0  # Make it much wider to spread leaf nodes
-                        self.pos = {node: (x * scale_factor, y) for node, (x, y) in self.pos.items()}
-                except:
-                    # Manual hierarchical layout for binary trees
-                    self.pos = self._create_binary_tree_layout()
-            else:
-                # Use spring layout with stronger spacing for better node separation
-                self.pos = nx.spring_layout(self.graph.graph, seed=42, k=15.0, iterations=300)
-    
-    def _create_binary_tree_layout(self):
-        """Create a hierarchical layout for binary trees."""
-        pos = {}
-        nodes = list(self.graph.graph.nodes())
-        
-        # Simple level-based layout
-        levels = {}
-        queue = [nodes[0]] if nodes else []  # Start with root
-        visited = set()
-        level = 0
-        
-        while queue:
-            next_queue = []
-            for node in queue:
-                if node not in visited:
-                    if level not in levels:
-                        levels[level] = []
-                    levels[level].append(node)
-                    visited.add(node)
-                    
-                    # Add children
-                    for neighbor in self.graph.graph.neighbors(node):
-                        if neighbor not in visited:
-                            next_queue.append(neighbor)
-            
-            queue = next_queue
-            level += 1
-        
-        # Position nodes with better spacing
-        max_width = max(len(level_nodes) for level_nodes in levels.values()) if levels else 1
-        for level, level_nodes in levels.items():
-            y = -level * 5  # Increased vertical spacing
-            for i, node in enumerate(level_nodes):
-                # Spread nodes horizontally with much better spacing
-                if len(level_nodes) == 1:
-                    x = 0
-                else:
-                    # Much wider horizontal spacing, especially for bottom levels
-                    base_spacing = max(4, max_width / len(level_nodes)) * 5
-                    # Increase spacing exponentially for lower levels to handle leaf nodes
-                    level_multiplier = 1 + (level * 1.0)
-                    spacing_factor = base_spacing * level_multiplier
-                    x = (i - (len(level_nodes) - 1) / 2) * spacing_factor
-                pos[node] = (x, y)
-        
-        return pos
-                
     def draw_graph(self):
-        """Draw or redraw the graph."""
-        self.ax.clear()
-        
-        # Prepare node colors
-        node_colors = []
-        for node in self.graph.nodes:
-            if node in self.node_colors:
-                node_colors.append(self.node_colors[node])
-            else:
-                node_colors.append('lightblue')
-                
-        # Draw graph with appropriate sizing for large trees
-        node_count = len(self.graph.nodes)
-        if node_count > 100:
-            # Very small nodes for very large graphs
-            node_size = 250
-            font_size = 7
-        elif node_count > 50:
-            # Small nodes for large graphs
-            node_size = 400
-            font_size = 8
-        elif node_count > 20:
-            # Medium nodes for medium graphs
-            node_size = 600
-            font_size = 10
-        else:
-            # Large nodes for small graphs
-            node_size = 800
-            font_size = 12
+        """Draw or redraw the graph using the builder's visualization."""
+        try:
+            # Prepare node colors
+            node_colors = []
+            for node in self.graph.nodes:
+                if node in self.node_colors:
+                    node_colors.append(self.node_colors[node])
+                else:
+                    node_colors.append(self.default_node_color)
             
-        nx.draw(self.graph.graph, pos=self.pos, ax=self.ax,
-               node_color=node_colors, node_size=node_size,
-               with_labels=True, font_size=font_size, font_weight='bold',
-               edge_color='gray', linewidths=1, font_color='black',
-               node_shape='o', alpha=0.9)
-               
-        # Highlight specific edges if needed
-        if self.highlighted_edges:
-            edge_list = list(self.highlighted_edges)
-            # Get colors for highlighted edges
-            edge_colors_list = [self.edge_colors.get(edge, 'orange') for edge in edge_list]
-            nx.draw_networkx_edges(self.graph.graph, pos=self.pos, ax=self.ax,
-                                  edgelist=edge_list, edge_color=edge_colors_list, width=2)
-                                  
-        self.ax.set_title(f"Graph Structure ({len(self.graph.nodes)} nodes, {len(self.graph.edges)} edges)")
-        
-        # Adjust subplot margins to prevent title truncation
-        self.figure.subplots_adjust(top=0.9, bottom=0.1, left=0.05, right=0.95)
-        
-        self.draw()
-        
+            # Prepare edge colors
+            edge_colors = []
+            for edge in self.graph.edges:
+                if edge in self.edge_colors:
+                    edge_colors.append(self.edge_colors[edge])
+                elif (edge[1], edge[0]) in self.edge_colors:  # Check reverse edge
+                    edge_colors.append(self.edge_colors[(edge[1], edge[0])])
+                else:
+                    edge_colors.append(self.default_edge_color)
+            
+            # Determine if we need custom colors
+            has_custom_node_colors = len(set(node_colors)) > 1
+            has_custom_edge_colors = len(set(edge_colors)) > 1
+            
+            # Get appropriate sizing based on graph size
+            node_count = len(self.graph.nodes)
+            if node_count > 100:
+                node_size, font_size = 250, 7
+            elif node_count > 50:
+                node_size, font_size = 400, 8
+            elif node_count > 20:
+                node_size, font_size = 600, 10
+            else:
+                node_size, font_size = 800, 12
+            
+            # Get visualization from builder
+            visualization_params = {
+                'figsize': (12, 8),
+                'node_size': node_size,
+                'font_size': font_size,
+                'with_labels': True,
+                'font_weight': 'bold'
+            }
+            
+            # Add colors if we have custom ones
+            if has_custom_node_colors:
+                visualization_params['node_color'] = node_colors
+            else:
+                visualization_params['node_color'] = self.default_node_color
+                
+            if has_custom_edge_colors:
+                visualization_params['edge_color'] = edge_colors  
+            else:
+                visualization_params['edge_color'] = self.default_edge_color
+            
+            image_array = self.graph.get_visualization(**visualization_params)
+            
+            # Convert numpy array to QPixmap
+            from PyQt5.QtGui import QImage, QPixmap
+            
+            height, width, channel = image_array.shape
+            bytes_per_line = 3 * width
+            q_image = QImage(image_array.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(q_image)
+            
+            # Scale to fit widget while maintaining aspect ratio
+            if not self.image_label.size().isEmpty():
+                scaled_pixmap = pixmap.scaled(
+                    self.image_label.size(),
+                    Qt.KeepAspectRatio,
+                    Qt.SmoothTransformation
+                )
+                self.image_label.setPixmap(scaled_pixmap)
+            else:
+                self.image_label.setPixmap(pixmap)
+            
+        except Exception as e:
+            print(f"Error updating graph visualization: {e}")
+            import traceback
+            traceback.print_exc()
+            # Show error message
+            self.image_label.setText(f"Error displaying graph:\n{str(e)}")
+
+    def resizeEvent(self, event):
+        """Handle widget resize."""
+        super().resizeEvent(event)
+        # Update visualization when widget is resized to maintain proper scaling
+        if hasattr(self, 'image_label') and self.image_label.pixmap():
+            self.draw_graph()
+
     def highlight_nodes(self, nodes: Set, color: str = 'lightgreen'):
         """Highlight specific nodes."""
         self.highlighted_nodes = nodes
+        
         # Map color names to actual colors (avoiding green/orange of mapping contours and blue nodes)
         color_map = {
             'selected': 'lightcoral',
@@ -910,11 +889,13 @@ class GraphWidget(FigureCanvas):
         # Store colors for highlighted nodes
         for node in nodes:
             self.node_colors[node] = actual_color
+        
         self.draw_graph()
         
     def highlight_edges(self, edges: Set[Tuple], color: str = 'orange'):
         """Highlight specific edges."""
         self.highlighted_edges = edges
+        
         # Map color names to actual colors (avoiding green/orange of mapping contours and blue nodes)
         color_map = {
             'selected': 'lightcoral',
@@ -926,6 +907,7 @@ class GraphWidget(FigureCanvas):
         # Store colors for highlighted edges
         for edge in edges:
             self.edge_colors[edge] = actual_color
+        
         self.draw_graph()
         
     def clear_highlights(self):
@@ -3111,12 +3093,22 @@ class GraphSetupWindow(QMainWindow):
         self.test_element_combo.clear()
         self.test_element_combo.addItem("-- Select Element --")
         
-        # Add all nodes
-        for node in sorted(self.graph.nodes):
+        # Add all nodes (sort numerically if possible, fallback to string sort)
+        try:
+            sorted_nodes = sorted(self.graph.nodes, key=lambda x: int(x) if str(x).isdigit() else x)
+        except (ValueError, TypeError):
+            sorted_nodes = sorted(self.graph.nodes)
+            
+        for node in sorted_nodes:
             self.test_element_combo.addItem(f"Node: {node}")
             
-        # Add all edges  
-        for edge in sorted(self.graph.edges):
+        # Add all edges (sort by first node numerically)
+        try:
+            sorted_edges = sorted(self.graph.edges, key=lambda x: (int(x[0]) if str(x[0]).isdigit() else x[0], int(x[1]) if str(x[1]).isdigit() else x[1]))
+        except (ValueError, TypeError):
+            sorted_edges = sorted(self.graph.edges)
+            
+        for edge in sorted_edges:
             self.test_element_combo.addItem(f"Edge: {edge}")
         
     def _clear_test_selections(self):
