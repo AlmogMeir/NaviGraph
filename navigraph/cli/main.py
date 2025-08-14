@@ -352,6 +352,53 @@ def discover(data_path: Path, config: Optional[Path], format: str):
         sys.exit(1)
 
 
+@cli.command('list-graph-builders')
+def list_graph_builders_cmd():
+    """List all available graph builders.
+    
+    Display registered graph builders that can be used in configuration files.
+    
+    \b
+    Example:
+      navigraph list-graph-builders
+    """
+    try:
+        from ..core.graph.builders import list_graph_builders, get_graph_builder_info
+        
+        builders = list_graph_builders()
+        
+        if not builders:
+            click.echo("No graph builders registered")
+            return
+        
+        click.echo("📊 Available Graph Builders")
+        click.echo("-" * 40)
+        
+        for builder_name in sorted(builders):
+            info = get_graph_builder_info(builder_name)
+            click.echo(f"\n• {builder_name}")
+            click.echo(f"  Class: {info['class_name']}")
+            
+            if info['docstring']:
+                # Get first line of docstring
+                doc_lines = info['docstring'].strip().split('\n')
+                if doc_lines:
+                    click.echo(f"  Description: {doc_lines[0]}")
+            
+            if info['parameters']:
+                click.echo("  Parameters:")
+                for param_name, param_info in info['parameters'].items():
+                    required = "required" if param_info['required'] else "optional"
+                    default = f", default={param_info['default']}" if param_info['default'] is not None else ""
+                    click.echo(f"    - {param_name} ({required}{default})")
+        
+        click.echo(f"\nTotal: {len(builders)} builders")
+        
+    except Exception as e:
+        click.echo(f"Error: {str(e)}", err=True)
+        sys.exit(1)
+
+
 @cli.command('list-plugins')
 @click.option('--category', '-c',
               type=click.Choice(['data_sources', 'shared_resources', 'analyzers', 'all']),
@@ -583,12 +630,11 @@ def setup_graph(config_path: Path):
         
         # Import graph modules
         from ..core.graph.structures import GraphStructure
-        from ..core.graph.builders import build_binary_tree
+        from ..core.graph.builders import get_graph_builder, list_graph_builders
         from ..core.graph.setup_gui_qt import launch_setup_gui
         from ..core.graph.storage import MappingStorage
         import numpy as np
         import cv2
-        import importlib
         
         # Get map path from config
         map_path = config.get('map_path')
@@ -606,42 +652,50 @@ def setup_graph(config_path: Path):
             click.echo(f"Error: Failed to load map image: {map_path}", err=True)
             sys.exit(1)
         
-        # Create graph from config
+        # Create graph from config using new builder system
         graph_config = config.get('graph_structure', {})
         graph_type = graph_config.get('type', 'binary_tree')
         
+        # Handle backward compatibility
         if graph_type == 'binary_tree':
-            # Use binary_tree_height from graph_structure, fallback to graph.height
-            height = graph_config.get('binary_tree_height')
-            if height is None:
-                height = config.get('graph', {}).get('height', 4)
-            
-            graph = build_binary_tree(height)
-            click.echo(f"Graph: binary tree, height {height} ({len(graph.nodes)} nodes)")
-        
-        elif graph_type == 'custom':
-            # Import and call custom function
-            func_path = graph_config.get('custom_graph_function')
-            if not func_path:
-                click.echo("Error: custom_graph_function required for custom graph type", err=True)
-                sys.exit(1)
-            
-            try:
-                # Import the function dynamically
-                module_name, func_name = func_path.rsplit('.', 1)
-                module = importlib.import_module(module_name)
-                func = getattr(module, func_name)
-                
-                # Call function with config as argument
-                nx_graph = func(config)
-                graph = GraphStructure(nx_graph)
-                click.echo(f"Graph: custom ({len(graph.nodes)} nodes)")
-            except Exception as e:
-                click.echo(f"Error: Failed to create custom graph: {str(e)}", err=True)
-                sys.exit(1)
-        
+            # Get parameters - support old config format
+            params = graph_config.get('parameters', {})
+            if not params:
+                # Try old format with binary_tree_height or graph.height
+                height = graph_config.get('binary_tree_height')
+                if height is None:
+                    height = config.get('graph', {}).get('height', 7)
+                params = {'height': height}
         else:
-            click.echo(f"Error: Unsupported graph type '{graph_type}' (supported: binary_tree, custom)", err=True)
+            # Get parameters for other builder types
+            params = graph_config.get('parameters', {})
+        
+        try:
+            # Get builder class and create instance
+            builder_class = get_graph_builder(graph_type)
+            builder = builder_class(**params)
+            
+            # Create graph structure
+            graph = GraphStructure(builder)
+            
+            # Get builder metadata for display
+            metadata = builder.get_metadata()
+            param_str = ', '.join(f"{k}={v}" for k, v in metadata['parameters'].items())
+            
+            # Display graph information
+            click.echo(f"📊 Graph Builder: {graph_type}")
+            click.echo(f"   Parameters: {param_str}")
+            click.echo(f"   Nodes: {graph.num_nodes}, Edges: {graph.num_edges}")
+            
+        except KeyError as e:
+            click.echo(f"Error: Unknown graph builder type '{graph_type}'", err=True)
+            click.echo(f"Available builders: {', '.join(list_graph_builders())}", err=True)
+            sys.exit(1)
+        except TypeError as e:
+            click.echo(f"Error: Invalid parameters for {graph_type} builder: {str(e)}", err=True)
+            sys.exit(1)
+        except Exception as e:
+            click.echo(f"Error: Failed to create graph: {str(e)}", err=True)
             sys.exit(1)
         
         # Launch PyQt5 GUI
