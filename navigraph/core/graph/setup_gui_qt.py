@@ -760,12 +760,14 @@ class GraphWidget(QWidget):
         self.graph = graph
         self.node_colors = {}
         self.edge_colors = {}
+        self.edge_widths = {}
         self.highlighted_nodes = set()
         self.highlighted_edges = set()
         
-        # Default colors
+        # Default colors and widths
         self.default_node_color = 'lightblue'
         self.default_edge_color = 'gray'
+        self.default_edge_width = 2.0  # Thicker than NetworkX default 1.0
         
         # Setup UI
         from PyQt5.QtWidgets import QVBoxLayout, QLabel
@@ -804,24 +806,45 @@ class GraphWidget(QWidget):
                 else:
                     edge_colors.append(self.default_edge_color)
             
-            # Determine if we need custom colors
+            # Prepare edge widths
+            edge_widths = []
+            for edge in self.graph.edges:
+                if edge in self.edge_widths:
+                    edge_widths.append(self.edge_widths[edge])
+                elif (edge[1], edge[0]) in self.edge_widths:  # Check reverse edge
+                    edge_widths.append(self.edge_widths[(edge[1], edge[0])])
+                else:
+                    edge_widths.append(self.default_edge_width)
+            
+            # Determine if we need custom colors/widths
             has_custom_node_colors = len(set(node_colors)) > 1
             has_custom_edge_colors = len(set(edge_colors)) > 1
+            has_custom_edge_widths = len(set(edge_widths)) > 1
             
-            # Get appropriate sizing based on graph size
+            # Get appropriate sizing based on graph size - increased for better visibility
             node_count = len(self.graph.nodes)
             if node_count > 100:
-                node_size, font_size = 250, 7
+                node_size, font_size = 400, 9  # Increased from 250, 7
             elif node_count > 50:
-                node_size, font_size = 400, 8
+                node_size, font_size = 600, 10  # Increased from 400, 8
             elif node_count > 20:
-                node_size, font_size = 600, 10
+                node_size, font_size = 800, 12  # Increased from 600, 10
             else:
-                node_size, font_size = 800, 12
+                node_size, font_size = 1000, 14  # Increased from 800, 12
             
-            # Get visualization from builder
+            # Calculate figsize based on graph type
+            # For binary trees, width should scale with tree height (number of leaf nodes)
+            if hasattr(self.graph.builder, 'height'):
+                # Binary tree: width scales with 2^height leaf nodes
+                tree_height = self.graph.builder.height
+                width = max(8, min(25, 2.5 * tree_height))  # Scale: height 7 ≈ 17.5 width
+                figsize = (width, 5)
+            else:
+                # Default for other graph types
+                figsize = (12, 8)
+            
             visualization_params = {
-                'figsize': (12, 8),
+                'figsize': figsize,
                 'node_size': node_size,
                 'font_size': font_size,
                 'with_labels': True,
@@ -838,6 +861,12 @@ class GraphWidget(QWidget):
                 visualization_params['edge_color'] = edge_colors  
             else:
                 visualization_params['edge_color'] = self.default_edge_color
+            
+            # Add widths if we have custom ones
+            if has_custom_edge_widths:
+                visualization_params['width'] = edge_widths
+            else:
+                visualization_params['width'] = self.default_edge_width
             
             image_array = self.graph.get_visualization(**visualization_params)
             
@@ -904,9 +933,11 @@ class GraphWidget(QWidget):
         }
         actual_color = color_map.get(color, color)
         
-        # Store colors for highlighted edges
+        # Store colors and thicker widths for highlighted edges
+        highlight_width = 4.0  # Thicker than default 2.0
         for edge in edges:
             self.edge_colors[edge] = actual_color
+            self.edge_widths[edge] = highlight_width
         
         self.draw_graph()
         
@@ -916,6 +947,7 @@ class GraphWidget(QWidget):
         self.highlighted_edges.clear()
         self.node_colors.clear()
         self.edge_colors.clear()
+        self.edge_widths.clear()
         self.draw_graph()
 
 
@@ -1100,8 +1132,8 @@ class GraphSetupWindow(QMainWindow):
         graph_layout.setContentsMargins(8, 20, 8, 8)
         
         self.graph_widget = GraphWidget(self.graph)
-        self.graph_widget.setMinimumHeight(300)
-        self.graph_widget.setMaximumHeight(500)
+        self.graph_widget.setMinimumSize(400, 300)  # Same as test mode for same zoom
+        self.graph_widget.setMaximumHeight(400)     # Shorter max height
         graph_layout.addWidget(self.graph_widget)
         
         views_layout.addWidget(graph_group)
@@ -1118,9 +1150,9 @@ class GraphSetupWindow(QMainWindow):
         
         views_layout.addWidget(map_group)
         
-        # Set stretch factors (graph:map = 2:3 to give more space to graph)
-        views_layout.setStretchFactor(graph_group, 2)
-        views_layout.setStretchFactor(map_group, 3)
+        # Set stretch factors (graph:map = 1:1 equal like test mode)  
+        views_layout.setStretchFactor(graph_group, 1)
+        views_layout.setStretchFactor(map_group, 1)
         
         main_layout.addWidget(views_widget)
         
@@ -3240,18 +3272,14 @@ class GraphSetupWindow(QMainWindow):
         # Fallback to original method
         try:
             if elem_type == 'node':
-                regions_dict = getattr(self.mapping, '_node_to_regions', {})
-                regions = regions_dict.get(elem_id, [])
+                region_objects = self.mapping.get_node_regions(elem_id)
             else:
-                regions_dict = getattr(self.mapping, '_edge_to_regions', {})
-                regions = regions_dict.get(elem_id, [])
+                region_objects = self.mapping.get_edge_regions(elem_id)
                 
-            for region_id in regions:
-                if hasattr(self.mapping, '_regions'):
-                    region = self.mapping._regions.get(region_id)
-                    if region:
-                        # Highlight region on map with corresponding color (yellow)
-                        self.test_map_widget.highlight_region(region_id, color_type='highlight')
+            for region in region_objects:
+                if region:
+                    # Highlight region on map with corresponding color (yellow)
+                    self.test_map_widget.highlight_region(region.region_id, color_type='highlight')
                 
         except AttributeError as e:
             # Don't fail the whole operation
@@ -3277,6 +3305,11 @@ class GraphSetupWindow(QMainWindow):
             # Convert edge tuple to string format
             edge_str = f"{elem_id[0]}_{elem_id[1]}"
             contour_list = standardized.get('edges', {}).get(edge_str, [])
+            
+            # For undirected graphs, try reversed edge if not found
+            if not contour_list and hasattr(self, 'graph') and not self.graph.graph.is_directed():
+                reversed_edge_str = f"{elem_id[1]}_{elem_id[0]}"
+                contour_list = standardized.get('edges', {}).get(reversed_edge_str, [])
         
         # Add each contour as a temporary highlight on the map
         from PyQt5.QtGui import QColor

@@ -125,6 +125,7 @@ class BinaryTreeBuilder(GraphBuilder):
                                   node_size: int = 1000,
                                   node_color: str = '#C9D6E8',
                                   edge_color: str = 'black',
+                                  width: float = 1.0,
                                   with_labels: bool = True,
                                   font_size: int = 15,
                                   font_weight: str = 'bold',
@@ -154,7 +155,7 @@ class BinaryTreeBuilder(GraphBuilder):
             # Draw the graph
             nx.draw(graph, pos=positions, ax=ax,
                     node_size=node_size, node_color=node_color,
-                    edge_color=edge_color, with_labels=with_labels,
+                    edge_color=edge_color, width=width, with_labels=with_labels,
                     font_size=font_size, font_weight=font_weight)
             
             # Convert to image array

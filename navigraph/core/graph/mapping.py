@@ -168,8 +168,7 @@ class SpatialMapping:
         Raises:
             ValueError: If edge doesn't exist in graph
         """
-        # Normalize edge representation
-        edge = tuple(sorted(edge))
+        # Keep edge representation as provided by the graph
         
         # Validate edge exists in graph if provided
         if self.graph and not self.graph.has_edge(edge[0], edge[1]):
@@ -310,8 +309,15 @@ class SpatialMapping:
         Returns:
             List of spatial regions associated with the edge
         """
-        edge = tuple(sorted(edge))
-        region_ids = self._edge_to_regions.get(edge, [])
+        # For undirected graphs, try both edge directions
+        if self.graph and not self.graph.graph.is_directed():
+            region_ids = self._edge_to_regions.get(edge, [])
+            if not region_ids:
+                # Try reversed edge
+                reversed_edge = (edge[1], edge[0])
+                region_ids = self._edge_to_regions.get(reversed_edge, [])
+        else:
+            region_ids = self._edge_to_regions.get(edge, [])
         return [self._regions[rid] for rid in region_ids]
     
     def get_mapped_nodes(self) -> Set[Any]:

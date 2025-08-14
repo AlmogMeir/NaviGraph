@@ -43,6 +43,7 @@ class GraphBuilder(ABC):
                               node_size: int = 300,
                               node_color: str = 'lightblue',
                               edge_color: str = 'gray',
+                              width: float = 1.0,
                               with_labels: bool = True,
                               font_size: int = 10,
                               **kwargs) -> np.ndarray:
@@ -51,9 +52,10 @@ class GraphBuilder(ABC):
         Args:
             positions: Node positions. If None, uses spring layout
             figsize: Figure size in inches
-            node_size: Size of nodes
-            node_color: Color of nodes
-            edge_color: Color of edges
+            node_size: Size of nodes (single value or list per node)
+            node_color: Color of nodes (single color or list per node)
+            edge_color: Color of edges (single color or list per edge)
+            width: Width of edges (single value or list per edge)
             with_labels: Whether to show node labels
             font_size: Font size for labels
             **kwargs: Additional parameters (ignored)
@@ -83,7 +85,7 @@ class GraphBuilder(ABC):
             # Draw the graph
             nx.draw(graph, pos=positions, ax=ax,
                     node_size=node_size, node_color=node_color,
-                    edge_color=edge_color, with_labels=with_labels,
+                    edge_color=edge_color, width=width, with_labels=with_labels,
                     font_size=font_size, font_weight='bold')
             
             ax.set_title(f"Graph ({len(graph.nodes)} nodes, {len(graph.edges)} edges)")
