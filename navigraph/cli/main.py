@@ -43,6 +43,7 @@ experiment running, configuration validation, and interactive setup tools.
 
 import sys
 import os
+import json
 from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
 import click
@@ -981,6 +982,78 @@ def test_graph(config_path: Path, report: Optional[Path], format: str):
         if '--verbose' in sys.argv:
             import traceback
             click.echo(traceback.format_exc(), err=True)
+        sys.exit(1)
+
+
+@cli.command('list-conflict-resolvers')
+@click.option('--format', '-f', 
+              type=click.Choice(['table', 'json', 'simple']),
+              default='table',
+              help='Output format')
+def list_conflict_resolvers(format: str):
+    """List all available conflict resolution strategies.
+    
+    Display registered conflict resolvers that can be used in spatial mapping
+    when pixels fall within multiple regions.
+    
+    \b
+    Examples:
+      navigraph list-conflict-resolvers
+      navigraph list-conflict-resolvers --format json
+    """
+    try:
+        from ..core.graph.conflict_resolvers import ConflictResolvers
+        
+        strategies = ConflictResolvers._strategies
+        
+        if not strategies:
+            click.echo("⚠️  No conflict resolvers found")
+            return
+        
+        if format == 'simple':
+            for name in strategies.keys():
+                click.echo(name)
+        
+        elif format == 'json':
+            output = {
+                'available_resolvers': [
+                    {
+                        'name': name,
+                        'description': func.__doc__.strip() if func.__doc__ else ''
+                    }
+                    for name, func in strategies.items()
+                ],
+                'total_count': len(strategies),
+                'default': 'node_priority'
+            }
+            click.echo(json.dumps(output, indent=2))
+        
+        else:  # table format
+            click.echo()
+            click.echo("🔀 Available Conflict Resolution Strategies")
+            click.echo("=" * 55)
+            
+            for name, func in strategies.items():
+                click.echo(f"\n🔹 {name}")
+                if func.__doc__:
+                    doc = func.__doc__.strip().split('\n')[0]
+                    click.echo(f"   {doc}")
+            
+            click.echo()
+            click.echo(f"Total: {len(strategies)} strategies available")
+            click.echo(f"Default: node_priority")
+            click.echo()
+            click.echo("Usage in config:")
+            click.echo("  shared_resources:")
+            click.echo("    - name: graph_provider")
+            click.echo("      config:")
+            click.echo("        conflict_strategy: <resolver_name>")
+            click.echo()
+            click.echo("CLI override:")
+            click.echo("  navigraph run config.yaml --conflict-strategy <resolver_name>")
+            
+    except Exception as e:
+        click.echo(f"❌ Failed to list conflict resolvers: {str(e)}", err=True)
         sys.exit(1)
 
 

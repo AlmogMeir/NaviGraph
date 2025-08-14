@@ -7,6 +7,7 @@ to graph nodes and edges, enabling spatial navigation analysis.
 from typing import Dict, List, Optional, Any, Set, Tuple, Union
 from dataclasses import dataclass, field
 import numpy as np
+import json
 from .regions import SpatialRegion
 from .structures import GraphStructure
 
@@ -94,15 +95,21 @@ class SpatialMapping:
     """
     
     def __init__(self, graph: Optional[GraphStructure] = None, 
-                 unmapped_value: Any = None):
+                 unmapped_value: Any = None,
+                 conflict_strategy: str = "node_priority"):
         """Initialize spatial mapping.
         
         Args:
             graph: Optional graph structure for validation
             unmapped_value: Value to return for unmapped points (default: None)
+            conflict_strategy: Strategy for resolving conflicts when point is in multiple regions
         """
         self.graph = graph
         self.unmapped_value = unmapped_value
+        
+        # Set up conflict resolution strategy
+        from .conflict_resolvers import ConflictResolvers
+        self.conflict_resolver = ConflictResolvers.get(conflict_strategy)
         
         # Core mapping data structures
         # Each element can have multiple regions (lists of contours)
@@ -227,7 +234,7 @@ class SpatialMapping:
         self._clear_cache()
     
     def map_point_to_elements(self, x: float, y: float) -> Tuple[Optional[Any], Optional[Tuple[Any, Any]]]:
-        """Map a coordinate point to graph elements.
+        """Map a coordinate point to graph elements with conflict resolution.
         
         Args:
             x: X coordinate
@@ -242,25 +249,33 @@ class SpatialMapping:
             if cache_key in self._point_cache:
                 return self._point_cache[cache_key]
         
-        node_id = None
-        edge_tuple = None
+        # Find all matching regions
+        matching_nodes = []
+        matching_edges = []
         
-        # Find which regions contain the point
         for region_id, region in self._regions.items():
             if region.contains_point(x, y):
                 element = self._region_to_element.get(region_id)
                 if element:
                     element_type, element_id = element
                     if element_type == 'node':
-                        node_id = element_id
+                        matching_nodes.append((element_id, region))
                     elif element_type == 'edge':
-                        edge_tuple = element_id
+                        matching_edges.append((element_id, region))
+        
+        # Apply conflict resolution strategy
+        if not matching_nodes and not matching_edges:
+            result = (self.unmapped_value, None)
+        else:
+            # Use resolver
+            node_id, edge_id = self.conflict_resolver(matching_nodes, matching_edges, (x, y))
+            result = (node_id if node_id is not None else self.unmapped_value, edge_id)
         
         # Cache result
         if self._cache_enabled and len(self._point_cache) < self._max_cache_size:
-            self._point_cache[cache_key] = (node_id, edge_tuple)
+            self._point_cache[cache_key] = result
         
-        return (node_id, edge_tuple)
+        return result
     
     def map_point_to_node(self, x: float, y: float) -> Any:
         """Map a coordinate point to a graph node.
@@ -534,6 +549,272 @@ class SpatialMapping:
             'region_to_element': self._region_to_element,
             'unmapped_value': self.unmapped_value
         }
+    
+    def to_simple_format(self) -> Dict[str, Any]:
+        """Convert mapping to simple x,y point format.
+        
+        Returns:
+            Dictionary with simple point lists for nodes and edges
+        """
+        simple_mapping = {
+            'nodes': {},
+            'edges': {}
+        }
+        
+        # Convert node regions to point lists
+        for node_id in self.get_mapped_nodes():
+            regions = self.get_node_regions(node_id)
+            contours = []
+            for region in regions:
+                # Extract contour points from any region type
+                points = self._extract_contour_points(region)
+                if points:
+                    contours.append(points.tolist())  # Convert numpy to list
+            if contours:
+                simple_mapping['nodes'][str(node_id)] = contours
+        
+        # Convert edge regions to point lists with consistent format
+        for edge in self.get_mapped_edges():
+            regions = self.get_edge_regions(edge)
+            contours = []
+            for region in regions:
+                points = self._extract_contour_points(region)
+                if points:
+                    contours.append(points.tolist())  # Convert numpy to list
+            if contours:
+                # Always use consistent edge string format
+                edge_str = f"{edge[0]}_{edge[1]}"
+                simple_mapping['edges'][edge_str] = contours
+        
+        return simple_mapping
+    
+    def from_simple_format(self, simple_mapping: Dict[str, Any]):
+        """Load mapping from simple x,y point format.
+        
+        Args:
+            simple_mapping: Dictionary with point lists
+        """
+        from .regions import ContourRegion
+        
+        # Clear existing mappings
+        self.clear_all_mappings()
+        
+        # Load node mappings
+        for node_id_str, contour_lists in simple_mapping.get('nodes', {}).items():
+            # Convert string back to appropriate type
+            node_id = self._parse_node_id(node_id_str)
+            
+            for i, contour_points in enumerate(contour_lists):
+                region = ContourRegion(
+                    region_id=f"node_{node_id}_region_{i}",
+                    contour_points=np.array(contour_points)
+                )
+                self.add_node_region(region, node_id)
+        
+        # Load edge mappings
+        for edge_str, contour_lists in simple_mapping.get('edges', {}).items():
+            # Parse edge string to tuple
+            edge = self._parse_edge_string(edge_str)
+            
+            for i, contour_points in enumerate(contour_lists):
+                region = ContourRegion(
+                    region_id=f"edge_{edge_str}_region_{i}",
+                    contour_points=np.array(contour_points)
+                )
+                self.add_edge_region(region, edge)
+    
+    def _extract_contour_points(self, region) -> Optional[np.ndarray]:
+        """Extract contour points from any region type.
+        
+        Args:
+            region: SpatialRegion object
+            
+        Returns:
+            Array of contour points or None
+        """
+        from .regions import ContourRegion, GridCell, RectangleRegion
+        
+        if isinstance(region, ContourRegion):
+            # Already a contour - use as-is
+            return region.contour_points
+        elif isinstance(region, (GridCell, RectangleRegion)):
+            # Convert rectangle/grid cell to 4-point contour
+            bounds = region.get_bounds()  # Assuming bounds method exists
+            if bounds:
+                x_min, y_min, x_max, y_max = bounds
+                return np.array([
+                    [x_min, y_min],
+                    [x_max, y_min],
+                    [x_max, y_max],
+                    [x_min, y_max]
+                ])
+        return None
+    
+    def _parse_node_id(self, node_id_str: str) -> Any:
+        """Parse node ID from string format.
+        
+        Args:
+            node_id_str: String representation of node ID
+            
+        Returns:
+            Parsed node ID (int if numeric, otherwise string)
+        """
+        try:
+            # Try to convert to int if it looks numeric
+            return int(node_id_str)
+        except ValueError:
+            # Return as string if not numeric
+            return node_id_str
+    
+    def _parse_edge_string(self, edge_str: str) -> Tuple[Any, Any]:
+        """Parse edge string to tuple.
+        
+        Args:
+            edge_str: String in format "node1_node2"
+            
+        Returns:
+            Tuple of (node1, node2)
+        """
+        parts = edge_str.split('_')
+        if len(parts) != 2:
+            raise ValueError(f"Invalid edge string format: {edge_str}")
+        
+        node1 = self._parse_node_id(parts[0])
+        node2 = self._parse_node_id(parts[1])
+        return (node1, node2)
+    
+    def save_with_builder_info(self, file_path, setup_mode_state: Optional[Dict[str, Any]] = None):
+        """Save mapping with builder information for reconstruction.
+        
+        Args:
+            file_path: Path object or string for save location
+            setup_mode_state: Optional state from GUI (mode, grid config, progress)
+        """
+        from pathlib import Path
+        import pickle
+        import json
+        from datetime import datetime
+        
+        file_path = Path(file_path)
+        
+        # Get builder info from graph structure
+        builder_info = self.graph.metadata if self.graph else None
+        if not builder_info:
+            raise ValueError("Cannot save mapping without graph builder information")
+        
+        # Create complete mapping data
+        data = {
+            'format_version': '3.0',
+            'graph_builder': {
+                'type': self._get_builder_registry_name(builder_info['builder_class']),
+                'config': builder_info['config']
+            },
+            'mappings': self.to_simple_format(),
+            'setup_mode': setup_mode_state or {},
+            'metadata': {
+                'created_at': datetime.now().isoformat(),
+                'total_nodes': len(self.get_mapped_nodes()),
+                'total_edges': len(self.get_mapped_edges()),
+                'total_regions': len(self._regions)
+            }
+        }
+        
+        # Save as JSON for readability (or pickle for compatibility)
+        if file_path.suffix.lower() == '.json':
+            with open(file_path, 'w') as f:
+                json.dump(data, f, indent=2, cls=self._JSONEncoder)
+        else:
+            with open(file_path, 'wb') as f:
+                pickle.dump(data, f)
+    
+    @classmethod
+    def load_with_builder_reconstruction(cls, file_path) -> 'SpatialMapping':
+        """Load mapping and reconstruct graph using builder information.
+        
+        Args:
+            file_path: Path object or string for mapping file
+            
+        Returns:
+            SpatialMapping with reconstructed graph
+        """
+        from pathlib import Path
+        import pickle
+        import json
+        from .structures import GraphStructure
+        
+        file_path = Path(file_path)
+        
+        # Load data
+        if file_path.suffix.lower() == '.json':
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+        else:
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+        
+        # Check format version
+        version = data.get('format_version', '1.0')
+        if version < '3.0':
+            raise ValueError(
+                f"Unsupported mapping format version: {version}. "
+                f"Please recreate this mapping using the updated GUI."
+            )
+        
+        # Reconstruct graph from builder info
+        builder_info = data['graph_builder']
+        graph_structure = GraphStructure.from_config(
+            builder_info['type'],
+            builder_info['config']
+        )
+        
+        # Create mapping with reconstructed graph
+        mapping = cls(graph_structure)
+        
+        # Load the simple format mappings
+        mapping.from_simple_format(data['mappings'])
+        
+        # Store setup mode state for GUI loading
+        mapping._setup_mode_state = data.get('setup_mode', {})
+        
+        return mapping
+    
+    def _get_builder_registry_name(self, builder_class_name: str) -> str:
+        """Convert builder class name to registry name.
+        
+        Args:
+            builder_class_name: Class name like 'BinaryTreeBuilder'
+            
+        Returns:
+            Registry name like 'binary_tree'
+        """
+        # Remove 'Builder' suffix and convert to snake_case
+        name = builder_class_name.replace('Builder', '')
+        
+        # Convert CamelCase to snake_case
+        import re
+        name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+        name = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
+        
+        return name
+    
+    class _JSONEncoder(json.JSONEncoder):
+        """Custom JSON encoder for numpy arrays and other types."""
+        def default(self, obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            if isinstance(obj, np.integer):
+                return int(obj)
+            if isinstance(obj, np.floating):
+                return float(obj)
+            return super().default(obj)
+    
+    def get_setup_mode_state(self) -> Dict[str, Any]:
+        """Get setup mode state for GUI continuation.
+        
+        Returns:
+            Dictionary with setup mode state or empty dict
+        """
+        return getattr(self, '_setup_mode_state', {})
     
     def __len__(self) -> int:
         """Return number of mapped regions."""
