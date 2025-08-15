@@ -2551,9 +2551,26 @@ class GraphSetupWindow(QMainWindow):
         if file_path:
             try:
                 from pathlib import Path
-                # Load mapping with automatic graph reconstruction
-                self.mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
-                self.graph = self.mapping.graph
+                # Load mapping data but preserve original graph structure
+                loaded_mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+                
+                # IMPORTANT: Preserve the original graph from config, only load contour mappings
+                # This ensures the graph structure (e.g., height=7) stays as configured
+                # regardless of which nodes were actually mapped in the file
+                
+                # Clear current mapping but keep original graph
+                self.mapping.clear_all_mappings()
+                
+                # Copy only the contour mappings to preserve graph structure
+                for node_id in loaded_mapping.get_mapped_nodes():
+                    regions = loaded_mapping.get_node_regions(node_id)
+                    for region in regions:
+                        self.mapping.add_node_region(region, node_id)
+                
+                for edge in loaded_mapping.get_mapped_edges():
+                    regions = loaded_mapping.get_edge_regions(edge)
+                    for region in regions:
+                        self.mapping.add_edge_region(region, edge)
                 
                 # Update UI to reflect loaded mapping
                 self._update_ui_from_mapping()
@@ -2707,12 +2724,28 @@ class GraphSetupWindow(QMainWindow):
         if file_path:
             try:
                 from pathlib import Path
-                # Load mapping with automatic graph reconstruction
-                self.mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
-                self.graph = self.mapping.graph
+                # Load mapping data but preserve original graph structure
+                loaded_mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+                
+                # IMPORTANT: Preserve the original graph from config, only load contour mappings
+                # This ensures the graph structure (e.g., height=7) stays as configured
+                
+                # Clear current mapping but keep original graph
+                self.mapping.clear_all_mappings()
+                
+                # Copy only the contour mappings to preserve graph structure
+                for node_id in loaded_mapping.get_mapped_nodes():
+                    regions = loaded_mapping.get_node_regions(node_id)
+                    for region in regions:
+                        self.mapping.add_node_region(region, node_id)
+                
+                for edge in loaded_mapping.get_mapped_edges():
+                    regions = loaded_mapping.get_edge_regions(edge)
+                    for region in regions:
+                        self.mapping.add_edge_region(region, edge)
                 
                 # Get setup mode state for GUI continuation
-                setup_mode_state = self.mapping.get_setup_mode_state()
+                setup_mode_state = loaded_mapping.get_setup_mode_state()
                 
                 # Restore setup mode state if available
                 if setup_mode_state:
