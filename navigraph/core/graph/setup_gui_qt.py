@@ -298,22 +298,7 @@ class MapWidget(QWidget):
                     painter.setPen(QPen(color.darker(), 2))
                     painter.drawRect(scaled_rect)
                     
-                    # Draw element ID if labels are enabled
-                    if self.show_cell_labels:
-                        elem_type, elem_id = self.cell_mappings[cell_id]
-                        if elem_type == 'node':
-                            label = f"N:{elem_id}"
-                            painter.setPen(QPen(QColor(0, 100, 0), 1))
-                        else:
-                            if isinstance(elem_id, tuple):
-                                label = f"E:{elem_id[0]},{elem_id[1]}"
-                            else:
-                                label = f"E:{elem_id}"
-                            painter.setPen(QPen(QColor(150, 75, 0), 1))  # Orange-brown for edges
-                        
-                        # Smart text positioning to fit in cell
-                        text_rect = scaled_rect.adjusted(2, 2, -2, -2)
-                        painter.drawText(text_rect, Qt.AlignCenter | Qt.TextWordWrap, label)
+                    # Text will be drawn from mapping section (unified approach)
                     
                 elif is_selected:
                     # Currently selected for mapping - bright green
@@ -325,8 +310,10 @@ class MapWidget(QWidget):
                     painter.setPen(QPen(QColor(100, 100, 100), 1))
                     painter.drawRect(scaled_rect)
                 
-        # Draw regions directly from mapping if show_all_mappings is enabled and mapping is available
-        if hasattr(self, 'show_all_mappings') and self.show_all_mappings and hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and self.gui_parent.mapping:
+        # Draw regions from mapping (single source of truth for all committed contours)
+        # Only draw if show_all_mappings is enabled
+        if (hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and 
+            self.gui_parent.mapping and hasattr(self, 'show_all_mappings') and self.show_all_mappings):
             try:
                 from .regions import RectangleRegion, ContourRegion
                 
@@ -359,40 +346,63 @@ class MapWidget(QWidget):
                             painter.setBrush(QBrush(color))
                             painter.drawPolygon(polygon)
                             
-                            # Draw node label at centroid
+                            # Draw node label based on adaptive font mode
                             if self.show_cell_labels:
                                 bounding_rect = polygon.boundingRect()
                                 centroid = bounding_rect.center()
                                 
-                                # Calculate adaptive font size based on contour size
-                                contour_area = bounding_rect.width() * bounding_rect.height()
+                                label_text = f"N:{node_id}"
+                                
                                 if self.adaptive_font_size:
-                                    # Scale-aware font sizing
-                                    scale_adjusted_area = contour_area / (self.scale_factor * self.scale_factor)
-                                    if scale_adjusted_area > 5000:
-                                        font_size = 14
-                                    elif scale_adjusted_area > 2000:
-                                        font_size = 12
-                                    elif scale_adjusted_area > 1000:
-                                        font_size = 10
-                                    elif scale_adjusted_area > 500:
-                                        font_size = 9
-                                    elif scale_adjusted_area > 200:
-                                        font_size = 8
-                                    elif scale_adjusted_area > 100:
-                                        font_size = 7
+                                    # Adaptive mode: Size text to fit inside contour
+                                    # Start with a reasonable font size and reduce until text fits
+                                    max_font_size = 20
+                                    min_font_size = 5
+                                    font_size = max_font_size
+                                    
+                                    # Get available space (use 80% of contour dimensions for padding)
+                                    available_width = bounding_rect.width() * 0.8
+                                    available_height = bounding_rect.height() * 0.8
+                                    
+                                    # Find the right font size that fits
+                                    font = painter.font()
+                                    for size in range(max_font_size, min_font_size - 1, -1):
+                                        font.setPointSize(size)
+                                        painter.setFont(font)
+                                        
+                                        # Measure text with this font size
+                                        from PyQt5.QtGui import QFontMetrics
+                                        metrics = QFontMetrics(font)
+                                        text_rect = metrics.boundingRect(label_text)
+                                        
+                                        # Check if text fits within available space
+                                        if text_rect.width() <= available_width and text_rect.height() <= available_height:
+                                            font_size = size
+                                            break
                                     else:
-                                        font_size = 6
+                                        font_size = min_font_size
+                                    
+                                    # Set final font
+                                    font.setPointSize(font_size)
+                                    painter.setFont(font)
+                                    
+                                    # Draw grey text centered in contour
+                                    painter.setPen(QPen(QColor(100, 100, 100), 1))  # Grey text
+                                    
+                                    # Draw text truly centered (accounting for text dimensions)
+                                    metrics = QFontMetrics(font)
+                                    text_rect = metrics.boundingRect(label_text)
+                                    text_x = centroid.x() - text_rect.width() / 2
+                                    text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
+                                    painter.drawText(QPointF(text_x, text_y), label_text)
                                 else:
+                                    # Fixed mode: Draw green text at centroid with fixed size
                                     font_size = 9
-                                
-                                font = painter.font()
-                                font.setPointSize(font_size)
-                                painter.setFont(font)
-                                
-                                # Draw node label
-                                painter.setPen(QPen(QColor(0, 100, 0), 1))
-                                painter.drawText(centroid, f"N:{node_id}")
+                                    font = painter.font()
+                                    font.setPointSize(font_size)
+                                    painter.setFont(font)
+                                    painter.setPen(QPen(QColor(0, 100, 0), 1))  # Green text
+                                    painter.drawText(centroid, label_text)
                 
                 # Draw edge regions in orange
                 for edge in self.gui_parent.mapping.get_mapped_edges():
@@ -423,110 +433,105 @@ class MapWidget(QWidget):
                             painter.setBrush(QBrush(color))
                             painter.drawPolygon(polygon)
                             
-                            # Draw edge label at centroid
+                            # Draw edge label based on adaptive font mode
                             if self.show_cell_labels:
                                 bounding_rect = polygon.boundingRect()
                                 centroid = bounding_rect.center()
                                 
-                                # Use same adaptive font sizing as nodes
-                                contour_area = bounding_rect.width() * bounding_rect.height()
-                                if self.adaptive_font_size:
-                                    scale_adjusted_area = contour_area / (self.scale_factor * self.scale_factor)
-                                    if scale_adjusted_area > 5000:
-                                        font_size = 14
-                                    elif scale_adjusted_area > 2000:
-                                        font_size = 12
-                                    elif scale_adjusted_area > 1000:
-                                        font_size = 10
-                                    elif scale_adjusted_area > 500:
-                                        font_size = 9
-                                    elif scale_adjusted_area > 200:
-                                        font_size = 8
-                                    elif scale_adjusted_area > 100:
-                                        font_size = 7
-                                    else:
-                                        font_size = 6
-                                else:
-                                    font_size = 9
-                                
-                                font = painter.font()
-                                font.setPointSize(font_size)
-                                painter.setFont(font)
-                                
-                                # Draw edge label
-                                painter.setPen(QPen(QColor(150, 80, 0), 1))
+                                # Prepare edge label text
                                 if isinstance(edge, tuple):
-                                    painter.drawText(centroid, f"E:{edge[0]},{edge[1]}")
+                                    label_text = f"E:{edge[0]},{edge[1]}"
                                 else:
-                                    painter.drawText(centroid, f"E:{edge}")
+                                    label_text = f"E:{edge}"
+                                
+                                if self.adaptive_font_size:
+                                    # Adaptive mode: Size text to fit inside contour
+                                    # Start with a reasonable font size and reduce until text fits
+                                    max_font_size = 20
+                                    min_font_size = 5
+                                    font_size = max_font_size
+                                    
+                                    # Get available space (use 80% of contour dimensions for padding)
+                                    available_width = bounding_rect.width() * 0.8
+                                    available_height = bounding_rect.height() * 0.8
+                                    
+                                    # Find the right font size that fits
+                                    font = painter.font()
+                                    for size in range(max_font_size, min_font_size - 1, -1):
+                                        font.setPointSize(size)
+                                        painter.setFont(font)
+                                        
+                                        # Measure text with this font size
+                                        from PyQt5.QtGui import QFontMetrics
+                                        metrics = QFontMetrics(font)
+                                        text_rect = metrics.boundingRect(label_text)
+                                        
+                                        # Check if text fits within available space
+                                        if text_rect.width() <= available_width and text_rect.height() <= available_height:
+                                            font_size = size
+                                            break
+                                    else:
+                                        font_size = min_font_size
+                                    
+                                    # Set final font
+                                    font.setPointSize(font_size)
+                                    painter.setFont(font)
+                                    
+                                    # Draw grey text centered in contour
+                                    painter.setPen(QPen(QColor(100, 100, 100), 1))  # Grey text
+                                    
+                                    # Draw text truly centered (accounting for text dimensions)
+                                    metrics = QFontMetrics(font)
+                                    text_rect = metrics.boundingRect(label_text)
+                                    text_x = centroid.x() - text_rect.width() / 2
+                                    text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
+                                    painter.drawText(QPointF(text_x, text_y), label_text)
+                                else:
+                                    # Fixed mode: Draw orange text at centroid with fixed size
+                                    font_size = 9
+                                    font = painter.font()
+                                    font.setPointSize(font_size)
+                                    painter.setFont(font)
+                                    painter.setPen(QPen(QColor(150, 80, 0), 1))  # Orange text
+                                    painter.drawText(centroid, label_text)
                 
             except Exception as e:
                 print(f"Error drawing regions from mapping: {e}")
         
-        # Draw completed contours (for manual drawing mode only)
-        elif not self.show_all_mappings:
-            for contour_data in self.completed_contours:
-                points, region_id, color = contour_data[:3]
-                if len(contour_data) > 3:
-                    elem_type, elem_id = contour_data[3:5]
-                else:
-                    elem_type, elem_id = self.contour_mappings.get(region_id, (None, None))
-                    
-                if len(points) > 2:
-                    poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
-                                         self.offset_y + p[1] * self.scale_factor) 
-                                 for p in points]
-                    polygon = QPolygonF(poly_points)
-                    
-                    painter.setPen(QPen(color.darker(), 2))
-                    painter.setBrush(QBrush(color))
-                    painter.drawPolygon(polygon)
-                    
-                    # Draw element label at centroid with adaptive font size
-                    if elem_type and elem_id is not None and self.show_cell_labels:
-                        bounding_rect = polygon.boundingRect()
-                        centroid = bounding_rect.center()
-                        
-                        # Calculate adaptive font size based on contour size
-                        contour_area = bounding_rect.width() * bounding_rect.height()
-                        if self.adaptive_font_size:
-                            # Scale-aware font sizing
-                            scale_adjusted_area = contour_area / (self.scale_factor * self.scale_factor)
-                            if scale_adjusted_area > 5000:
-                                font_size = 14
-                            elif scale_adjusted_area > 2000:
-                                font_size = 12
-                            elif scale_adjusted_area > 1000:
-                                font_size = 10
-                            elif scale_adjusted_area > 500:
-                                font_size = 9
-                            elif scale_adjusted_area > 200:
-                                font_size = 8
-                            elif scale_adjusted_area > 100:
-                                font_size = 7
-                            else:
-                                font_size = 6
+        # Draw selected region highlighting (yellow)
+        if hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and self.gui_parent.mapping and hasattr(self, 'highlighted_region_id'):
+            try:
+                from .regions import RectangleRegion, ContourRegion
+                if self.highlighted_region_id:
+                    region = self.gui_parent.mapping.get_region_by_id(self.highlighted_region_id)
+                    if region:
+                        # Extract points based on region type
+                        if isinstance(region, RectangleRegion):
+                            points = [
+                                (region.x, region.y),
+                                (region.x + region.width, region.y),
+                                (region.x + region.width, region.y + region.height),
+                                (region.x, region.y + region.height)
+                            ]
+                        elif isinstance(region, ContourRegion):
+                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
                         else:
-                            font_size = 9
-                        
-                        font = painter.font()
-                        font.setPointSize(font_size)
-                        painter.setFont(font)
-                        
-                        if elem_type == 'node':
-                            label = f"N:{elem_id}"
-                        else:
-                            label = f"E:{elem_id[0]},{elem_id[1]}" if isinstance(elem_id, tuple) else f"E:{elem_id}"
-                        
-                        # Calculate text size for centering
-                        text_rect = painter.fontMetrics().boundingRect(label)
-                        text_center = QPointF(
-                            centroid.x() - text_rect.width() / 2,
-                            centroid.y() + text_rect.height() / 4  # Adjust for vertical centering
-                        )
-                        
-                        painter.setPen(QPen(color.darker().darker(), 1))
-                        painter.drawText(text_center, label)
+                            points = None
+                            
+                        if points and len(points) > 2:
+                            poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
+                                                 self.offset_y + p[1] * self.scale_factor) 
+                                         for p in points]
+                            polygon = QPolygonF(poly_points)
+                            
+                            # Draw yellow highlight
+                            highlight_color = QColor(255, 255, 0, 150)  # Yellow highlight
+                            painter.setPen(QPen(highlight_color.darker(), 3))
+                            painter.setBrush(QBrush(highlight_color))
+                            painter.drawPolygon(polygon)
+                            
+            except Exception as e:
+                print(f"Error drawing region highlight: {e}")
                 
         # Draw current contour being drawn
         if self.current_contour:
@@ -2370,16 +2375,19 @@ class GraphSetupWindow(QMainWindow):
         """Handle contour selection from list with toggle support."""
         region_id = item.data(Qt.UserRole)
         if region_id:
-            # Toggle behavior: if clicking the same contour, deselect it
-            if self.map_widget.highlighted_contour_id == region_id:
-                # Deselect: unhighlight and clear list selection
-                self.map_widget.unhighlight_current_contour()
+            # Toggle behavior: if clicking the same region, deselect it
+            current_highlight = getattr(self.map_widget, 'highlighted_region_id', None)
+            if current_highlight == region_id:
+                # Deselect: clear highlight and list selection
+                self.map_widget.highlighted_region_id = None
                 self.contour_list.clearSelection()
                 self.delete_contour_button.setEnabled(False)
+                self.map_widget.update()
             else:
-                # Select new contour: highlight it
-                self.map_widget.highlight_contour(region_id)
+                # Select: highlight this region in yellow
+                self.map_widget.highlighted_region_id = region_id
                 self.delete_contour_button.setEnabled(True)
+                self.map_widget.update()
         
     def _on_delete_contour(self):
         """Delete selected contour."""
@@ -2387,45 +2395,60 @@ class GraphSetupWindow(QMainWindow):
         if current_item:
             region_id = current_item.data(Qt.UserRole)
             
-            # Clean up highlighting if this contour is currently highlighted
-            if self.map_widget.highlighted_contour_id == region_id:
-                self.map_widget.unhighlight_current_contour()
-            
-            # Remove contour from map
-            self.map_widget.remove_contour(region_id)
-            
             # Remove from mapping
-            # TODO: Remove from actual mapping object
+            self.mapping.remove_region(region_id)
+            
+            # Clear highlighting
+            self.map_widget.highlighted_region_id = None
             
             # Remove from list
             self.contour_list.takeItem(self.contour_list.row(current_item))
             self.delete_contour_button.setEnabled(False)
             
+            # Update map to reflect removal
+            self.map_widget.update()
+            self.status_bar.showMessage(f"Deleted region {region_id}")
+            
             self._update_progress_display()
         
     def _on_contour_drawn(self, points: List[Tuple[float, float]]):
-        """Handle completed contour."""
+        """Handle completed contour - add directly to mapping."""
         if self.current_element:
+            # We have an element selected - add directly to mapping only
             elem_type, elem_id = self.current_element
-            region_id = f"{elem_type}_{elem_id}_contour_{len(self.map_widget.completed_contours)}"
             
-            # Add to map display
-            color = QColor(150, 255, 150, 100) if elem_type == 'node' else QColor(255, 200, 120, 100)
-            self.map_widget.add_contour(points, region_id, elem_type, elem_id, color)
+            # Generate unique region ID based on existing regions for this element
+            if elem_type == 'node':
+                existing_regions = len(self.mapping.get_node_regions(elem_id))
+            else:
+                existing_regions = len(self.mapping.get_edge_regions(elem_id))
+            region_id = f"{elem_type}_{elem_id}_contour_{existing_regions}"
             
-            # Add to contour list
-            list_label = f"{elem_type.title()} {elem_id}: {region_id}"
-            item = QListWidgetItem(list_label)
-            item.setData(Qt.UserRole, region_id)  # Store region_id for reference
-            self.contour_list.addItem(item)
-            
-            # Create region and add to mapping
-            region = ContourRegion(region_id=region_id, contour_points=points)
+            # Create region and add to mapping (single source of truth)
+            from .regions import ContourRegion
+            import numpy as np
+            # Ensure points is a numpy array
+            points_array = np.array(points) if not isinstance(points, np.ndarray) else points
+            region = ContourRegion(region_id=region_id, contour_points=points_array)
             
             if elem_type == 'node':
                 self.mapping.add_node_region(region, elem_id)
             elif elem_type == 'edge':
                 self.mapping.add_edge_region(region, elem_id)
+            
+            # Add to contour list widget for UI reference
+            list_label = f"{elem_type.title()} {elem_id}: {region_id}"
+            item = QListWidgetItem(list_label)
+            item.setData(Qt.UserRole, region_id)  # Store region_id for reference
+            self.contour_list.addItem(item)
+            
+            # Force map update to show the new region from mapping
+            self.map_widget.update()
+            self.status_bar.showMessage(f"Contour assigned to {elem_type} {elem_id}")
+            
+        else:
+            # No element selected - just notify user to select element first
+            self.status_bar.showMessage("Please select an element first to assign the contour")
                 
             # Add to history for undo
             self.mapping_history.append({
@@ -2932,10 +2955,7 @@ class GraphSetupWindow(QMainWindow):
                         
                 # Remove from mapping using new API
                 for region_id in last_action.get('regions', []):
-                    if elem_type == 'node':
-                        self.mapping.remove_node_region(region_id, elem_id)
-                    elif elem_type == 'edge':
-                        self.mapping.remove_edge_region(region_id, elem_id)
+                    self.mapping.remove_region(region_id)
                                 
                 # Add element back to queue safely
                 if hasattr(self, 'element_queue') and self.element_queue is not None:
@@ -2979,15 +2999,19 @@ class GraphSetupWindow(QMainWindow):
                                     "Are you sure you want to delete all contours?",
                                     QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
-            # Clean up any highlighting state
-            self.map_widget.unhighlight_current_contour()
+            # Clear all regions from mapping
+            # Option 1: Clear all regions completely (create new clean mapping)
+            self.mapping.clear_all_mappings()
             
-            # Clear from map
-            self.map_widget.clear_contours()
-            # Clear from list
+            # Clear from list widget
             self.contour_list.clear()
-            # Clear from mapping
-            # TODO: Remove from actual mapping object
+            
+            # Clear any highlights
+            self.map_widget.highlighted_region_id = None
+            
+            # Update display
+            self.map_widget.update()
+            self.status_bar.showMessage("Cleared all contours")
             self._update_progress_display()
     
     def _on_test_mapping(self):
