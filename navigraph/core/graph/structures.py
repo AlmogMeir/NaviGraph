@@ -34,6 +34,28 @@ class GraphStructure:
         self._graph: Optional[nx.Graph] = None
         self._visualization: Optional[np.ndarray] = None
     
+    @classmethod
+    def from_config(cls, builder_type: str, config: Dict[str, Any]) -> 'GraphStructure':
+        """Create GraphStructure from builder type and configuration.
+        
+        Args:
+            builder_type: Registry name of the builder (e.g., 'binary_tree')
+            config: Builder configuration parameters
+            
+        Returns:
+            New GraphStructure instance with configured builder
+        """
+        from .builders.registry import get_graph_builder
+        
+        # Get builder class from registry using the global function
+        builder_class = get_graph_builder(builder_type)
+        
+        # Create builder instance with config
+        builder = builder_class(**config)
+        
+        # Return new GraphStructure with the builder
+        return cls(builder)
+    
     @property
     def graph(self) -> nx.Graph:
         """Get the NetworkX graph, building it if necessary."""

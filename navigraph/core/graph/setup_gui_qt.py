@@ -5,31 +5,45 @@ between graph nodes/edges and regions on a map, with both grid-based and manual
 contour drawing modes.
 """
 
-from typing import Dict, Any, List, Tuple, Optional, Union, Set
 from dataclasses import dataclass
-from pathlib import Path
-import numpy as np
+from typing import Optional, Set, List, Tuple, Dict, Any
+
 import cv2
-import pickle
-
+import numpy as np
+from PyQt5.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
-    QMainWindow, QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QPushButton, QLabel, QComboBox, QSpinBox, QSlider,
-    QListWidget, QListWidgetItem, QTabWidget, QGroupBox, QMessageBox,
-    QProgressBar, QToolBar, QStatusBar, QDockWidget, QTextEdit,
-    QRadioButton, QButtonGroup, QStackedWidget, QDoubleSpinBox,
-    QCheckBox, QFileDialog, QSizePolicy, QGridLayout
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+    QSpinBox,
+    QSplitter,
+    QStackedWidget,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, QPointF, QRectF, QPoint, pyqtSignal, QTimer, QSize
-from PyQt5.QtGui import QPixmap, QImage, QPen, QBrush, QColor, QPolygonF, QPainter, QCursor
 
-import networkx as nx
-
-from .structures import GraphStructure
 from .mapping import SpatialMapping
-from .regions import (SpatialRegion, ContourRegion, RectangleRegion,
-                     CircleRegion, GridCell, HexagonalCell)
-from .storage import MappingStorage
+from .regions import (
+    ContourRegion,
+    RectangleRegion,
+)
+from .structures import GraphStructure
 
 
 @dataclass
@@ -77,16 +91,16 @@ class MapWidget(QWidget):
         # Grid state
         self.grid_config = GridConfig()
         self.grid_enabled = False
-        self.grid_cells = {}  # cell_id -> QRectF
-        self.selected_cells = set()
-        self.cell_colors = {}  # cell_id -> QColor
-        self.cell_mappings = {}  # cell_id -> (elem_type, elem_id) for mapped cells
+        self.grid_cells: Dict[str, QRectF] = {}  # cell_id -> QRectF
+        self.selected_cells: Set[str] = set()
+        self.cell_colors: Dict[str, QColor] = {}  # cell_id -> QColor
+        self.cell_mappings: Dict[str, Tuple[str, Any]] = {}  # cell_id -> (elem_type, elem_id) for mapped cells
         
         # Drawing state
         self.drawing_mode = False
-        self.current_contour = []
-        self.completed_contours = []  # List of (contour_points, region_id, color, elem_info)
-        self.contour_mappings = {}  # region_id -> (elem_type, elem_id)
+        self.current_contour: List[Tuple[float, float]] = []
+        self.completed_contours: List[Tuple[Any, str, QColor, str, Any]] = []  # List of (contour_points, region_id, color, elem_info)
+        self.contour_mappings: Dict[str, Tuple[str, Any]] = {}  # region_id -> (elem_type, elem_id)
         
         # Interaction state
         self.interaction_mode = 'none'  # 'place_grid', 'select_cells', 'draw_contour'
@@ -98,14 +112,13 @@ class MapWidget(QWidget):
         
         # Contour highlighting state
         self.highlighted_contour_id = None
-        self.original_contour_colors = {}  # Store original colors for unhighlighting
+        self.original_contour_colors: Dict[str, QColor] = {}  # Store original colors for unhighlighting
         
         self.setMouseTracking(True)
         self.setMinimumSize(800, 600)
-        self.setFocusPolicy(Qt.StrongFocus)  # Enable keyboard focus
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Enable keyboard focus
         
         # Enable tooltips with faster response
-        from PyQt5.QtWidgets import QToolTip
         self.setToolTip("")
         self.current_tooltip = ""  # Track tooltip state for immediate updates
         
@@ -312,8 +325,146 @@ class MapWidget(QWidget):
                     painter.setPen(QPen(QColor(100, 100, 100), 1))
                     painter.drawRect(scaled_rect)
                 
-        # Draw completed contours
-        if self.show_all_mappings:
+        # Draw regions directly from mapping if show_all_mappings is enabled and mapping is available
+        if hasattr(self, 'show_all_mappings') and self.show_all_mappings and hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and self.gui_parent.mapping:
+            try:
+                from .regions import RectangleRegion, ContourRegion
+                
+                # Draw node regions in green
+                for node_id in self.gui_parent.mapping.get_mapped_nodes():
+                    regions = self.gui_parent.mapping.get_node_regions(node_id)
+                    color = QColor(150, 255, 150, 100)  # Light green
+                    
+                    for region in regions:
+                        # Extract points based on region type
+                        if isinstance(region, RectangleRegion):
+                            points = [
+                                (region.x, region.y),
+                                (region.x + region.width, region.y),
+                                (region.x + region.width, region.y + region.height),
+                                (region.x, region.y + region.height)
+                            ]
+                        elif isinstance(region, ContourRegion):
+                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                        else:
+                            continue
+                            
+                        if len(points) > 2:
+                            poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
+                                                 self.offset_y + p[1] * self.scale_factor) 
+                                         for p in points]
+                            polygon = QPolygonF(poly_points)
+                            
+                            painter.setPen(QPen(color.darker(), 2))
+                            painter.setBrush(QBrush(color))
+                            painter.drawPolygon(polygon)
+                            
+                            # Draw node label at centroid
+                            if self.show_cell_labels:
+                                bounding_rect = polygon.boundingRect()
+                                centroid = bounding_rect.center()
+                                
+                                # Calculate adaptive font size based on contour size
+                                contour_area = bounding_rect.width() * bounding_rect.height()
+                                if self.adaptive_font_size:
+                                    # Scale-aware font sizing
+                                    scale_adjusted_area = contour_area / (self.scale_factor * self.scale_factor)
+                                    if scale_adjusted_area > 5000:
+                                        font_size = 14
+                                    elif scale_adjusted_area > 2000:
+                                        font_size = 12
+                                    elif scale_adjusted_area > 1000:
+                                        font_size = 10
+                                    elif scale_adjusted_area > 500:
+                                        font_size = 9
+                                    elif scale_adjusted_area > 200:
+                                        font_size = 8
+                                    elif scale_adjusted_area > 100:
+                                        font_size = 7
+                                    else:
+                                        font_size = 6
+                                else:
+                                    font_size = 9
+                                
+                                font = painter.font()
+                                font.setPointSize(font_size)
+                                painter.setFont(font)
+                                
+                                # Draw node label
+                                painter.setPen(QPen(QColor(0, 100, 0), 1))
+                                painter.drawText(centroid, f"N:{node_id}")
+                
+                # Draw edge regions in orange
+                for edge in self.gui_parent.mapping.get_mapped_edges():
+                    regions = self.gui_parent.mapping.get_edge_regions(edge)
+                    color = QColor(255, 165, 0, 100)  # Orange
+                    
+                    for region in regions:
+                        # Extract points based on region type
+                        if isinstance(region, RectangleRegion):
+                            points = [
+                                (region.x, region.y),
+                                (region.x + region.width, region.y),
+                                (region.x + region.width, region.y + region.height),
+                                (region.x, region.y + region.height)
+                            ]
+                        elif isinstance(region, ContourRegion):
+                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                        else:
+                            continue
+                            
+                        if len(points) > 2:
+                            poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
+                                                 self.offset_y + p[1] * self.scale_factor) 
+                                         for p in points]
+                            polygon = QPolygonF(poly_points)
+                            
+                            painter.setPen(QPen(color.darker(), 2))
+                            painter.setBrush(QBrush(color))
+                            painter.drawPolygon(polygon)
+                            
+                            # Draw edge label at centroid
+                            if self.show_cell_labels:
+                                bounding_rect = polygon.boundingRect()
+                                centroid = bounding_rect.center()
+                                
+                                # Use same adaptive font sizing as nodes
+                                contour_area = bounding_rect.width() * bounding_rect.height()
+                                if self.adaptive_font_size:
+                                    scale_adjusted_area = contour_area / (self.scale_factor * self.scale_factor)
+                                    if scale_adjusted_area > 5000:
+                                        font_size = 14
+                                    elif scale_adjusted_area > 2000:
+                                        font_size = 12
+                                    elif scale_adjusted_area > 1000:
+                                        font_size = 10
+                                    elif scale_adjusted_area > 500:
+                                        font_size = 9
+                                    elif scale_adjusted_area > 200:
+                                        font_size = 8
+                                    elif scale_adjusted_area > 100:
+                                        font_size = 7
+                                    else:
+                                        font_size = 6
+                                else:
+                                    font_size = 9
+                                
+                                font = painter.font()
+                                font.setPointSize(font_size)
+                                painter.setFont(font)
+                                
+                                # Draw edge label
+                                painter.setPen(QPen(QColor(150, 80, 0), 1))
+                                if isinstance(edge, tuple):
+                                    painter.drawText(centroid, f"E:{edge[0]},{edge[1]}")
+                                else:
+                                    painter.drawText(centroid, f"E:{edge}")
+                
+            except Exception as e:
+                print(f"Error drawing regions from mapping: {e}")
+        
+        # Draw completed contours (for manual drawing mode only)
+        elif not self.show_all_mappings:
             for contour_data in self.completed_contours:
                 points, region_id, color = contour_data[:3]
                 if len(contour_data) > 3:
@@ -391,48 +542,45 @@ class MapWidget(QWidget):
             for point in scaled_points:
                 painter.drawEllipse(QPointF(*point), 3, 3)
         
-        # Draw test mode highlights
-        if hasattr(self, 'test_highlights'):
+        # Draw element highlights (purple) for selected nodes/edges
+        if hasattr(self, 'highlighted_elements') and hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and self.gui_parent.mapping:
             try:
-                for region_id, highlight_color in self.test_highlights:
-                    # Find the region in completed contours or grid cells
-                    found_region = False
+                from .regions import RectangleRegion, ContourRegion
+                highlight_color = QColor(160, 100, 255, 140)  # Purple highlight
+                
+                for elem_type, elem_id in self.highlighted_elements:
+                    if elem_type == 'node':
+                        regions = self.gui_parent.mapping.get_node_regions(elem_id)
+                    else:  # edge
+                        regions = self.gui_parent.mapping.get_edge_regions(elem_id)
                     
-                    # Check completed contours first
-                    for contour_data in self.completed_contours:
-                        if contour_data[1] == region_id:  # region_id matches
-                            points = contour_data[0]
-                            if len(points) > 2:
-                                poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
-                                                     self.offset_y + p[1] * self.scale_factor) 
-                                             for p in points]
-                                polygon = QPolygonF(poly_points)
-                                
-                                # Draw highlight with transparent color
-                                painter.setPen(QPen(QColor(*highlight_color[:3]), 3))
-                                painter.setBrush(QBrush(QColor(*highlight_color)))
-                                painter.drawPolygon(polygon)
-                                found_region = True
-                                break
-                    
-                    # Check grid cells if not found in contours
-                    if not found_region and region_id in self.grid_cells:
-                        rect = self.grid_cells[region_id]
-                        scaled_rect = QRectF(
-                            self.offset_x + rect.x() * self.scale_factor,
-                            self.offset_y + rect.y() * self.scale_factor,
-                            rect.width() * self.scale_factor,
-                            rect.height() * self.scale_factor
-                        )
-                        
-                        # Draw highlight with transparent color
-                        painter.setPen(QPen(QColor(*highlight_color[:3]), 3))
-                        painter.setBrush(QBrush(QColor(*highlight_color)))
-                        painter.drawRect(scaled_rect)
+                    for region in regions:
+                        # Extract points based on region type
+                        if isinstance(region, RectangleRegion):
+                            points = [
+                                (region.x, region.y),
+                                (region.x + region.width, region.y),
+                                (region.x + region.width, region.y + region.height),
+                                (region.x, region.y + region.height)
+                            ]
+                        elif isinstance(region, ContourRegion):
+                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                        else:
+                            continue
+                            
+                        if len(points) > 2:
+                            poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
+                                                 self.offset_y + p[1] * self.scale_factor) 
+                                         for p in points]
+                            polygon = QPolygonF(poly_points)
+                            
+                            # Draw highlight with purple color
+                            painter.setPen(QPen(highlight_color, 3))
+                            painter.setBrush(QBrush(highlight_color))
+                            painter.drawPolygon(polygon)
+                            
             except Exception as e:
-                print(f"Error drawing test highlights: {e}")
-                # Clear the problematic highlights to prevent repeated crashes
-                self.test_highlights = []
+                print(f"Error drawing element highlights: {e}")
         
         # Draw test highlight contours (for selected elements in test mode)
         if hasattr(self, 'test_highlight_contours'):
@@ -723,29 +871,29 @@ class MapWidget(QWidget):
             print(f"Error clearing highlights: {e}")
             # Don't crash, just continue
     
-    def highlight_region(self, region_id: str, color_type='highlight'):
-        """Highlight a specific region in test mode."""
+    def highlight_element(self, elem_type: str, elem_id):
+        """Highlight a specific element (node or edge)."""
         try:
-            if not hasattr(self, 'test_highlights'):
-                self.test_highlights = []
+            if not hasattr(self, 'highlighted_elements'):
+                self.highlighted_elements = []
             
-            # Define color schemes (avoiding green/orange of mapping contours and blue nodes)
-            colors = {
-                'selected': (255, 150, 150, 180),    # Light coral/pink for selection
-                'highlight': (160, 100, 255, 140)    # Darker purple for better visibility
-            }
-            
-            color = colors.get(color_type, colors['highlight'])
-            
-            # Remove existing highlight for this region
-            self.test_highlights = [h for h in self.test_highlights if h[0] != region_id]
+            # Remove existing highlight for this element
+            self.highlighted_elements = [h for h in self.highlighted_elements if h != (elem_type, elem_id)]
             
             # Add new highlight
-            self.test_highlights.append((region_id, color))
+            self.highlighted_elements.append((elem_type, elem_id))
             self.update()
         except Exception as e:
-            print(f"Error highlighting region {region_id}: {e}")
-            # Don't crash, just continue
+            print(f"Error highlighting {elem_type} {elem_id}: {e}")
+    
+    def clear_highlights(self):
+        """Clear all element highlights."""
+        try:
+            if hasattr(self, 'highlighted_elements'):
+                self.highlighted_elements = []
+            self.update()
+        except Exception as e:
+            print(f"Error clearing highlights: {e}")
 
 
 class GraphWidget(QWidget):
@@ -770,8 +918,8 @@ class GraphWidget(QWidget):
         self.default_edge_width = 2.0  # Thicker than NetworkX default 1.0
         
         # Setup UI
-        from PyQt5.QtWidgets import QVBoxLayout, QLabel
         from PyQt5.QtCore import Qt
+        from PyQt5.QtWidgets import QLabel, QVBoxLayout
         
         layout = QVBoxLayout()
         self.image_label = QLabel()
@@ -1145,6 +1293,7 @@ class GraphSetupWindow(QMainWindow):
         map_layout.setContentsMargins(8, 20, 8, 8)
         
         self.map_widget = MapWidget(self.map_image)
+        self.map_widget.gui_parent = self  # Allow map widget to access mapping
         self.map_widget.setMinimumHeight(350)
         map_layout.addWidget(self.map_widget)
         
@@ -1739,8 +1888,8 @@ class GraphSetupWindow(QMainWindow):
                 self._setup_test_layout()
                 
                 # Enable test interactions
-                if hasattr(self.test_map_widget, 'set_interaction_mode'):
-                    self.test_map_widget.set_interaction_mode('test')
+                if hasattr(self.map_widget, 'set_interaction_mode'):
+                    self.map_widget.set_interaction_mode('test')
                     
                 # Initialize test mode state
                 self.test_selected_point = None  # Selected point on map
@@ -1773,15 +1922,13 @@ class GraphSetupWindow(QMainWindow):
         # Get mapped elements to show status
         mapped_elements = set()
         if hasattr(self, 'mapping') and self.mapping:
-            # Check node mappings
-            for node_id, regions in getattr(self.mapping, '_node_to_regions', {}).items():
-                if regions:  # Has mapped regions
-                    mapped_elements.add(('node', node_id))
+            # Check node mappings using new API
+            for node_id in self.mapping.get_mapped_nodes():
+                mapped_elements.add(('node', node_id))
             
-            # Check edge mappings  
-            for edge_id, regions in getattr(self.mapping, '_edge_to_regions', {}).items():
-                if regions:  # Has mapped regions
-                    mapped_elements.add(('edge', edge_id))
+            # Check edge mappings using new API
+            for edge_id in self.mapping.get_mapped_edges():
+                mapped_elements.add(('edge', edge_id))
         
         # Populate with all elements, marking mapped ones
         for elem_type, elem_id in self.all_elements:
@@ -1927,79 +2074,6 @@ class GraphSetupWindow(QMainWindow):
         # Clear status bar
         self.status_bar.clearMessage()
     
-    def _create_standardized_contour_mapping(self):
-        """Create standardized contour representation for test mode compatibility.
-        
-        Returns:
-            dict: {
-                'nodes': {node_id: [list_of_contours]},
-                'edges': {edge_tuple_str: [list_of_contours]}
-            }
-            where each contour is a list of (x,y) points
-        """
-        from navigraph.core.graph.regions import GridCell, RectangleRegion, ContourRegion
-        
-        standardized = {
-            'nodes': {},
-            'edges': {}
-        }
-        
-        if not hasattr(self, 'mapping') or not self.mapping:
-            return standardized
-            
-        # Process node mappings
-        for node_id in self.mapping.get_mapped_nodes():
-            regions = self.mapping.get_node_regions(node_id)
-            contour_list = []
-            
-            for region in regions:
-                if isinstance(region, ContourRegion):
-                    # Already a contour - use as-is
-                    contour_list.append(region.contour_points)
-                elif isinstance(region, (GridCell, RectangleRegion)):
-                    # Convert rectangle/grid cell to 4-point contour
-                    x, y = region.x, region.y
-                    w, h = region.width, region.height
-                    rect_contour = [
-                        (x, y),        # top-left
-                        (x + w, y),    # top-right  
-                        (x + w, y + h), # bottom-right
-                        (x, y + h)     # bottom-left
-                    ]
-                    contour_list.append(rect_contour)
-                # Add other region types as needed
-                    
-            if contour_list:
-                standardized['nodes'][str(node_id)] = contour_list
-        
-        # Process edge mappings  
-        for edge_tuple in self.mapping.get_mapped_edges():
-            regions = self.mapping.get_edge_regions(edge_tuple)
-            contour_list = []
-            
-            for region in regions:
-                if isinstance(region, ContourRegion):
-                    # Already a contour - use as-is
-                    contour_list.append(region.contour_points)
-                elif isinstance(region, (GridCell, RectangleRegion)):
-                    # Convert rectangle/grid cell to 4-point contour
-                    x, y = region.x, region.y
-                    w, h = region.width, region.height
-                    rect_contour = [
-                        (x, y),        # top-left
-                        (x + w, y),    # top-right  
-                        (x + w, y + h), # bottom-right
-                        (x, y + h)     # bottom-left
-                    ]
-                    contour_list.append(rect_contour)
-                # Add other region types as needed
-                    
-            if contour_list:
-                # Convert edge tuple to string for JSON serialization
-                edge_str = f"{edge_tuple[0]}_{edge_tuple[1]}"
-                standardized['edges'][edge_str] = contour_list
-                
-        return standardized
     
     def _set_mode_specific_defaults(self, mode: str):
         """Set mode-specific default visualization options."""
@@ -2008,6 +2082,8 @@ class GraphSetupWindow(QMainWindow):
             self.show_mappings_checkbox.setChecked(True)
             self.show_labels_checkbox.setChecked(True) 
             self.adaptive_font_checkbox.setChecked(True)
+            # Sync map widget flag with checkbox
+            self.map_widget.show_all_mappings = True
             # Hide test mode widgets
             for widget in self.test_mode_widgets:
                 widget.hide()
@@ -2017,6 +2093,8 @@ class GraphSetupWindow(QMainWindow):
             self.show_mappings_checkbox.setChecked(True)
             self.show_labels_checkbox.setChecked(True)
             self.adaptive_font_checkbox.setChecked(True)
+            # Sync map widget flag with checkbox
+            self.map_widget.show_all_mappings = True
             # Hide test mode widgets
             for widget in self.test_mode_widgets:
                 widget.hide()
@@ -2026,6 +2104,8 @@ class GraphSetupWindow(QMainWindow):
             self.show_mappings_checkbox.setChecked(False)
             self.show_labels_checkbox.setChecked(False)
             self.adaptive_font_checkbox.setChecked(False)
+            # Sync map widget flag with checkbox
+            self.map_widget.show_all_mappings = False
             # Show test mode widgets
             for widget in self.test_mode_widgets:
                 widget.show()
@@ -2126,11 +2206,32 @@ class GraphSetupWindow(QMainWindow):
     def _on_grid_placed(self, x: float, y: float):
         """Handle grid placement."""
         self.grid_status_label.setText(f"Origin: ({x:.0f}, {y:.0f})")
-        self.status_bar.showMessage("Grid placed - Click cells to select")
+        self.status_bar.showMessage("Grid placed - Ready to map elements")
         # Uncheck the Place Grid button after placement
         self.place_grid_button.setChecked(False)
         # Enable Clear Grid button
         self.clear_grid_button.setEnabled(True)
+        
+        # Automatically start with the first element
+        if self.all_elements and len(self.all_elements) > 0:
+            # Set the first element as current
+            first_element = self.all_elements[0]
+            elem_type, elem_id = first_element
+            
+            # Set current element
+            self.current_element = first_element
+            
+            # Update combo box selection
+            self.grid_element_combo.setCurrentIndex(0)
+            
+            # Set interaction mode for cell selection
+            self.map_widget.set_interaction_mode('select_cells')
+            
+            # Update map widget
+            self.map_widget.set_current_element(elem_type, elem_id)
+            
+            # Update status
+            self.status_bar.showMessage(f"Ready to map {elem_type} {elem_id} - Click cells to select")
         
     def _on_clear_grid(self):
         """Clear the grid and reset all mappings."""
@@ -2367,76 +2468,157 @@ class GraphSetupWindow(QMainWindow):
         pass
             
     def _on_save_mapping(self):
-        """Save the current mapping to file."""
+        """Save the current mapping using new self-contained format."""
+        if not self.mapping:
+            QMessageBox.warning(self, "Warning", "No mapping to save")
+            return
+        
         file_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Mapping", "", "Pickle Files (*.pkl);;All Files (*)"
+            self, "Save Mapping", "", 
+            "Pickle files (*.pkl);;JSON files (*.json);;All Files (*)"
         )
         
         if file_path:
-            if MappingStorage.save_mapping(self.mapping, file_path):
+            try:
+                from pathlib import Path
+                self.mapping.save_with_builder_info(Path(file_path))
                 QMessageBox.information(self, "Success", f"Mapping saved to {file_path}")
                 self.status_bar.showMessage(f"Mapping saved to {file_path}")
-            else:
-                QMessageBox.critical(self, "Error", "Failed to save mapping")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save mapping: {str(e)}")
                 
     def _on_load_mapping(self):
-        """Load a mapping from file."""
+        """Load a mapping using new self-contained format."""
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load Mapping", "", "Pickle Files (*.pkl);;All Files (*)"
+            self, "Load Mapping", "",
+            "Mapping files (*.pkl *.json);;Pickle Files (*.pkl);;JSON Files (*.json);;All Files (*)"
         )
         
         if file_path:
-            loaded_mapping = MappingStorage.load_mapping(file_path)
-            if loaded_mapping:
-                self.mapping = loaded_mapping
-                self._visualize_loaded_mapping()
+            try:
+                from pathlib import Path
+                # Load mapping with automatic graph reconstruction
+                self.mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+                self.graph = self.mapping.graph
+                
+                # Update UI to reflect loaded mapping
+                self._update_ui_from_mapping()
+                
                 QMessageBox.information(self, "Success", f"Mapping loaded from {file_path}")
                 self.status_bar.showMessage(f"Mapping loaded from {file_path}")
                 self._update_progress()
-            else:
-                QMessageBox.critical(self, "Error", "Failed to load mapping")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load mapping: {str(e)}")
                 
-    def _visualize_loaded_mapping(self):
-        """Visualize a loaded mapping on the map."""
+    def _update_ui_from_mapping(self):
+        """Update UI to reflect loaded mapping with new self-contained format."""
         # Clear existing visualizations
         self.map_widget.clear_selection()
         self.map_widget.clear_contours()
         
+        # Update builder selection if available (skip in test mode)
+        if (self.graph and hasattr(self.graph, 'metadata') and 
+            hasattr(self, 'setup_mode') and self.setup_mode != 'test'):
+            builder_type = self.graph.metadata.get('builder_type', '')
+            if builder_type and hasattr(self, 'builder_combo'):
+                # Find and select the appropriate builder in the dropdown
+                for i in range(self.builder_combo.count()):
+                    if self.builder_combo.itemText(i) == builder_type:
+                        self.builder_combo.setCurrentIndex(i)
+                        self._update_builder_config()
+                        break
+        
+        # In test mode, update the graph widget with the new graph
+        if (hasattr(self, 'setup_mode') and self.setup_mode == 'test' and 
+            hasattr(self, 'test_graph_widget')):
+            # Update the test graph widget with the new graph
+            self.test_graph_widget.graph = self.graph
+            self.test_graph_widget.draw_graph()
+        
+        # Set flag for paintEvent to draw mappings if checkbox is checked
+        if hasattr(self, 'show_all_mappings_checkbox'):
+            self.map_widget.show_all_mappings = self.show_all_mappings_checkbox.isChecked()
+            self.map_widget.update()
+    
+    def _visualize_loaded_mapping(self):
+        """Visualize a loaded mapping on the map widget - same widget for all modes."""
+        if not self.mapping:
+            return
+            
+        # Always use the same map_widget
+        target_widget = self.map_widget
+            
+        # Clear existing visualizations first
+        target_widget.clear_contours()
+        target_widget.clear_selection()
+        
+        # ALL mappings are treated the same - they're just contour points
+        # Whether from grid or manual mode, they're all stored as contour points
+        
         # Visualize node regions
-        for node_id, regions in getattr(self.mapping, '_node_to_regions', {}).items():
-            color = QColor(150, 255, 150, 100)
+        for node_id in self.mapping.get_mapped_nodes():
+            regions = self.mapping.get_node_regions(node_id)
+            color = QColor(150, 255, 150, 100)  # Light green
+            
             for region in regions:
+                # Extract contour points - works for both RectangleRegion and ContourRegion
                 if isinstance(region, RectangleRegion):
-                    # For grid cells
-                    # TODO: Properly map back to grid cells
-                    pass
+                    # Convert rectangle to contour points (4 corners)
+                    points = [
+                        (region.x, region.y),
+                        (region.x + region.width, region.y),
+                        (region.x + region.width, region.y + region.height),
+                        (region.x, region.y + region.height)
+                    ]
                 elif isinstance(region, ContourRegion):
-                    # For contours
-                    self.map_widget.add_contour(region.points, region.region_id, 'node', node_id, color)
-                    
-        # Visualize edge regions
-        for edge, regions in getattr(self.mapping, '_edge_to_regions', {}).items():
-            color = QColor(255, 200, 120, 100)
+                    # Already contour points
+                    points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                else:
+                    continue
+                
+                # Add as contour - same method for all
+                # Use the actual region ID for highlighting to work
+                target_widget.add_contour(points, region.region_id, 'node', node_id, color)
+        
+        # Visualize edge regions - exact same approach
+        for edge in self.mapping.get_mapped_edges():
+            regions = self.mapping.get_edge_regions(edge)
+            color = QColor(255, 165, 0, 100)  # Orange
+            
             for region in regions:
-                if isinstance(region, ContourRegion):
-                    self.map_widget.add_contour(region.points, region.region_id, 'edge', edge, color)
+                # Extract contour points - works for both RectangleRegion and ContourRegion
+                if isinstance(region, RectangleRegion):
+                    # Convert rectangle to contour points (4 corners)
+                    points = [
+                        (region.x, region.y),
+                        (region.x + region.width, region.y),
+                        (region.x + region.width, region.y + region.height),
+                        (region.x, region.y + region.height)
+                    ]
+                elif isinstance(region, ContourRegion):
+                    # Already contour points
+                    points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                else:
+                    continue
+                
+                # Add as contour - same method for all
+                # Use the actual region ID for highlighting to work
+                target_widget.add_contour(points, region.region_id, 'edge', edge, color)
+        
+        # Force update
+        target_widget.update()
     
     def _on_save_intermediate_mapping(self):
-        """Save current mapping with complete state to file."""
+        """Save current mapping with complete state using new self-contained format."""
         file_dialog = QFileDialog()
         file_path, _ = file_dialog.getSaveFileName(
-            self, "Save Intermediate Mapping", "", "Mapping Files (*.pkl);;All Files (*)")
+            self, "Save Intermediate Mapping", "", "Mapping Files (*.pkl);;JSON Files (*.json);;All Files (*)")
         
         if file_path:
             try:
-                # Create standardized contour representation for test mode compatibility
-                standardized_contours = self._create_standardized_contour_mapping()
-                
-                # Create complete state dict
-                mapping_state = {
-                    'format_version': '2.1',  # Increment version for new standardized format
-                    'mapping': self.mapping,  # Original mapping (preserved for mode compatibility)
-                    'standardized_contours': standardized_contours,  # Universal test mode format
+                # Create setup mode state for GUI continuation
+                setup_mode_state = {
+                    'current_mode': getattr(self, 'setup_mode', 'grid'),
                     'grid_config': {
                         'structure_type': self.map_widget.grid_config.structure_type,
                         'rows': self.map_widget.grid_config.rows,
@@ -2447,170 +2629,83 @@ class GraphSetupWindow(QMainWindow):
                         'origin_y': self.map_widget.grid_config.origin_y,
                     },
                     'grid_enabled': self.map_widget.grid_enabled,
-                    'current_mode': getattr(self, 'setup_mode', 'grid'),
                     'element_queue_index': getattr(self, 'element_queue_index', 0),
                     'mapping_history': len(self.mapping_history) if hasattr(self, 'mapping_history') else 0
                 }
                 
-                # Save to pickle file
-                import pickle
-                with open(file_path, 'wb') as f:
-                    pickle.dump(mapping_state, f)
+                # Use the new self-contained save method
+                from pathlib import Path
+                self.mapping.save_with_builder_info(Path(file_path), setup_mode_state)
                 
-                self.status_bar.showMessage(f"Intermediate mapping saved to {file_path}")
+                self.status_bar.showMessage(f"Mapping saved to {file_path}")
+                QMessageBox.information(self, "Success", f"Mapping saved successfully to {file_path}")
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save mapping: {str(e)}")
     
     def _on_load_intermediate_mapping(self):
-        """Load mapping with complete state from file."""
+        """Load mapping with complete state from file using new self-contained format."""
         file_dialog = QFileDialog()
         file_path, _ = file_dialog.getOpenFileName(
-            self, "Load Intermediate Mapping", "", "Mapping Files (*.pkl);;All Files (*)")
+            self, "Load Intermediate Mapping", "", 
+            "Mapping Files (*.pkl);;JSON Files (*.json);;All Files (*)")
         
         if file_path:
             try:
-                import pickle
-                with open(file_path, 'rb') as f:
-                    mapping_state = pickle.load(f)
+                from pathlib import Path
+                # Load mapping with automatic graph reconstruction
+                self.mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+                self.graph = self.mapping.graph
                 
-                # Validate format
-                if not isinstance(mapping_state, dict) or 'mapping' not in mapping_state:
-                    QMessageBox.warning(self, "Error", "Invalid mapping file format")
-                    return
+                # Get setup mode state for GUI continuation
+                setup_mode_state = self.mapping.get_setup_mode_state()
                 
-                # Handle format versions and backward compatibility
-                format_version = mapping_state.get('format_version', '1.0')
+                # Restore setup mode state if available
+                if setup_mode_state:
+                    self._restore_setup_mode_state(setup_mode_state)
                 
-                # Load the mapping
-                self.mapping = mapping_state['mapping']
+                # Update UI to reflect loaded mapping
+                self._update_ui_from_mapping()
                 
-                # For test mode, always ensure standardized contours are available
-                if hasattr(self, 'setup_mode') and self.setup_mode == 'test':
-                    if 'standardized_contours' in mapping_state:
-                        # Use pre-computed standardized contours (v2.1+)
-                        self._test_mode_standardized_contours = mapping_state['standardized_contours']
-                    else:
-                        # Create standardized contours from loaded mapping (backward compatibility)
-                        self._test_mode_standardized_contours = self._create_standardized_contour_mapping()
-                
-                # Restore grid configuration if present
-                if 'grid_config' in mapping_state:
-                    grid_config = mapping_state['grid_config']
-                    self.map_widget.grid_config.structure_type = grid_config.get('structure_type', 'rectangle')
-                    self.map_widget.grid_config.rows = grid_config.get('rows', 8)
-                    self.map_widget.grid_config.cols = grid_config.get('cols', 8)
-                    self.map_widget.grid_config.cell_width = grid_config.get('cell_width', 50.0)
-                    self.map_widget.grid_config.cell_height = grid_config.get('cell_height', 50.0)
-                    self.map_widget.grid_config.origin_x = grid_config.get('origin_x', 0.0)
-                    self.map_widget.grid_config.origin_y = grid_config.get('origin_y', 0.0)
-                    
-                    # Update UI controls with loaded grid config
-                    self._update_grid_ui_from_config()
-                
-                # Restore grid if it was enabled
-                if mapping_state.get('grid_enabled', False):
-                    self.map_widget.enable_grid(
-                        self.map_widget.grid_config.origin_x,
-                        self.map_widget.grid_config.origin_y
-                    )
-                    # Update grid UI elements
-                    self._update_grid_status_after_load()
-                    # Set interaction mode to allow cell selection
-                    self.map_widget.set_interaction_mode('select_cells')
-                
-                # Validate mode compatibility
-                loaded_mode = mapping_state.get('current_mode', 'grid')
-                
-                # Check if mapping contains incompatible region types
-                has_grid_regions = False
-                has_contour_regions = False
-                for region in self.mapping._regions.values():
-                    from .regions import RectangleRegion, ContourRegion
-                    if isinstance(region, RectangleRegion):
-                        has_grid_regions = True
-                    elif isinstance(region, ContourRegion):
-                        has_contour_regions = True
-                
-                if has_grid_regions and loaded_mode != 'grid':
-                    QMessageBox.warning(self, "Mode Mismatch", 
-                                      "This mapping was created in Grid mode and cannot be loaded in Manual mode.")
-                    return
-                elif has_contour_regions and loaded_mode != 'manual':
-                    QMessageBox.warning(self, "Mode Mismatch", 
-                                      "This mapping was created in Manual mode and cannot be loaded in Grid mode.")
-                    return
-                
-                # Switch to appropriate mode without resetting mapping (unless in test mode)
-                current_mode = None
-                if self.grid_mode_button.isChecked():
-                    current_mode = 'grid'
-                elif self.manual_mode_button.isChecked():
-                    current_mode = 'manual'  
-                elif self.test_mode_button.isChecked():
-                    current_mode = 'test'
-                
-                if current_mode != 'test':  # Only switch modes if not in test mode
-                    self._loading_intermediate = True  # Flag to prevent reset during mode switch
-                    if loaded_mode == 'grid':
-                        self._on_grid_mode(True)
-                        # Ensure interaction mode is correct for grid
-                        if self.map_widget.grid_enabled:
-                            self.map_widget.set_interaction_mode('select_cells')
-                    else:
-                        self._on_manual_mode(True)
-                        # Ensure interaction mode is correct for manual drawing
-                        self.map_widget.set_interaction_mode('draw_contour')
-                    self._loading_intermediate = False
-                else:
-                    # In test mode, just load the mapping without switching modes
-                    # Don't auto-visualize - let user control via Display Options
-                    current_mode = 'test'
-                
-                # Visualize loaded mapping only if not in test mode
-                if current_mode != 'test':
-                    self._visualize_loaded_intermediate_mapping()
-                # In test mode, don't auto-display anything - let user control via Show All Mappings toggle
-                
-                # Update progress
-                self._update_progress_display()
-                
-                # Restore element queue position if available
-                if 'element_queue_index' in mapping_state:
-                    self.element_queue_index = mapping_state['element_queue_index']
-                    
-                # Always repopulate element combos to ensure proper state
-                self._populate_element_combos()
-                
-                # Set current element to continue mapping from where we left off
-                if hasattr(self, 'element_queue') and self.element_queue and len(self.element_queue) > 0:
-                    self.current_element = self.element_queue[0]
-                    elem_type, elem_id = self.current_element
-                    
-                    # Update map widget with current element
-                    self.map_widget.set_current_element(elem_type, elem_id)
-                    
-                    # Update combo box selection based on mode
-                    if loaded_mode == 'grid' and hasattr(self, 'grid_element_combo'):
-                        # Find the element in the grid combo box
-                        for i in range(self.grid_element_combo.count()):
-                            combo_text = self.grid_element_combo.itemText(i)
-                            if f"{elem_type.title()}: {elem_id}" in combo_text:
-                                self.grid_element_combo.setCurrentIndex(i)
-                                break
-                    elif loaded_mode == 'manual' and hasattr(self, 'manual_element_combo'):
-                        # Find the element in the manual combo box
-                        for i in range(self.manual_element_combo.count()):
-                            combo_text = self.manual_element_combo.itemText(i)
-                            if f"{elem_type.title()}: {elem_id}" in combo_text:
-                                self.manual_element_combo.setCurrentIndex(i)
-                                break
-                
-                
-                self.status_bar.showMessage(f"Intermediate mapping loaded from {file_path}")
+                self.status_bar.showMessage(f"Mapping loaded from {file_path}")
+                QMessageBox.information(self, "Success", f"Mapping loaded successfully from {file_path}")
+                self._update_progress()
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load mapping: {str(e)}")
+    
+    def _restore_setup_mode_state(self, setup_mode_state: dict):
+        """Restore GUI state from loaded setup mode configuration."""
+        # Restore grid configuration if present
+        if 'grid_config' in setup_mode_state:
+            grid_config = setup_mode_state['grid_config']
+            self.map_widget.grid_config.structure_type = grid_config.get('structure_type', 'rectangle')
+            self.map_widget.grid_config.rows = grid_config.get('rows', 8)
+            self.map_widget.grid_config.cols = grid_config.get('cols', 8)
+            self.map_widget.grid_config.cell_width = grid_config.get('cell_width', 50.0)
+            self.map_widget.grid_config.cell_height = grid_config.get('cell_height', 50.0)
+            self.map_widget.grid_config.origin_x = grid_config.get('origin_x', 0.0)
+            self.map_widget.grid_config.origin_y = grid_config.get('origin_y', 0.0)
+            
+            # Update UI controls with loaded grid config
+            if hasattr(self, '_update_grid_ui_from_config'):
+                self._update_grid_ui_from_config()
+        
+        # Restore grid if it was enabled (but not in test mode)
+        if setup_mode_state.get('grid_enabled', False) and getattr(self, 'setup_mode', None) != 'test':
+            self.map_widget.enable_grid(
+                self.map_widget.grid_config.origin_x,
+                self.map_widget.grid_config.origin_y
+            )
+            # Update grid UI elements
+            if hasattr(self, '_update_grid_status_after_load'):
+                self._update_grid_status_after_load()
+            # Set interaction mode to allow cell selection
+            self.map_widget.set_interaction_mode('select_cells')
+        
+        # Restore element queue index for grid mode continuation
+        if 'element_queue_index' in setup_mode_state:
+            self.element_queue_index = setup_mode_state['element_queue_index']
     
     def _update_grid_ui_from_config(self):
         """Update UI controls to reflect loaded grid configuration."""
@@ -2627,7 +2722,7 @@ class GraphSetupWindow(QMainWindow):
         current_mode = None
         if self.test_mode_button.isChecked():
             current_mode = 'test'
-            map_widget = self.test_map_widget
+            map_widget = self.map_widget
         else:
             map_widget = self.map_widget
             
@@ -2639,46 +2734,55 @@ class GraphSetupWindow(QMainWindow):
         if hasattr(self, 'contour_list') and self.contour_list is not None:
             self.contour_list.clear()
         
-        # Restore all mapped regions
-        for region_id, region in self.mapping._regions.items():
-            element_info = self.mapping._region_to_element.get(region_id)
-            if element_info:
-                element_type, element_id = element_info
-                
-                # Determine color based on element type
-                if element_type == 'node':
-                    color = QColor(0, 255, 0, 100)  # Green for nodes
-                else:
-                    color = QColor(255, 165, 0, 100)  # Orange for edges
-                
-                # Handle different region types
-                from .regions import RectangleRegion, ContourRegion
-                
-                if isinstance(region, RectangleRegion):  # Grid-based region
-                    # Find which cell this rectangle corresponds to
-                    for cell_id, cell_rect in map_widget.grid_cells.items():
-                        # Check if this region matches this cell
-                        if (abs(region.x - cell_rect.x()) < 1 and 
-                            abs(region.y - cell_rect.y()) < 1 and
-                            abs(region.width - cell_rect.width()) < 1 and
-                            abs(region.height - cell_rect.height()) < 1):
-                            map_widget.add_cell_mapping(cell_id, element_type, element_id, color)
-                            break
-                
-                elif isinstance(region, ContourRegion):  # Contour-based region
-                    # Restore contour mappings
-                    contour_color = QColor(color.red(), color.green(), color.blue(), 150)
-                    map_widget.completed_contours.append(
-                        (region.contour, region_id, contour_color, element_type, element_id)
-                    )
-                    map_widget.contour_mappings[region_id] = (element_type, element_id)
-                    
-                    # Add to contour list if we're in manual mode
-                    if hasattr(self, 'contour_list') and self.contour_list is not None:
-                        list_label = f"{element_type.title()} {element_id}: {region_id}"
-                        item = QListWidgetItem(list_label)
-                        item.setData(Qt.UserRole, region_id)  # Store region_id for reference
-                        self.contour_list.addItem(item)
+        # Restore all mapped regions using new API
+        from .regions import ContourRegion, RectangleRegion
+        
+        # First restore node regions
+        for node_id in self.mapping.get_mapped_nodes():
+            regions = self.mapping.get_node_regions(node_id)
+            color = QColor(0, 255, 0, 100)  # Green for nodes
+            
+            for region in regions:
+                self._restore_region_visualization(region, 'node', node_id, color, map_widget)
+        
+        # Then restore edge regions
+        for edge_id in self.mapping.get_mapped_edges():
+            regions = self.mapping.get_edge_regions(edge_id)
+            color = QColor(255, 165, 0, 100)  # Orange for edges
+            
+            for region in regions:
+                self._restore_region_visualization(region, 'edge', edge_id, color, map_widget)
+    
+    def _restore_region_visualization(self, region, element_type, element_id, color, map_widget):
+        """Helper method to restore visualization of a single region."""
+        from .regions import ContourRegion, RectangleRegion
+        
+        if isinstance(region, RectangleRegion):  # Grid-based region
+            # Find which cell this rectangle corresponds to
+            for cell_id, cell_rect in map_widget.grid_cells.items():
+                # Check if this region matches this cell
+                if (abs(region.x - cell_rect.x()) < 1 and 
+                    abs(region.y - cell_rect.y()) < 1 and
+                    abs(region.width - cell_rect.width()) < 1 and
+                    abs(region.height - cell_rect.height()) < 1):
+                    map_widget.add_cell_mapping(cell_id, element_type, element_id, color)
+                    break
+        
+        elif isinstance(region, ContourRegion):  # Contour-based region
+            # Restore contour mappings
+            contour_color = QColor(color.red(), color.green(), color.blue(), 150)
+            region_id = region.region_id
+            map_widget.completed_contours.append(
+                (region.contour_points, region_id, contour_color, element_type, element_id)
+            )
+            map_widget.contour_mappings[region_id] = (element_type, element_id)
+            
+            # Add to contour list if we're in manual mode
+            if hasattr(self, 'contour_list') and self.contour_list is not None:
+                list_label = f"{element_type.title()} {element_id}: {region_id}"
+                item = QListWidgetItem(list_label)
+                item.setData(Qt.UserRole, region_id)  # Store region_id for reference
+                self.contour_list.addItem(item)
         
         # Force widget update
         map_widget.update()
@@ -2744,24 +2848,18 @@ class GraphSetupWindow(QMainWindow):
             show_mappings = (state == Qt.Checked)
             
             # In test mode, handle Show All Mappings specially
-            if hasattr(self, 'setup_mode') and self.setup_mode == 'test' and hasattr(self, 'test_map_widget'):
-                if show_mappings:
-                    # Clear test selections first
+            # Same logic for all modes since we use the same map_widget
+            if show_mappings:
+                # Clear test selections first (if in test mode)
+                if hasattr(self, 'setup_mode') and self.setup_mode == 'test':
                     self._clear_test_selections()
-                    
-                    # Display all saved mappings using standardized contours
-                    if hasattr(self, '_test_mode_standardized_contours'):
-                        self._display_all_standardized_mappings()
-                else:
-                    # Clear all displayed mappings
-                    if hasattr(self.test_map_widget, 'completed_contours'):
-                        self.test_map_widget.completed_contours.clear()
-                    if hasattr(self.test_map_widget, 'grid_cells'):
-                        self.test_map_widget.grid_cells.clear()
-                    self.test_map_widget.update()
+                
+                # Enable showing all mappings (paintEvent will draw from mapping directly)
+                self.map_widget.show_all_mappings = True
+                self.map_widget.update()
             else:
-                # Normal mode - just toggle visibility flag
-                self.map_widget.show_all_mappings = show_mappings
+                # Hide all mappings by setting flag to False
+                self.map_widget.show_all_mappings = False
                 self.map_widget.update()
                 
         except Exception as e:
@@ -2832,19 +2930,12 @@ class GraphSetupWindow(QMainWindow):
                     if hasattr(self.map_widget, 'cell_colors') and cell_id in self.map_widget.cell_colors:
                         del self.map_widget.cell_colors[cell_id]
                         
-                # Remove from mapping safely
-                if elem_type == 'node':
-                    node_to_regions = getattr(self.mapping, '_node_to_regions', {})
-                    if elem_id in node_to_regions:
-                        for region in last_action.get('regions', []):
-                            if region in node_to_regions[elem_id]:
-                                node_to_regions[elem_id].remove(region)
-                elif elem_type == 'edge':
-                    edge_to_regions = getattr(self.mapping, '_edge_to_regions', {})
-                    if elem_id in edge_to_regions:
-                        for region in last_action.get('regions', []):
-                            if region in edge_to_regions[elem_id]:
-                                edge_to_regions[elem_id].remove(region)
+                # Remove from mapping using new API
+                for region_id in last_action.get('regions', []):
+                    if elem_type == 'node':
+                        self.mapping.remove_node_region(region_id, elem_id)
+                    elif elem_type == 'edge':
+                        self.mapping.remove_edge_region(region_id, elem_id)
                                 
                 # Add element back to queue safely
                 if hasattr(self, 'element_queue') and self.element_queue is not None:
@@ -2908,8 +2999,12 @@ class GraphSetupWindow(QMainWindow):
             temp_path = temp_file.name
             temp_file.close()
             
-            from .storage import MappingStorage
-            success = MappingStorage.save_mapping(self.mapping, temp_path)
+            from pathlib import Path
+            try:
+                self.mapping.save_with_builder_info(Path(temp_path))
+                success = True
+            except Exception:
+                success = False
             
             if success:
                 # TODO: Launch test GUI with temp mapping
@@ -2929,11 +3024,10 @@ class GraphSetupWindow(QMainWindow):
             self.original_control_panel = self.control_panel
             self.original_views_widget = self.centralWidget().layout().itemAt(1).widget()
             
-        # Create test layout widgets if they don't exist
-        if not hasattr(self, 'test_map_widget'):
-            self.test_map_widget = MapWidget(self.map_image)
-            self.test_map_widget.setMinimumSize(400, 300)
+        # Reuse existing widgets - no need for separate test widgets
+        # The map_widget already exists and has all the data
         
+        # Create test graph widget if it doesn't exist
         if not hasattr(self, 'test_graph_widget'):
             self.test_graph_widget = GraphWidget(self.graph)
             self.test_graph_widget.setMinimumSize(400, 300)
@@ -2957,12 +3051,12 @@ class GraphSetupWindow(QMainWindow):
             self.test_splitter.setOrientation(Qt.Vertical)
             # Graph on top, map on bottom
             self.test_splitter.addWidget(self.test_graph_widget)
-            self.test_splitter.addWidget(self.test_map_widget)
+            self.test_splitter.addWidget(self.map_widget)
             self.test_splitter.setSizes([1, 1])  # Equal sizes
         else:
             self.test_splitter.setOrientation(Qt.Horizontal)
             # Map on left, graph on right
-            self.test_splitter.addWidget(self.test_map_widget)
+            self.test_splitter.addWidget(self.map_widget)
             self.test_splitter.addWidget(self.test_graph_widget)
             self.test_splitter.setSizes([1, 1])  # Equal sizes
         
@@ -2972,8 +3066,8 @@ class GraphSetupWindow(QMainWindow):
         
         # Connect test mode events
         # Store original mousePressEvent for restoration
-        self.original_mouse_press = self.test_map_widget.mousePressEvent
-        self.test_map_widget.mousePressEvent = self._on_test_map_click
+        self.original_mouse_press = self.map_widget.mousePressEvent
+        self.map_widget.mousePressEvent = self._on_test_map_click
         # Note: Graph click events removed - using dropdown selection instead
         
     def _restore_normal_layout(self):
@@ -3019,14 +3113,12 @@ class GraphSetupWindow(QMainWindow):
                         break
             
             # Restore original mousePressEvent if it was stored
-            if hasattr(self, 'test_map_widget') and hasattr(self, 'original_mouse_press'):
-                self.test_map_widget.mousePressEvent = self.original_mouse_press
+            if hasattr(self, 'map_widget') and hasattr(self, 'original_mouse_press'):
+                self.map_widget.mousePressEvent = self.original_mouse_press
             
             # Clean up test mode references
             if hasattr(self, 'test_splitter'):
                 del self.test_splitter
-            if hasattr(self, 'test_map_widget'):
-                del self.test_map_widget
             if hasattr(self, 'test_graph_widget'):
                 del self.test_graph_widget
             
@@ -3039,8 +3131,8 @@ class GraphSetupWindow(QMainWindow):
             return
         
         # Get click position in image coordinates
-        x = (event.x() - self.test_map_widget.offset_x) / self.test_map_widget.scale_factor
-        y = (event.y() - self.test_map_widget.offset_y) / self.test_map_widget.scale_factor
+        x = (event.x() - self.map_widget.offset_x) / self.map_widget.scale_factor
+        y = (event.y() - self.map_widget.offset_y) / self.map_widget.scale_factor
         
         # Clear previous selection
         self._clear_test_selections()
@@ -3048,10 +3140,10 @@ class GraphSetupWindow(QMainWindow):
         # Store click position for visual indicator
         self.test_selected_point = (x, y)
         
-        # Store click position in test map widget for drawing
-        if hasattr(self, 'test_map_widget'):
-            self.test_map_widget.test_click_position = (x, y)
-            self.test_map_widget.update()
+        # Store click position in map widget for drawing
+        if hasattr(self, 'map_widget'):
+            self.map_widget.test_click_position = (x, y)
+            self.map_widget.update()
         
         # Find mapped element at this position
         element_found = self._find_element_at_position(x, y)
@@ -3171,16 +3263,16 @@ class GraphSetupWindow(QMainWindow):
         try:
             if hasattr(self, 'test_graph_widget'):
                 self.test_graph_widget.clear_highlights()
-            if hasattr(self, 'test_map_widget'):
-                if hasattr(self.test_map_widget, 'clear_highlights'):
-                    self.test_map_widget.clear_highlights()
+            if hasattr(self, 'map_widget'):
+                if hasattr(self.map_widget, 'clear_highlights'):
+                    self.map_widget.clear_highlights()
                 # Clear test highlight contours
-                if hasattr(self.test_map_widget, 'test_highlight_contours'):
-                    self.test_map_widget.test_highlight_contours = []
+                if hasattr(self.map_widget, 'test_highlight_contours'):
+                    self.map_widget.test_highlight_contours = []
                 # Clear click position indicator
-                if hasattr(self.test_map_widget, 'test_click_position'):
-                    self.test_map_widget.test_click_position = None
-                self.test_map_widget.update()
+                if hasattr(self.map_widget, 'test_click_position'):
+                    self.map_widget.test_click_position = None
+                self.map_widget.update()
             self.test_selected_point = None
             self.test_selected_element = None
         except Exception as e:
@@ -3190,152 +3282,45 @@ class GraphSetupWindow(QMainWindow):
             self.test_selected_element = None
         
     def _find_element_at_position(self, x, y):
-        """Find which graph element is mapped at the given position."""
-        # Use standardized contours if available (more reliable for test mode)
-        if hasattr(self, '_test_mode_standardized_contours'):
-            return self._find_element_using_standardized_contours(x, y)
-        
-        # Fallback to original mapping method
-        # Check node regions first
-        for node_id, regions in getattr(self.mapping, '_node_to_regions', {}).items():
-            for region_id in regions:
-                region = self.mapping._regions.get(region_id)
-                if region and region.contains_point(x, y):
-                    return ('node', node_id)
-        
-        # Check edge regions
-        for edge_id, regions in getattr(self.mapping, '_edge_to_regions', {}).items():
-            for region_id in regions:
-                region = self.mapping._regions.get(region_id)
-                if region and region.contains_point(x, y):
-                    return ('edge', edge_id)
-        
-        return None
-    
-    def _find_element_using_standardized_contours(self, x, y):
-        """Find element at position using standardized contour representation."""
-        import cv2
-        import numpy as np
-        
-        if not hasattr(self, '_test_mode_standardized_contours'):
+        """Find which graph element is mapped at the given position using mapping API."""
+        if not self.mapping:
             return None
-            
-        standardized = self._test_mode_standardized_contours
         
-        # Check nodes first
-        for node_id_str, contour_list in standardized.get('nodes', {}).items():
-            node_id = int(node_id_str) if node_id_str.isdigit() else node_id_str
-            
-            for contour_points in contour_list:
-                # Convert to numpy array for OpenCV
-                contour_array = np.array(contour_points, dtype=np.float32)
-                
-                # Use OpenCV point in polygon test
-                result = cv2.pointPolygonTest(contour_array, (x, y), False)
-                if result >= 0:  # Point is inside or on the boundary
-                    return ('node', node_id)
-        
-        # Check edges
-        for edge_str, contour_list in standardized.get('edges', {}).items():
-            # Parse edge string back to tuple
-            parts = edge_str.split('_')
-            if len(parts) >= 2:
-                try:
-                    edge_id = (int(parts[0]) if parts[0].isdigit() else parts[0],
-                              int(parts[1]) if parts[1].isdigit() else parts[1])
-                except ValueError:
-                    edge_id = (parts[0], parts[1])
-            else:
-                continue
-                
-            for contour_points in contour_list:
-                # Convert to numpy array for OpenCV
-                contour_array = np.array(contour_points, dtype=np.float32)
-                
-                # Use OpenCV point in polygon test
-                result = cv2.pointPolygonTest(contour_array, (x, y), False)
-                if result >= 0:  # Point is inside or on the boundary
-                    return ('edge', edge_id)
-        
-        return None
+        # Use the SpatialMapping query_point method - clean and simple
+        node_id, edge_id = self.mapping.query_point(x, y)
+        if node_id is not None:
+            return ('node', node_id)
+        elif edge_id is not None:
+            return ('edge', edge_id)
+        else:
+            return None
+    
         
     def _highlight_element_regions(self, elem_type, elem_id):
-        """Highlight all regions mapped to the given element."""
+        """Highlight all regions mapped to the given element and show status message."""
         if not hasattr(self, 'mapping') or self.mapping is None:
+            self.status_bar.showMessage(f"No mapping loaded - cannot highlight {elem_type} {elem_id}")
             return
             
-        # Use standardized contours if available (for better test mode compatibility)
-        if hasattr(self, '_test_mode_standardized_contours'):
-            self._highlight_using_standardized_contours(elem_type, elem_id)
-            return
-            
-        # Fallback to original method
         try:
             if elem_type == 'node':
                 region_objects = self.mapping.get_node_regions(elem_id)
             else:
                 region_objects = self.mapping.get_edge_regions(elem_id)
+            
+            if not region_objects:
+                # No regions found for this element
+                self.status_bar.showMessage(f"Selected {elem_type} {elem_id} - no corresponding map region found")
+                self.map_widget.clear_highlights()
+            else:
+                # Regions found - highlight them
+                self.status_bar.showMessage(f"Selected {elem_type} {elem_id} - highlighting {len(region_objects)} region(s)")
+                self.map_widget.highlight_element(elem_type, elem_id)
                 
-            for region in region_objects:
-                if region:
-                    # Highlight region on map with corresponding color (yellow)
-                    self.test_map_widget.highlight_region(region.region_id, color_type='highlight')
-                
-        except AttributeError as e:
-            # Don't fail the whole operation
-            pass
+        except Exception as e:
+            self.status_bar.showMessage(f"Error highlighting {elem_type} {elem_id}: {e}")
+            print(f"Error highlighting {elem_type} {elem_id}: {e}")
     
-    def _highlight_using_standardized_contours(self, elem_type, elem_id):
-        """Highlight element regions using standardized contour representation."""
-        if not hasattr(self, '_test_mode_standardized_contours'):
-            return
-            
-        standardized = self._test_mode_standardized_contours
-        
-        # Clear existing test highlights first (but not the Show All Mappings display)
-        if hasattr(self.test_map_widget, 'test_highlights'):
-            self.test_map_widget.test_highlights = []
-        if hasattr(self.test_map_widget, 'test_highlight_contours'):
-            self.test_map_widget.test_highlight_contours = []
-        
-        if elem_type == 'node':
-            node_id_str = str(elem_id)
-            contour_list = standardized.get('nodes', {}).get(node_id_str, [])
-        else:  # edge
-            # Convert edge tuple to string format
-            edge_str = f"{elem_id[0]}_{elem_id[1]}"
-            contour_list = standardized.get('edges', {}).get(edge_str, [])
-            
-            # For undirected graphs, try reversed edge if not found
-            if not contour_list and hasattr(self, 'graph') and not self.graph.graph.is_directed():
-                reversed_edge_str = f"{elem_id[1]}_{elem_id[0]}"
-                contour_list = standardized.get('edges', {}).get(reversed_edge_str, [])
-        
-        # Add each contour as a temporary highlight on the map
-        from PyQt5.QtGui import QColor
-        
-        # Use selection colors - purple for highlight
-        highlight_color = QColor(160, 100, 255, 140)
-        
-        for i, contour_points in enumerate(contour_list):
-            # Create a unique region ID for this highlight
-            region_id = f"test_highlight_{elem_type}_{elem_id}_{i}"
-            
-            # Add the contour temporarily for display (not to the permanent mapping)
-            if not hasattr(self.test_map_widget, 'test_highlight_contours'):
-                self.test_map_widget.test_highlight_contours = []
-            
-            # Store as a test highlight that will be drawn on top
-            self.test_map_widget.test_highlight_contours.append({
-                'points': contour_points,
-                'region_id': region_id,
-                'elem_type': elem_type,
-                'elem_id': elem_id,
-                'color': highlight_color
-            })
-        
-        # Trigger repaint
-        self.test_map_widget.update()
                 
     def get_mapping(self) -> SpatialMapping:
         """Get the current mapping."""
@@ -3380,88 +3365,7 @@ class GraphSetupWindow(QMainWindow):
         )
         return reply == QMessageBox.Yes
     
-    def _display_all_standardized_mappings(self):
-        """Display all standardized mappings on test map widget with original colors."""
-        if not hasattr(self, '_test_mode_standardized_contours') or not hasattr(self, 'test_map_widget'):
-            return
-            
-        from PyQt5.QtGui import QColor
-        
-        # Clear existing displays
-        self.test_map_widget.completed_contours.clear()
-        
-        # Display all node mappings in green
-        for node_id_str, contour_list in self._test_mode_standardized_contours.get('nodes', {}).items():
-            node_id = int(node_id_str) if node_id_str.isdigit() else node_id_str
-            color = QColor(0, 255, 0, 100)  # Green for nodes
-            
-            for i, contour_points in enumerate(contour_list):
-                region_id = f"node_{node_id}_region_{i}"
-                # Add to completed contours for display
-                self.test_map_widget.completed_contours.append(
-                    (contour_points, region_id, color, 'node', node_id)
-                )
-        
-        # Display all edge mappings in orange
-        for edge_str, contour_list in self._test_mode_standardized_contours.get('edges', {}).items():
-            # Parse edge string back to tuple
-            parts = edge_str.split('_')
-            if len(parts) >= 2:
-                edge_id = (int(parts[0]) if parts[0].isdigit() else parts[0],
-                          int(parts[1]) if parts[1].isdigit() else parts[1])
-            else:
-                continue
-                
-            color = QColor(255, 165, 0, 100)  # Orange for edges
-            
-            for i, contour_points in enumerate(contour_list):
-                region_id = f"edge_{edge_str}_region_{i}"
-                # Add to completed contours for display
-                self.test_map_widget.completed_contours.append(
-                    (contour_points, region_id, color, 'edge', edge_id)
-                )
-        
-        # Trigger repaint
-        self.test_map_widget.update()
     
-    def _copy_mapping_to_test_widget(self):
-        """Copy mapping data to test_map_widget for display via Show All Mappings toggle."""
-        if not hasattr(self, 'test_map_widget') or not hasattr(self, 'mapping'):
-            return
-            
-        # Clear existing data
-        self.test_map_widget.completed_contours.clear()
-        self.test_map_widget.grid_cells.clear()
-        
-        # Copy all mapped regions to test_map_widget
-        for region_id, region in self.mapping._regions.items():
-            element_info = self.mapping._region_to_element.get(region_id)
-            if element_info:
-                element_type, element_id = element_info
-                
-                # Determine color based on element type
-                if element_type == 'node':
-                    color = QColor(0, 255, 0, 100)  # Green for nodes
-                else:
-                    color = QColor(255, 165, 0, 100)  # Orange for edges
-                
-                # Handle different region types
-                from .regions import RectangleRegion, ContourRegion
-                
-                if isinstance(region, RectangleRegion):  # Grid-based region
-                    # Convert to grid cell format
-                    cell_id = f"cell_{region_id}"
-                    cell_rect = QRectF(region.x, region.y, region.width, region.height)
-                    self.test_map_widget.grid_cells[cell_id] = cell_rect
-                    self.test_map_widget.add_cell_mapping(cell_id, element_type, element_id, color)
-                
-                elif isinstance(region, ContourRegion):  # Contour-based region
-                    # Add to completed contours
-                    contour_color = QColor(color.red(), color.green(), color.blue(), 150)
-                    self.test_map_widget.completed_contours.append(
-                        (region.contour, region_id, contour_color, element_type, element_id)
-                    )
-                    self.test_map_widget.contour_mappings[region_id] = (element_type, element_id)
 
 
 def launch_setup_gui(graph: GraphStructure, map_image: np.ndarray) -> Optional[SpatialMapping]:

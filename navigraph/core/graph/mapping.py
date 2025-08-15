@@ -568,7 +568,7 @@ class SpatialMapping:
             for region in regions:
                 # Extract contour points from any region type
                 points = self._extract_contour_points(region)
-                if points:
+                if points is not None and len(points) > 0:
                     contours.append(points.tolist())  # Convert numpy to list
             if contours:
                 simple_mapping['nodes'][str(node_id)] = contours
@@ -579,7 +579,7 @@ class SpatialMapping:
             contours = []
             for region in regions:
                 points = self._extract_contour_points(region)
-                if points:
+                if points is not None and len(points) > 0:
                     contours.append(points.tolist())  # Convert numpy to list
             if contours:
                 # Always use consistent edge string format
@@ -706,8 +706,8 @@ class SpatialMapping:
         data = {
             'format_version': '3.0',
             'graph_builder': {
-                'type': self._get_builder_registry_name(builder_info['builder_class']),
-                'config': builder_info['config']
+                'type': self._get_builder_registry_name(builder_info['builder_type']),
+                'config': builder_info.get('parameters', {})
             },
             'mappings': self.to_simple_format(),
             'setup_mode': setup_mode_state or {},
@@ -815,6 +815,32 @@ class SpatialMapping:
             Dictionary with setup mode state or empty dict
         """
         return getattr(self, '_setup_mode_state', {})
+    
+    def query_point(self, x: float, y: float) -> Tuple[Optional[Any], Optional[Any]]:
+        """Find which graph element (node or edge) contains the given point.
+        
+        Args:
+            x, y: Point coordinates
+            
+        Returns:
+            Tuple of (node_id, edge_id) where one is None
+            Returns (None, None) if no mapping found
+        """
+        # Check node regions first (nodes have priority over edges)
+        for node_id in self.get_mapped_nodes():
+            regions = self.get_node_regions(node_id)
+            for region in regions:
+                if region.contains_point(x, y):
+                    return (node_id, None)
+        
+        # Check edge regions
+        for edge_id in self.get_mapped_edges():
+            regions = self.get_edge_regions(edge_id)
+            for region in regions:
+                if region.contains_point(x, y):
+                    return (None, edge_id)
+                    
+        return (None, None)
     
     def __len__(self) -> int:
         """Return number of mapped regions."""
