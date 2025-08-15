@@ -58,13 +58,25 @@ Transform NaviGraph from a binary tree-specific system to a generic NetworkX gra
 
 ---
 
-## 🚧 Phase 4: Self-Contained Mapping System
+## ✅ Phase 4: Self-Contained Mapping System - COMPLETED
 
-### Goals
-1. Make mapping files self-contained with graph builder information
-2. Store simple x,y point lists instead of complex objects
-3. Remove standardized_contours (test mode should use real mapping)
-4. Ensure consistent edge representation across the system
+**Summary of Changes:**
+- Implemented enhanced mapping format with graph builder information
+- GUI now saves self-contained mappings with format version 3.0
+- Test mode uses actual SpatialMapping (no more standardized_contours)
+- Fixed widget deletion and mode switching issues in GUI
+- Added robust signal disconnection and fresh UI recreation
+
+**Files Modified:**
+- `navigraph/core/graph/setup_gui_qt.py` - Complete GUI refactoring
+- `navigraph/core/graph/mapping.py` - Enhanced to_simple_format/from_simple_format
+- Example mappings now use new format with builder reconstruction
+
+### Goals Achieved
+1. ✅ Make mapping files self-contained with graph builder information
+2. ✅ Store simple x,y point lists instead of complex objects  
+3. ✅ Remove standardized_contours (test mode uses real mapping)
+4. ✅ Ensure consistent edge representation across the system
 
 ### 4.1 Enhanced Mapping Format
 
@@ -514,98 +526,338 @@ Tasks:
 
 ---
 
-## 📋 Phase 5: Pipeline Integration
+## 🚧 Phase 5: Pipeline Integration - IN PROGRESS
 
 ### Goals
-1. Update pipeline to load self-contained mappings
-2. Add compatibility checking between loaded mapping and config
-3. Provide clear error messages for mismatches
+1. Implement seamless builder configuration with user priority
+2. Support both self-contained mappings AND config-based builders
+3. Add builder mismatch warnings for user awareness
+4. Update examples to work with new flexible system
 
-### 5.1 Graph Provider Plugin Update
+### 5.1 Seamless Builder Priority System
+
+**Priority Logic:**
+1. **User config builder** (if specified) - ALWAYS takes precedence
+2. **Mapping file builder** (if available) - Fallback when no config builder
+3. **Error** - Neither available
+
+**Validation & Warnings:**
+- If both exist but differ → **Warn user** about mismatch
+- If user builder specified → Use it (ignore mapping builder)
+- If only mapping builder → Use it silently
+- If neither → Clear error message
+
+### 5.2 Graph Provider Plugin Update
 
 **File**: `navigraph/plugins/shared_resources/graph_provider.py`
 
 ```python
 class GraphProvider(BasePlugin):
     def process(self, session_data):
-        """Load graph and mapping from self-contained file."""
+        """Load graph and mapping with seamless builder priority system."""
         
-        mapping_path = self.config.get('mapping_file')
+        mapping_path = Path(self.config.get('graph_path', ''))
+        user_builder = self.config.get('builder')
+        
         if not mapping_path:
-            raise ValueError("No mapping file specified")
+            raise ValueError("No graph_path specified in configuration")
         
-        # Load self-contained mapping
-        mapping = SpatialMapping.load_with_builder_reconstruction(Path(mapping_path))
+        # Try to load mapping file info
+        mapping_builder = None
+        simple_mapping_data = None
+        
+        if mapping_path.exists():
+            try:
+                data = self._load_mapping_file(mapping_path)
+                if isinstance(data, dict):
+                    if 'graph_builder' in data:
+                        # Self-contained mapping (format 3.0)
+                        mapping_builder = data['graph_builder']
+                        simple_mapping_data = data.get('mappings')
+                    elif 'nodes' in data or 'edges' in data:
+                        # Simple contours format
+                        simple_mapping_data = data
+                    else:
+                        # Legacy format - not supported
+                        raise ValueError(f"Unsupported mapping format in {mapping_path}")
+            except Exception as e:
+                raise ValueError(f"Failed to load mapping file {mapping_path}: {e}")
+        
+        # Determine which builder to use (user config takes priority)
+        if user_builder:
+            final_builder = user_builder
+            
+            # Warn if different from mapping builder
+            if mapping_builder and self._builders_differ(user_builder, mapping_builder):
+                self._warn_builder_mismatch(user_builder, mapping_builder, mapping_path)
+                
+        elif mapping_builder:
+            # No user config - use mapping builder
+            final_builder = mapping_builder
+            self._log_using_mapping_builder(mapping_builder, mapping_path)
+            
+        else:
+            raise ValueError(
+                f"No builder configuration found. Either:\n"
+                f"1. Specify 'builder' in config, or\n"
+                f"2. Use a self-contained mapping file at {mapping_path}"
+            )
+        
+        # Create graph with chosen builder
+        from ...core.graph.structures import GraphStructure
+        graph = GraphStructure.from_config(
+            final_builder['type'], 
+            final_builder['config']
+        )
+        
+        # Create mapping and load contours if available
+        from ...core.graph.mapping import SpatialMapping
+        mapping = SpatialMapping(graph)
+        
+        if simple_mapping_data:
+            mapping.from_simple_format(simple_mapping_data)
+            self._log_loaded_mappings(mapping)
         
         # Store in session
-        session_data.shared_data['graph'] = mapping.graph
+        session_data.shared_data['graph'] = graph
         session_data.shared_data['mapping'] = mapping
         
         return {
             'status': 'success',
-            'graph_type': mapping.graph.metadata['builder_class'],
-            'graph_config': mapping.graph.metadata['config']
+            'builder_source': 'config' if user_builder else 'mapping',
+            'graph_type': final_builder['type'],
+            'graph_config': final_builder['config'],
+            'total_nodes': len(mapping.get_mapped_nodes()) if simple_mapping_data else 0,
+            'total_edges': len(mapping.get_mapped_edges()) if simple_mapping_data else 0
         }
+    
+    def _load_mapping_file(self, file_path: Path):
+        """Load mapping file in any supported format."""
+        if file_path.suffix == '.json':
+            import json
+            with open(file_path, 'r') as f:
+                return json.load(f)
+        else:
+            import pickle
+            with open(file_path, 'rb') as f:
+                return pickle.load(f)
+    
+    def _builders_differ(self, builder1, builder2):
+        """Check if two builder configurations are different."""
+        return (builder1['type'] != builder2['type'] or 
+                builder1.get('config', {}) != builder2.get('config', {}))
+    
+    def _warn_builder_mismatch(self, user_builder, mapping_builder, mapping_path):
+        """Warn user about builder configuration mismatch."""
+        print(f"⚠️  Builder Mismatch Warning:")
+        print(f"   Config specifies: {user_builder['type']} {user_builder.get('config', {})}")
+        print(f"   Mapping contains: {mapping_builder['type']} {mapping_builder.get('config', {})}")
+        print(f"   Using config builder (user priority)")
+        print(f"   Mapping file: {mapping_path}")
+    
+    def _log_using_mapping_builder(self, mapping_builder, mapping_path):
+        """Log that we're using the mapping file's builder."""
+        print(f"📊 Using builder from mapping: {mapping_builder['type']} {mapping_builder.get('config', {})}")
+        print(f"   Source: {mapping_path}")
+    
+    def _log_loaded_mappings(self, mapping):
+        """Log statistics about loaded mappings."""
+        node_count = len(mapping.get_mapped_nodes())
+        edge_count = len(mapping.get_mapped_edges())
+        if node_count > 0 or edge_count > 0:
+            print(f"📍 Loaded mappings: {node_count} nodes, {edge_count} edges")
 ```
+
+### 5.3 Configuration Examples
+
+**Example 1: Initial Setup** (User specifies builder for GUI setup)
+```yaml
+# examples/basic_maze/config.yaml
+experiment_path: ./examples/basic_maze
+output_path: ./results
+
+shared_resources:
+  - name: graph_provider
+    enable: true
+    config:
+      graph_path: "resources/graph_mapping.pkl"
+      builder:
+        type: "binary_tree"
+        config:
+          height: 7
+```
+
+**Example 2: After GUI Setup** (Self-contained mapping created, config unchanged)
+```yaml
+# examples/basic_maze/config.yaml (SAME FILE - NO CHANGES NEEDED)
+experiment_path: ./examples/basic_maze
+output_path: ./results
+
+shared_resources:
+  - name: graph_provider
+    enable: true
+    config:
+      graph_path: "resources/graph_mapping.pkl"  # Now self-contained
+      builder:  # Still here - takes priority if mapping builder differs
+        type: "binary_tree"
+        config:
+          height: 7
+```
+
+**Example 3: Self-Contained Only** (No builder in config)
+```yaml
+# examples/basic_maze/config.yaml
+experiment_path: ./examples/basic_maze
+output_path: ./results
+
+shared_resources:
+  - name: graph_provider
+    enable: true
+    config:
+      graph_path: "resources/graph_mapping.pkl"  # Self-contained mapping
+      # No builder section - uses mapping's builder
+```
+
+**Example 4: Custom Contours** (Simple mapping + config builder)
+```yaml
+# examples/custom_maze/config.yaml
+experiment_path: ./examples/custom_maze
+output_path: ./results
+
+shared_resources:
+  - name: graph_provider
+    enable: true
+    config:
+      graph_path: "resources/custom_contours.json"  # Simple contours only
+      builder:
+        type: "binary_tree"
+        config:
+          height: 5
+          edge_width: 2.0
+```
+
+### 5.4 Workflow Examples
+
+**Workflow 1: GUI-Based Setup**
+1. User creates config with builder specification
+2. Runs `navigraph setup graph config.yaml`
+3. GUI creates self-contained mapping file
+4. Config continues to work without changes
+5. Future runs use self-contained mapping
+
+**Workflow 2: Programmatic Setup**
+1. User creates simple contour mapping file (JSON/pickle)
+2. Specifies builder in config
+3. Pipeline combines them automatically
+4. Later can upgrade to self-contained via GUI
+
+**Workflow 3: Mixed Development**
+1. Team uses self-contained mappings
+2. Developer wants different builder parameters
+3. Modifies config builder section
+4. Gets warning about mismatch but uses config builder
+5. Can save new self-contained mapping if desired
 
 ---
 
 ## 📋 Phase 6: Testing and Validation
 
 ### Goals
-1. Ensure test mode tests actual production code
-2. Verify self-contained mappings work correctly
-3. Test backward compatibility handling
+1. Verify seamless builder priority system works correctly
+2. Test all workflow combinations (GUI, programmatic, mixed)
+3. Validate examples work with new flexible system
+4. Ensure robust error handling and user warnings
 
-### Test Cases
+### 6.1 Implementation Tasks
 
-1. **Self-contained mapping test**:
-   - Create mapping with GUI
-   - Save as JSON and pickle
-   - Load in new session without graph
-   - Verify graph reconstruction
+**Current Status**: Need to implement the graph provider changes
 
-2. **Test mode validation**:
-   - Verify test mode uses real SpatialMapping
-   - Check point-to-node/edge mapping
-   - Validate contour display
+**Files to Update**:
+1. `navigraph/plugins/shared_resources/graph_provider.py` - Implement seamless builder logic
+2. `examples/basic_maze/config.yaml` - Add builder configuration
+3. `examples/multimodal/config.yaml` - Add builder configuration
+4. Update any other example configs
 
-3. **Edge consistency test**:
-   - Test undirected graph edge lookup
-   - Verify bidirectional edge finding
-   - Check edge string format consistency
+### 6.2 Test Cases
 
-4. **Migration test**:
-   - Load old format mapping
-   - Get clear error message
-   - Successfully recreate with new system
+**Test Case 1: Builder Priority**
+- Config with builder + self-contained mapping → Uses config builder (with warning)
+- Config without builder + self-contained mapping → Uses mapping builder
+- Config with builder + simple contours → Uses config builder
+- No builder anywhere → Clear error message
+
+**Test Case 2: Workflow Validation**
+1. Start with config builder → GUI setup → Self-contained mapping created
+2. Load self-contained mapping without config builder → Works silently
+3. Modify config builder parameters → Warning about mismatch, uses config
+4. Create custom contours + config builder → Combined correctly
+
+**Test Case 3: Error Handling**
+- Missing mapping file → Clear error
+- Corrupted mapping file → Clear error
+- Legacy format mapping → Clear error with migration guidance
+- Builder mismatch → Warning but continues
+
+**Test Case 4: Examples Integration**
+- `navigraph run examples/basic_maze/config.yaml` works
+- `navigraph run examples/multimodal/config.yaml` works
+- All analysis plugins receive correct graph and mapping
+
+### 6.3 Validation Steps
+
+1. **Update graph provider plugin** with seamless builder logic
+2. **Update example configurations** to include builder specifications
+3. **Test GUI workflow**: setup → mapping creation → pipeline execution
+4. **Test programmatic workflow**: contours + config → pipeline execution
+5. **Verify warning system** works for builder mismatches
+6. **Run full analysis pipeline** on both examples
 
 ---
 
-## Implementation Order
+## Implementation Order (Revised)
 
-1. **First**: Implement `to_simple_format()` and `from_simple_format()` in SpatialMapping
-2. **Second**: Add save/load with builder info methods
-3. **Third**: Update GUI to use new save/load methods
-4. **Fourth**: Remove standardized_contours completely
-5. **Fifth**: Update test mode to use real mapping
-6. **Sixth**: Update pipeline integration
-7. **Finally**: Comprehensive testing
+### ✅ Completed Phases
+1. **Phase 1**: Core graph builder architecture ✅
+2. **Phase 2**: GUI builder integration ✅
+3. **Phase 3**: Edge ordering fixes ✅
+4. **Phase 4**: Self-contained mapping system ✅
+
+### 🚧 Remaining Work
+5. **Phase 5**: Pipeline integration (implement seamless builder priority)
+6. **Phase 6**: Testing and validation (verify all workflows)
+
+### Next Steps
+1. **Implement graph provider changes** (main blocker)
+2. **Update example configs** with builder specifications
+3. **Test complete workflows** end-to-end
+4. **Document migration path** for existing users
 
 ---
 
 ## Migration Guide for Users
 
-### For Existing Mappings
-1. Old mappings (.pkl files) are **not compatible** with the new system
-2. You must recreate mappings using the updated GUI
-3. New mappings are self-contained and portable
+### For New Users
+- Configure builder in config file → Run GUI setup → Everything works seamlessly
+- No configuration changes needed after GUI setup
+
+### For Existing Users (with old mappings)
+1. **Add builder section** to existing configs:
+   ```yaml
+   shared_resources:
+     - name: graph_provider
+       config:
+         graph_path: "resources/graph_mapping.pkl"
+         builder:
+           type: "binary_tree"
+           config:
+             height: 7
+   ```
+2. **Recreate mappings** using GUI (old format not supported)
+3. **Remove builder section** if desired (mapping becomes self-contained)
 
 ### Benefits of New System
-- **Portable**: Share mapping files without separate graph configs
-- **Readable**: JSON format option for human inspection
-- **Reliable**: Test mode uses exact same code as production
-- **Consistent**: Edge representation standardized throughout
-
-### Configuration Changes
-No changes needed - the pipeline automatically uses the self-contained mappings.
+- ✅ **Seamless**: Same config works before and after GUI setup
+- ✅ **Flexible**: Support both self-contained and programmatic workflows
+- ✅ **User Control**: Config builder always takes priority
+- ✅ **Safe**: Warnings for mismatches, clear error messages
+- ✅ **Portable**: Self-contained mappings work without config changes

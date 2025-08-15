@@ -569,7 +569,11 @@ class SpatialMapping:
                 # Extract contour points from any region type
                 points = self._extract_contour_points(region)
                 if points is not None and len(points) > 0:
-                    contours.append(points.tolist())  # Convert numpy to list
+                    # Safely convert to list (handle both numpy arrays and lists)
+                    if hasattr(points, 'tolist'):
+                        contours.append(points.tolist())  # numpy array
+                    else:
+                        contours.append(list(points))     # already a list/sequence
             if contours:
                 simple_mapping['nodes'][str(node_id)] = contours
         
@@ -580,7 +584,11 @@ class SpatialMapping:
             for region in regions:
                 points = self._extract_contour_points(region)
                 if points is not None and len(points) > 0:
-                    contours.append(points.tolist())  # Convert numpy to list
+                    # Safely convert to list (handle both numpy arrays and lists)
+                    if hasattr(points, 'tolist'):
+                        contours.append(points.tolist())  # numpy array
+                    else:
+                        contours.append(list(points))     # already a list/sequence
             if contours:
                 # Always use consistent edge string format
                 edge_str = f"{edge[0]}_{edge[1]}"
