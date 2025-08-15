@@ -126,7 +126,11 @@ class MapWidget(QWidget):
         """Set the current interaction mode."""
         self.interaction_mode = mode
         self.current_contour = []
-        self.update()
+        try:
+            self.update()
+        except RuntimeError:
+            # Widget deleted, skip update
+            pass
         
     def set_grid_config(self, config: GridConfig):
         """Update grid configuration."""
@@ -1032,15 +1036,22 @@ class GraphWidget(QWidget):
             pixmap = QPixmap.fromImage(q_image)
             
             # Scale to fit widget while maintaining aspect ratio
-            if not self.image_label.size().isEmpty():
-                scaled_pixmap = pixmap.scaled(
-                    self.image_label.size(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation
-                )
-                self.image_label.setPixmap(scaled_pixmap)
-            else:
-                self.image_label.setPixmap(pixmap)
+            try:
+                # Check if image_label still exists and is valid
+                if hasattr(self, 'image_label') and self.image_label is not None:
+                    self.image_label.isVisible()  # This will raise if deleted
+                    if not self.image_label.size().isEmpty():
+                        scaled_pixmap = pixmap.scaled(
+                            self.image_label.size(),
+                            Qt.KeepAspectRatio,
+                            Qt.SmoothTransformation
+                        )
+                        self.image_label.setPixmap(scaled_pixmap)
+                    else:
+                        self.image_label.setPixmap(pixmap)
+            except RuntimeError:
+                # Widget deleted, skip scaling
+                return
             
         except Exception as e:
             print(f"Error updating graph visualization: {e}")
@@ -1774,7 +1785,10 @@ class GraphSetupWindow(QMainWindow):
                 self.setup_mode = 'grid'
                 self.mode_stack.setCurrentIndex(1)  # Grid controls
                 
-                # Always reset to fresh state when switching modes
+                # Recreate UI fresh when entering grid mode FIRST
+                self._recreate_fresh_ui()
+                
+                # Then reset to fresh state with new widgets
                 try:
                     self._reset_mapping_state()
                     self._init_element_queue()
@@ -1788,17 +1802,11 @@ class GraphSetupWindow(QMainWindow):
                     print(f"Grid mode initialization error: {init_error}")
                     return
                 
-                # Ensure we're back to normal layout after test mode
-                if hasattr(self, 'test_splitter'):
-                    self._restore_normal_layout()
-                
                 # Enable drawing mode
                 if hasattr(self.map_widget, 'set_interaction_mode'):
                     self.map_widget.set_interaction_mode('none')
-                elif self.map_widget:
-                    pass  # Grid mode doesn't need special interaction mode
                 else:
-                    print("Warning: map_widget not available after layout restoration")
+                    print("Warning: map_widget not available for grid mode")
                     
                 self.status_bar.showMessage("Grid Setup Mode - Configure and place grid")
             else:
@@ -1823,7 +1831,10 @@ class GraphSetupWindow(QMainWindow):
                 self.setup_mode = 'manual'
                 self.mode_stack.setCurrentIndex(2)  # Manual controls
                 
-                # Always reset to fresh state when switching modes
+                # Recreate UI fresh when entering manual mode FIRST
+                self._recreate_fresh_ui()
+                
+                # Then reset to fresh state with new widgets
                 try:
                     self._reset_mapping_state()
                     self._init_element_queue()
@@ -1836,10 +1847,6 @@ class GraphSetupWindow(QMainWindow):
                     self.status_bar.showMessage(f"Error initializing manual mode: {str(init_error)}")
                     print(f"Manual mode initialization error: {init_error}")
                     return
-                
-                # Ensure we're back to normal layout after test mode
-                if hasattr(self, 'test_splitter'):
-                    self._restore_normal_layout()
                 
                 # Enable drawing mode
                 if hasattr(self.map_widget, 'set_interaction_mode'):
@@ -1855,11 +1862,8 @@ class GraphSetupWindow(QMainWindow):
                     except RuntimeError as e:
                         print(f"Error setting map widget interaction mode: {e}")
                         self.status_bar.showMessage("Manual mode activated - but drawing may not work properly")
-                elif self.map_widget:
-                    # If set_interaction_mode doesn't exist, just show the status
-                    self.status_bar.showMessage("Manual Drawing Mode - Left click to draw points")
                 else:
-                    print("Warning: map_widget not available after layout restoration")
+                    print("Warning: map_widget not available for manual mode")
             else:
                 self.mode_stack.setCurrentIndex(0)  # Empty
         except Exception as e:
@@ -1882,15 +1886,17 @@ class GraphSetupWindow(QMainWindow):
                 self.setup_mode = 'test'
                 self.mode_stack.setCurrentIndex(3)  # Test controls
                 
-                # Always reset to fresh state when switching modes
+                # Recreate UI fresh when entering test mode FIRST
+                self._recreate_fresh_ui()
+                
+                # Then setup test-specific state with new widgets
                 try:
                     self._reset_mapping_state()
+                    # Switch to test mode layout with fresh widgets
+                    self._setup_test_layout()
                 except Exception as reset_error:
-                    self.status_bar.showMessage(f"Error resetting state for test mode: {str(reset_error)}")
-                    print(f"Test mode reset error: {reset_error}")
-                
-                # Switch to test mode layout
-                self._setup_test_layout()
+                    self.status_bar.showMessage(f"Error setting up test mode: {str(reset_error)}")
+                    print(f"Test mode setup error: {reset_error}")
                 
                 # Enable test interactions
                 if hasattr(self.map_widget, 'set_interaction_mode'):
@@ -1909,8 +1915,8 @@ class GraphSetupWindow(QMainWindow):
                 self._update_progress_display()
                 self.status_bar.showMessage("Test Mode - Click map or select element to test mapping")
             else:
-                # Restore normal layout
-                self._restore_normal_layout()
+                # Recreate fresh UI when leaving test mode
+                self._recreate_fresh_ui()
                 self.mode_stack.setCurrentIndex(0)  # Empty
         except Exception as e:
             self.status_bar.showMessage(f"Error switching to test mode: {str(e)}")
@@ -2034,50 +2040,75 @@ class GraphSetupWindow(QMainWindow):
     
     def _reset_mapping_state(self):
         """Reset all mapping state when switching modes to fresh initial state."""
-        # Clear all visual elements from map widget (this handles grid, contours, mappings)
-        self.map_widget.reset_all()
-        
-        # Reset core mapping data
-        self.mapping = SpatialMapping(self.graph)
-        self.mapped_elements.clear()
-        self.mapping_history.clear()
-        self.element_queue.clear()
-        self.current_element = None
-        
-        # Clear graph highlights
-        self.graph_widget.clear_highlights()
-        
-        # Reset grid-specific state
-        if hasattr(self, 'grid_placed'):
-            self.grid_placed = False
-        if hasattr(self, 'selected_cells'):
-            self.selected_cells.clear()
-        
-        # Reset manual mode specific state
-        if hasattr(self, 'contour_list'):
-            self.contour_list.clear()
-        if hasattr(self, 'highlighted_contour_id'):
-            self.highlighted_contour_id = None
-        
-        # Reset button states
-        if hasattr(self, 'undo_grid_button'):
-            self.undo_grid_button.setEnabled(False)
-        if hasattr(self, 'assign_button'):
-            self.assign_button.setEnabled(False)
-        if hasattr(self, 'next_element_button'):
-            self.next_element_button.setEnabled(False)
-        if hasattr(self, 'place_grid_button'):
-            self.place_grid_button.setEnabled(True)
-        if hasattr(self, 'clear_contour_button'):
-            self.clear_contour_button.setEnabled(False)
-        if hasattr(self, 'commit_contour_button'):
-            self.commit_contour_button.setEnabled(False)
+        try:
+            # Ensure we have a valid map_widget
+            if not hasattr(self, 'map_widget') or not self.map_widget:
+                print("Warning: map_widget missing during reset, attempting to find it")
+                for widget in self.findChildren(MapWidget):
+                    self.map_widget = widget
+                    break
+                else:
+                    print("Error: Could not find MapWidget during reset")
+                    return
             
-        # Update progress display
-        self._update_progress()
-        
-        # Clear status bar
-        self.status_bar.clearMessage()
+            # Clear all visual elements from map widget (this handles grid, contours, mappings)
+            if hasattr(self, 'map_widget') and self.map_widget is not None:
+                try:
+                    # Check if widget still exists
+                    self.map_widget.isVisible()
+                    self.map_widget.reset_all()
+                except RuntimeError:
+                    # Widget deleted, skip this operation
+                    pass
+            
+            # Reset core mapping data
+            self.mapping = SpatialMapping(self.graph)
+            self.mapped_elements.clear()
+            self.mapping_history.clear()
+            self.element_queue.clear()
+            self.current_element = None
+            
+            # Clear graph highlights
+            if hasattr(self, 'graph_widget') and self.graph_widget:
+                self.graph_widget.clear_highlights()
+            
+            # Reset grid-specific state
+            if hasattr(self, 'grid_placed'):
+                self.grid_placed = False
+            if hasattr(self, 'selected_cells'):
+                self.selected_cells.clear()
+            
+            # Reset manual mode specific state
+            if hasattr(self, 'contour_list') and self.contour_list:
+                self.contour_list.clear()
+            if hasattr(self, 'highlighted_contour_id'):
+                self.highlighted_contour_id = None
+            
+            # Reset button states
+            if hasattr(self, 'undo_grid_button'):
+                self.undo_grid_button.setEnabled(False)
+            if hasattr(self, 'assign_button'):
+                self.assign_button.setEnabled(False)
+            if hasattr(self, 'next_element_button'):
+                self.next_element_button.setEnabled(False)
+            if hasattr(self, 'place_grid_button'):
+                self.place_grid_button.setEnabled(True)
+            if hasattr(self, 'clear_contour_button'):
+                self.clear_contour_button.setEnabled(False)
+            if hasattr(self, 'commit_contour_button'):
+                self.commit_contour_button.setEnabled(False)
+                
+            # Update progress display
+            self._update_progress()
+            
+            # Clear status bar
+            if hasattr(self, 'status_bar'):
+                self.status_bar.clearMessage()
+                
+        except Exception as e:
+            print(f"Error in _reset_mapping_state: {e}")
+            import traceback
+            traceback.print_exc()
     
     
     def _set_mode_specific_defaults(self, mode: str):
@@ -3042,109 +3073,315 @@ class GraphSetupWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to launch test mode: {e}")
                     
     def _setup_test_layout(self):
-        """Setup test mode layout based on orientation preference."""
-        if not hasattr(self, 'original_layout'):
-            # Store the original layout for restoration
-            self.original_control_panel = self.control_panel
-            self.original_views_widget = self.centralWidget().layout().itemAt(1).widget()
+        """Setup test mode layout by rearranging existing fresh widgets."""
+        try:
+            # Find the views widget created by _recreate_fresh_ui()
+            main_layout = self.centralWidget().layout()
+            views_widget = None
+            for i in range(main_layout.count()):
+                item = main_layout.itemAt(i)
+                if item and item.widget() and item.widget() != self.control_panel:
+                    views_widget = item.widget()
+                    break
             
-        # Reuse existing widgets - no need for separate test widgets
-        # The map_widget already exists and has all the data
-        
-        # Create test graph widget if it doesn't exist
-        if not hasattr(self, 'test_graph_widget'):
-            self.test_graph_widget = GraphWidget(self.graph)
-            self.test_graph_widget.setMinimumSize(400, 300)
-        
-        # Clear the main layout
-        main_layout = self.centralWidget().layout()
-        while main_layout.count():
-            child = main_layout.takeAt(0)
-            if child.widget():
-                child.widget().setParent(None)
-        
-        # Determine orientation
-        is_vertical = self.test_layout_vertical.isChecked()
-        
-        # Create the test splitter
-        if not hasattr(self, 'test_splitter'):
+            if views_widget:
+                # Remove the views widget from main layout (but don't delete it)
+                main_layout.removeWidget(views_widget)
+                views_widget.hide()
+            
+            # Create fresh test splitter (the old one was deleted in _recreate_fresh_ui)
             self.test_splitter = QSplitter()
-        
-        # Set orientation
-        if is_vertical:
-            self.test_splitter.setOrientation(Qt.Vertical)
-            # Graph on top, map on bottom
-            self.test_splitter.addWidget(self.test_graph_widget)
-            self.test_splitter.addWidget(self.map_widget)
+            self.test_splitter.setParent(self.centralWidget())
+            
+            # Move the existing fresh widgets into test splitter
+            # Remove them from their current parents first
+            if hasattr(self, 'graph_widget') and self.graph_widget is not None:
+                self.graph_widget.setParent(None)
+            if hasattr(self, 'map_widget') and self.map_widget is not None:
+                self.map_widget.setParent(None)
+            
+            # Determine orientation
+            is_vertical = self.test_layout_vertical.isChecked()
+            
+            # Set orientation and add the existing fresh widgets with safety checks
+            try:
+                if is_vertical:
+                    self.test_splitter.setOrientation(Qt.Vertical)
+                    # Graph on top, map on bottom
+                    if hasattr(self, 'graph_widget') and self.graph_widget is not None:
+                        self.test_splitter.addWidget(self.graph_widget)
+                    if hasattr(self, 'map_widget') and self.map_widget is not None:
+                        self.map_widget.isVisible()  # Check if widget exists
+                        self.test_splitter.addWidget(self.map_widget)
+                else:
+                    self.test_splitter.setOrientation(Qt.Horizontal)
+                    # Map on left, graph on right
+                    if hasattr(self, 'map_widget') and self.map_widget is not None:
+                        self.map_widget.isVisible()  # Check if widget exists
+                        self.test_splitter.addWidget(self.map_widget)
+                    if hasattr(self, 'graph_widget') and self.graph_widget is not None:
+                        self.test_splitter.addWidget(self.graph_widget)
+            except RuntimeError:
+                # Widget deleted during setup, skip layout
+                return
+            
             self.test_splitter.setSizes([1, 1])  # Equal sizes
-        else:
-            self.test_splitter.setOrientation(Qt.Horizontal)
-            # Map on left, graph on right
-            self.test_splitter.addWidget(self.map_widget)
-            self.test_splitter.addWidget(self.test_graph_widget)
-            self.test_splitter.setSizes([1, 1])  # Equal sizes
-        
-        # Add control panel (minimal) and test splitter to main layout
-        main_layout.addWidget(self.control_panel)
-        main_layout.addWidget(self.test_splitter)
-        
-        # Connect test mode events
-        # Store original mousePressEvent for restoration
-        self.original_mouse_press = self.map_widget.mousePressEvent
-        self.map_widget.mousePressEvent = self._on_test_map_click
-        # Note: Graph click events removed - using dropdown selection instead
+            
+            # Add test splitter to main layout
+            main_layout = self.centralWidget().layout()
+            main_layout.addWidget(self.test_splitter)
+            self.test_splitter.show()
+            
+            # Connect test mode events
+            if hasattr(self.map_widget, 'mousePressEvent') and not hasattr(self, 'original_mouse_press'):
+                self.original_mouse_press = self.map_widget.mousePressEvent
+            if hasattr(self.map_widget, 'mousePressEvent'):
+                self.map_widget.mousePressEvent = self._on_test_map_click
+                
+        except Exception as e:
+            print(f"Error in _setup_test_layout: {e}")
+            import traceback
+            traceback.print_exc()
         
     def _restore_normal_layout(self):
         """Restore the normal layout when leaving test mode."""
-        if hasattr(self, 'original_control_panel') and hasattr(self, 'original_views_widget'):
-            # Clear current layout more carefully - only remove what we added
-            main_layout = self.centralWidget().layout()
-            
-            # Store widgets we want to preserve
-            widgets_to_preserve = [self.original_control_panel, self.original_views_widget]
-            
-            # Remove only test mode widgets, not the originals
-            widgets_to_remove = []
-            for i in range(main_layout.count()):
-                item = main_layout.itemAt(i)
-                if item and item.widget():
-                    widget = item.widget()
-                    # Only remove if it's not one of our preserved widgets
-                    if widget not in widgets_to_preserve:
-                        widgets_to_remove.append(widget)
-            
-            # Remove the test mode widgets
-            for widget in widgets_to_remove:
-                main_layout.removeWidget(widget)
-                # Don't delete - just remove from layout
-            
-            # Make sure our original widgets are in the layout
-            if main_layout.indexOf(self.original_control_panel) == -1:
-                main_layout.addWidget(self.original_control_panel)
-            if main_layout.indexOf(self.original_views_widget) == -1:
-                main_layout.addWidget(self.original_views_widget)
-            
-            # Restore original map widget reference to self.map_widget
+        try:
             if hasattr(self, 'original_views_widget'):
-                # The map widget should be the second child (index 1) of the splitter
-                views_splitter = self.original_views_widget
-                if hasattr(views_splitter, 'widget') and views_splitter.widget(1):
-                    self.map_widget = views_splitter.widget(1)
-                else:
-                    # Try to find the map widget by name/type
-                    for child in views_splitter.findChildren(MapWidget):
-                        self.map_widget = child
+                # Hide test splitter and remove map_widget from it
+                if hasattr(self, 'test_splitter'):
+                    self.test_splitter.hide()
+                    # Remove map_widget from test splitter safely
+                    if self.map_widget.parent() == self.test_splitter:
+                        self.map_widget.setParent(None)
+                
+                # Show original views widget
+                self.original_views_widget.show()
+                
+                # Find the Interactive Mapping Area group box and restore map_widget to it
+                map_group = None
+                for child in self.original_views_widget.findChildren(QGroupBox):
+                    if "Interactive Mapping Area" in child.title():
+                        map_group = child
                         break
+                
+                if map_group:
+                    map_layout = map_group.layout()
+                    if not map_layout:
+                        # Create the layout if it doesn't exist
+                        print("Creating new layout for map group")
+                        map_layout = QVBoxLayout()
+                        map_layout.setContentsMargins(8, 20, 8, 8)
+                        map_group.setLayout(map_layout)
+                    
+                    # Clear the layout first
+                    while map_layout.count():
+                        child = map_layout.takeAt(0)
+                        if child.widget() and child.widget() != self.map_widget:
+                            child.widget().setParent(None)
+                    
+                    # Check if map_widget is already in layout
+                    widget_in_layout = False
+                    for i in range(map_layout.count()):
+                        if map_layout.itemAt(i).widget() == self.map_widget:
+                            widget_in_layout = True
+                            break
+                    
+                    # Add map_widget back if not already there
+                    if not widget_in_layout:
+                        map_layout.addWidget(self.map_widget)
+                    print("Successfully restored map_widget to Interactive Mapping Area")
+                else:
+                    print("Error: Could not find Interactive Mapping Area group box")
+                
+                # Restore original mousePressEvent if it was stored
+                if hasattr(self, 'original_mouse_press'):
+                    self.map_widget.mousePressEvent = self.original_mouse_press
+                    
+        except Exception as e:
+            print(f"Error in _restore_normal_layout: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _ensure_normal_layout(self):
+        """Ensure we're in normal layout (not test mode) and map_widget is properly positioned."""
+        try:
+            # If we have a test splitter that's visible, restore normal layout
+            if hasattr(self, 'test_splitter') and self.test_splitter.isVisible():
+                self._restore_normal_layout()
+                return
             
-            # Restore original mousePressEvent if it was stored
-            if hasattr(self, 'map_widget') and hasattr(self, 'original_mouse_press'):
-                self.map_widget.mousePressEvent = self.original_mouse_press
+            # Double check that map_widget is accessible and in the right place
+            if not hasattr(self, 'map_widget') or not self.map_widget:
+                print("Critical: map_widget missing, attempting to find it")
+                # Try to find the map widget in the widget tree
+                for widget in self.findChildren(MapWidget):
+                    self.map_widget = widget
+                    print(f"Found map_widget: {widget}")
+                    break
+                else:
+                    print("Error: Could not find MapWidget in widget tree")
+                    return
             
-            # Clean up test mode references
-            if hasattr(self, 'test_splitter'):
-                del self.test_splitter
+            # Find the Interactive Mapping Area and ensure map_widget is properly placed
+            map_group = None
+            for child in self.findChildren(QGroupBox):
+                if "Interactive Mapping Area" in child.title():
+                    map_group = child
+                    break
+            
+            if map_group:
+                map_layout = map_group.layout()
+                if not map_layout:
+                    # Create the layout if it doesn't exist
+                    print("Creating new layout for map group in ensure_normal_layout")
+                    map_layout = QVBoxLayout()
+                    map_layout.setContentsMargins(8, 20, 8, 8)
+                    map_group.setLayout(map_layout)
+                
+                # Check if map_widget is already in this layout
+                widget_found = False
+                for i in range(map_layout.count()):
+                    if map_layout.itemAt(i).widget() == self.map_widget:
+                        widget_found = True
+                        break
+                
+                # If not found, add it
+                if not widget_found:
+                    # Remove from current parent if any
+                    if self.map_widget.parent() and self.map_widget.parent() != map_group:
+                        self.map_widget.setParent(None)
+                    # Add to correct layout
+                    map_layout.addWidget(self.map_widget)
+                    print("Ensured map_widget is in Interactive Mapping Area")
+            else:
+                print("Error: Could not find Interactive Mapping Area in ensure_normal_layout")
+                        
+        except Exception as e:
+            print(f"Error in _ensure_normal_layout: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _recreate_fresh_ui(self):
+        """Recreate the entire UI from scratch, like initial startup."""
+        try:
+            
+            # Store current mapping data if any
+            current_mapping = None
+            if hasattr(self, 'mapping'):
+                current_mapping = self.mapping
+            
+            # FIRST: Completely disconnect all signals from old widgets
+            if hasattr(self, 'map_widget') and self.map_widget is not None:
+                try:
+                    # Disconnect all signals
+                    self.map_widget.disconnect()
+                    # Reset mouse event to original (remove wrapper)
+                    if hasattr(self.map_widget, 'original_mouse_press'):
+                        self.map_widget.mousePressEvent = self.map_widget.original_mouse_press
+                except:
+                    pass
+            
+            # Clear all widget references BEFORE layout operations
+            old_graph_widget = getattr(self, 'graph_widget', None)
+            old_map_widget = getattr(self, 'map_widget', None)
+            old_test_graph_widget = getattr(self, 'test_graph_widget', None)
+            old_test_splitter = getattr(self, 'test_splitter', None)
+            
+            # Clear references immediately
+            if hasattr(self, 'graph_widget'):
+                delattr(self, 'graph_widget')
+            if hasattr(self, 'map_widget'):
+                delattr(self, 'map_widget')
             if hasattr(self, 'test_graph_widget'):
-                del self.test_graph_widget
+                delattr(self, 'test_graph_widget')
+            if hasattr(self, 'test_splitter'):
+                delattr(self, 'test_splitter')
+            
+            # Clear ALL mouse event references to prevent old event handlers
+            if hasattr(self, '_original_map_mouse_press'):
+                delattr(self, '_original_map_mouse_press')
+            if hasattr(self, 'original_mouse_press'):
+                delattr(self, 'original_mouse_press')
+            
+            # Clear the main layout completely
+            main_layout = self.centralWidget().layout()
+            control_panel_ref = self.control_panel
+            
+            # Remove all widgets from layout
+            while main_layout.count():
+                child = main_layout.takeAt(0)
+                if child.widget() and child.widget() != control_panel_ref:
+                    child.widget().setParent(None)
+            
+            # Safely delete old widgets
+            def safe_delete_widget(widget):
+                if widget is not None:
+                    try:
+                        widget.isVisible()  # Test if widget is valid
+                        widget.deleteLater()
+                    except RuntimeError:
+                        pass  # Already deleted
+            
+            safe_delete_widget(old_graph_widget)
+            safe_delete_widget(old_map_widget)
+            safe_delete_widget(old_test_graph_widget)
+            safe_delete_widget(old_test_splitter)
+            
+            # Recreate the right panel (views) from scratch
+            views_widget = QWidget()
+            views_layout = QVBoxLayout(views_widget)
+            views_layout.setContentsMargins(5, 5, 5, 5)
+            
+            # Graph view (top, smaller)
+            graph_group = QGroupBox("📊 Graph Structure")
+            graph_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
+            graph_layout = QVBoxLayout(graph_group)
+            graph_layout.setContentsMargins(8, 20, 8, 8)
+            
+            # Recreate graph widget
+            self.graph_widget = GraphWidget(self.graph)
+            self.graph_widget.setMinimumSize(400, 300)
+            self.graph_widget.setMaximumHeight(400)
+            graph_layout.addWidget(self.graph_widget)
+            
+            views_layout.addWidget(graph_group)
+            
+            # Map view (bottom, larger) - recreate from scratch
+            map_group = QGroupBox("🗺️ Interactive Mapping Area")
+            map_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
+            map_layout = QVBoxLayout(map_group)
+            map_layout.setContentsMargins(8, 20, 8, 8)
+            
+            # Recreate map widget completely fresh
+            self.map_widget = MapWidget(self.map_image)
+            self.map_widget.gui_parent = self  # Allow map widget to access mapping
+            self.map_widget.setMinimumHeight(350)
+            map_layout.addWidget(self.map_widget)
+            
+            views_layout.addWidget(map_group)
+            
+            # Set stretch factors (graph:map = 1:1)
+            views_layout.setStretchFactor(graph_group, 1)
+            views_layout.setStretchFactor(map_group, 1)
+            
+            # Add widgets back to main layout
+            main_layout.addWidget(control_panel_ref)
+            main_layout.addWidget(views_widget)
+            
+            # Reconnect signals since we have new map_widget
+            self._connect_signals()
+            
+            # Restore mapping if we had one
+            if current_mapping:
+                self.mapping = current_mapping
+                # Ensure map widget gets the mapping reference
+                self.map_widget.gui_parent = self
+            
+        except Exception as e:
+            print(f"Error in _recreate_fresh_ui: {e}")
+            import traceback
+            traceback.print_exc()
+    
             
     def _on_test_map_click(self, event):
         """Handle map click in test mode."""
@@ -3177,12 +3414,12 @@ class GraphSetupWindow(QMainWindow):
             self.test_selected_element = (elem_type, elem_id)
             
             # Highlight graph element with highlight color (yellow)
-            self.test_graph_widget.clear_highlights()
+            self.graph_widget.clear_highlights()
             if elem_type == 'node':
-                self.test_graph_widget.highlight_nodes({elem_id}, color='highlight')
+                self.graph_widget.highlight_nodes({elem_id}, color='highlight')
                 self.test_info_label.setText(f"Found: Node {elem_id}")
             else:
-                self.test_graph_widget.highlight_edges({elem_id}, color='highlight')
+                self.graph_widget.highlight_edges({elem_id}, color='highlight')
                 self.test_info_label.setText(f"Found: Edge {elem_id}")
         else:
             self.test_info_label.setText(f"No mapping at ({x:.0f}, {y:.0f})")
@@ -3195,8 +3432,8 @@ class GraphSetupWindow(QMainWindow):
         self.test_selected_element = ('node', node_id)
         
         # Highlight node with selection color
-        self.test_graph_widget.clear_highlights()
-        self.test_graph_widget.highlight_nodes({node_id}, color='selected')
+        self.graph_widget.clear_highlights()
+        self.graph_widget.highlight_nodes({node_id}, color='selected')
         
         # Highlight mapped regions on map
         self._highlight_element_regions('node', node_id)
@@ -3211,8 +3448,8 @@ class GraphSetupWindow(QMainWindow):
         self.test_selected_element = ('edge', edge)
         
         # Highlight edge with selection color
-        self.test_graph_widget.clear_highlights()
-        self.test_graph_widget.highlight_edges({edge}, color='selected')
+        self.graph_widget.clear_highlights()
+        self.graph_widget.highlight_edges({edge}, color='selected')
         
         # Highlight mapped regions on map
         self._highlight_element_regions('edge', edge)
@@ -3285,8 +3522,8 @@ class GraphSetupWindow(QMainWindow):
     def _clear_test_selections(self):
         """Clear current test selections and highlights."""
         try:
-            if hasattr(self, 'test_graph_widget'):
-                self.test_graph_widget.clear_highlights()
+            if hasattr(self, 'graph_widget'):
+                self.graph_widget.clear_highlights()
             if hasattr(self, 'map_widget'):
                 if hasattr(self.map_widget, 'clear_highlights'):
                     self.map_widget.clear_highlights()
