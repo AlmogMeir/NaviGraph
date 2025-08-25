@@ -87,7 +87,7 @@ class StarGraphBuilder(GraphBuilder):
         star_params = {
             'figsize': kwargs.get('figsize', (10, 10)),
             'node_size': self._get_node_sizes(),
-            'node_color': self._get_node_colors(),
+            'node_color': kwargs.get('node_color', self._get_node_colors()),  # Use custom colors if provided
             'edge_color': kwargs.get('edge_color', 'gray'),
             'width': kwargs.get('width', 2.0),
             'with_labels': kwargs.get('with_labels', True),
