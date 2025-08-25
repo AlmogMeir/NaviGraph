@@ -1,0 +1,13 @@
+# Configuration for testing GEXF file format
+
+experiment_path: ./
+map_path: resources/test_map.png
+
+graph_structure:
+  type: file_loader
+  parameters:
+    filepath: graphs/grid_graph.gexf
+    format: gexf
+
+graph_mapping:
+  mapping_file: resources/graph_mapping_grid.pkl

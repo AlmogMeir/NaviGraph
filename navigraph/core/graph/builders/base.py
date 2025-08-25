@@ -16,6 +16,9 @@ class GraphBuilder(ABC):
     image arrays, which subclasses can override if needed.
     """
     
+    # Registry name set by @register_graph_builder decorator
+    _registry_name: Optional[str] = None
+    
     @abstractmethod
     def build_graph(self) -> nx.Graph:
         """Build and return a NetworkX graph.
@@ -134,7 +137,7 @@ class GraphBuilder(ABC):
         import inspect
         
         metadata = {
-            'builder_type': self.__class__.__name__,
+            'builder_type': self._registry_name or self.__class__.__name__,
             'module': self.__class__.__module__,
             'parameters': {}
         }

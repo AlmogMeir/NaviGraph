@@ -714,7 +714,7 @@ class SpatialMapping:
         data = {
             'format_version': '3.0',
             'graph_builder': {
-                'type': self._get_builder_registry_name(builder_info['builder_type']),
+                'type': builder_info['builder_type'],
                 'config': builder_info.get('parameters', {})
             },
             'mappings': self.to_simple_format(),
@@ -786,24 +786,6 @@ class SpatialMapping:
         
         return mapping
     
-    def _get_builder_registry_name(self, builder_class_name: str) -> str:
-        """Convert builder class name to registry name.
-        
-        Args:
-            builder_class_name: Class name like 'BinaryTreeBuilder'
-            
-        Returns:
-            Registry name like 'binary_tree'
-        """
-        # Remove 'Builder' suffix and convert to snake_case
-        name = builder_class_name.replace('Builder', '')
-        
-        # Convert CamelCase to snake_case
-        import re
-        name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-        name = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
-        
-        return name
     
     class _JSONEncoder(json.JSONEncoder):
         """Custom JSON encoder for numpy arrays and other types."""

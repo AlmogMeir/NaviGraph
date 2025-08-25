@@ -1,0 +1,17 @@
+# Configuration for testing RandomGraphBuilder (programmatic generation)
+# This tests the new RandomGraphBuilder vs FileGraphBuilder
+
+experiment_path: ./
+map_path: resources/test_map.png
+
+# Graph structure using random builder (generates on-demand)
+graph_structure:
+  type: random
+  parameters:
+    graph_type: erdos_renyi
+    n_nodes: 18
+    edge_probability: 0.2
+    seed: 42
+
+graph_mapping:
+  mapping_file: resources/graph_mapping_random_gen.pkl

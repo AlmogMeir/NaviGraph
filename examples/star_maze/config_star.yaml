@@ -1,0 +1,15 @@
+# Configuration for Star Maze with custom visualization
+# Tests the new StarGraphBuilder with circular layout
+
+experiment_path: ./
+map_path: resources/star_maze_map.png
+
+# Graph structure using the new star builder
+graph_structure:
+  type: star
+  parameters:
+    n_peripheral_nodes: 18
+
+# Where to save the spatial mapping
+graph_mapping:
+  mapping_file: resources/graph_mapping_star.pkl

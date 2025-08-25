@@ -1,10 +1,14 @@
 """Core components for NaviGraph."""
 
-# Core interfaces and classes
-from .interfaces import IDataSource, ISharedResource, IAnalyzer, IVisualizer
-from .base_plugin import BasePlugin
+# Core classes
+from .navigraph_plugin import NaviGraphPlugin
 from .session import Session
+from .session_analyzer import SessionAnalyzer
+from .session_visualizer import SessionVisualizer
 from .experiment_runner import ExperimentRunner
+
+# Registry and decorators
+from .registry import registry, register_plugin, register_analysis, register_visualizer
 
 # Type definitions
 from .types import AnalysisResult, AnalysisMetadata
@@ -19,14 +23,18 @@ from .utils import resolve_path, ensure_directory, compute_configuration_hash
 from .conversion_utils import quaternions_to_euler, wrap_angle, degrees_to_radians, radians_to_degrees
 
 __all__ = [
-    # Core interfaces and classes
-    "IDataSource",
-    "ISharedResource", 
-    "IAnalyzer",
-    "IVisualizer",
-    "BasePlugin",
+    # Core classes
+    "NaviGraphPlugin",
     "Session",
+    "SessionAnalyzer",
+    "SessionVisualizer", 
     "ExperimentRunner",
+    
+    # Registry and decorators
+    "registry",
+    "register_plugin",
+    "register_analysis", 
+    "register_visualizer",
     
     # Types
     "AnalysisResult",

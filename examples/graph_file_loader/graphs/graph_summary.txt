@@ -1,0 +1,43 @@
+Test Graph Files Summary
+==================================================
+
+Graph: random_erdos_renyi_small
+Description: Small Erdős–Rényi graph (15 nodes, p=0.2)
+Nodes: 15, Edges: 20
+Files: random_erdos_renyi_small.graphml, random_erdos_renyi_small.gexf, random_erdos_renyi_small.gml
+------------------------------
+Graph: random_erdos_renyi_medium
+Description: Medium Erdős–Rényi graph (25 nodes, p=0.15)
+Nodes: 25, Edges: 44
+Files: random_erdos_renyi_medium.graphml, random_erdos_renyi_medium.gexf, random_erdos_renyi_medium.gml
+------------------------------
+Graph: random_barabasi_albert
+Description: Barabási–Albert graph (20 nodes, m=2)
+Nodes: 20, Edges: 36
+Files: random_barabasi_albert.graphml, random_barabasi_albert.gexf, random_barabasi_albert.gml
+------------------------------
+Graph: random_watts_strogatz
+Description: Watts-Strogatz small-world graph (20 nodes, k=4, p=0.3)
+Nodes: 20, Edges: 40
+Files: random_watts_strogatz.graphml, random_watts_strogatz.gexf, random_watts_strogatz.gml
+------------------------------
+Graph: complete_graph
+Description: Complete graph (8 nodes)
+Nodes: 8, Edges: 28
+Files: complete_graph.graphml, complete_graph.gexf, complete_graph.gml
+------------------------------
+Graph: grid_graph
+Description: 2D grid graph (4x5)
+Nodes: 20, Edges: 31
+Files: grid_graph.graphml, grid_graph.gexf, grid_graph.gml
+------------------------------
+Graph: path_graph
+Description: Path graph (12 nodes)
+Nodes: 12, Edges: 11
+Files: path_graph.graphml, path_graph.gexf, path_graph.gml
+------------------------------
+Graph: cycle_graph
+Description: Cycle graph (10 nodes)
+Nodes: 10, Edges: 10
+Files: cycle_graph.graphml, cycle_graph.gexf, cycle_graph.gml
+------------------------------

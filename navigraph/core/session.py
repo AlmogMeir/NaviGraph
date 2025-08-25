@@ -1,610 +1,340 @@
-"""Session class for NaviGraph.
+"""Clean session class for NaviGraph unified plugin architecture."""
 
-Core session that orchestrates multi-source data integration.
-"""
-
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, Any, Optional
 import pandas as pd
-import numpy as np
 from pathlib import Path
-import cv2
 from loguru import logger
+import pickle
 
 # Type alias for logger
 Logger = type(logger)
 
-from .interfaces import IDataSource
-from .exceptions import (
-    DataSourceError,
-    NavigraphError
-)
-from .file_discovery import FileDiscoveryEngine
-
-
+from .exceptions import NavigraphError
+from .navigraph_plugin import NaviGraphPlugin
+from .session_analyzer import SessionAnalyzer
+from .session_visualizer import SessionVisualizer
 
 
 class Session:
-    """Core session that orchestrates multi-source data integration."""
+    """Core session that orchestrates unified plugin execution."""
     
     def __init__(
         self,
         session_configuration: Dict[str, Any],
         logger_instance: Logger
     ):
-        """Initialize session with data source orchestration."""
+        """Initialize session with plugin orchestration.
+        
+        Args:
+            session_configuration: Configuration dict with:
+                - session_id: Session identifier
+                - experiment_path: Path to experiment root
+                - plugins: List of plugin specifications
+                - graph: Graph configuration (with mandatory mapping_file)
+            logger_instance: Logger for this session
+        """
         self.session_id = session_configuration.get('session_id', 'unknown_session')
         self.config = session_configuration
-        self.experiment_path = session_configuration.get('experiment_path', '.')
-        self.data_source_specifications = session_configuration.get('data_source_specifications', [])
-        
-        # Set up basic attributes
-        self.registry = None  # Will be loaded lazily when needed
+        self.experiment_path = Path(session_configuration.get('experiment_path', '.'))
+        self.session_path = self.experiment_path / self.session_id
         self.logger = logger_instance
         
-        # Initialize shared resources - will be created during data source integration
+        # Plugin specifications from config
+        self.plugin_specifications = session_configuration.get('plugins', [])
+        
+        # Shared resources populated by graph and plugins
         self.shared_resources = {}
         
-        # Create file discovery engine for this session
-        self.file_discovery = FileDiscoveryEngine(self.experiment_path, logger_instance)
+        # Plugin instances stored by name (allows multiple instances of same type)
+        self.plugin_instances: Dict[str, NaviGraphPlugin] = {}
         
-        # Lazy-loaded data - populated on first access
+        # Cached integrated dataframe
         self._integrated_dataframe: Optional[pd.DataFrame] = None
-        self._node_level_features: Optional[pd.DataFrame] = None
         
-        # Data source instances in configuration order
-        self.data_source_instances: List[Tuple[str, IDataSource, Dict[str, Any]]] = []
-        
-        # File discovery results
-        self._discovered_file_paths: Dict[str, Optional[str]] = {}
-        
-        # Minimal backward compatibility properties
-        self._session_name: Optional[str] = None
-        self._likelihood_threshold: Optional[float] = None
-        self._bodyparts: Optional[List[str]] = None
-        self._path_to_reward: Optional[List[int]] = None
-        
+        # Initialize orchestrators (auto-discovery happens when registry module is imported)
+        self.analyzer = SessionAnalyzer(session_configuration)
+        self.visualizer = SessionVisualizer(session_configuration)
+
+        # Initialize session
         try:
-            self._initialize_session()
-            self.logger.info(f"Initialized session: {self.session_id}")
+            self._create_graph_structure()
+            self._load_plugins()
+            self.logger.info(f"Session {self.session_id} initialized: {len(self.plugin_instances)} plugins")
         except Exception as e:
-            raise NavigraphError(
-                f"Failed to initialize session {self.session_id}: {str(e)}"
-            ) from e
+            raise NavigraphError(f"Session initialization failed: {str(e)}") from e
     
     def get_integrated_dataframe(self) -> pd.DataFrame:
-        """Get the fully integrated DataFrame from all data sources."""
-        if self._integrated_dataframe is not None:
-            return self._integrated_dataframe
+        """Get integrated DataFrame with all plugin augmentations.
         
-        return self._integrate_all_data_sources()
-    
-    def get_graph_structure(self) -> Any:
-        """Get the graph structure from shared resources."""
-        return self.shared_resources.get('graph')
-    
-    def get_session_config(self) -> Dict[str, Any]:
-        """Get session configuration for analyzer plugins."""
-        return self.config.copy()
-    
-    def get_session_stream_info(self) -> Dict[str, Any]:
-        """Get session stream information with defaults."""
-        df_len = len(self.get_integrated_dataframe()) if self._integrated_dataframe is not None else 0
-        return {
-            'fps': 30.0,  # Default FPS
-            'frame_count': df_len,
-            'duration': df_len / 30.0
-        }
-    
-    def get_session_metadata(self) -> Dict[str, Any]:
-        """Get comprehensive metadata about this session."""
-        metadata = {
-            'session_id': self.session_id,
-            'data_sources_count': len(self.data_source_instances),
-            'data_source_names': [name for name, _, _ in self.data_source_instances],
-            'discovered_files': self._discovered_file_paths.copy(),
-            'shared_resources_available': list(self.shared_resources.keys()),
-            'integration_status': 'not_started'
-        }
-        
-        # Add data statistics if integration has been performed
-        if self._integrated_dataframe is not None:
-            df = self._integrated_dataframe
-            metadata.update({
-                'total_frames': len(df),
-                'total_columns': len(df.columns),
-                'frame_range': [int(df.index.min()), int(df.index.max())],
-                'column_names': list(df.columns),
-                'integration_status': 'completed'
-            })
-        
-        return metadata
-    
-    # =============================================================================
-    # BACKWARD COMPATIBILITY METHODS (from old session/session.py)
-    # =============================================================================
-    
-    @property
-    def session_name(self) -> str:
-        """Get session name for backward compatibility."""
-        if self._session_name is None:
-            # Extract from session_id or configuration
-            self._session_name = self.session_id.replace('session_', '')
-        return self._session_name
-    
-    @property 
-    def bodyparts(self) -> List[str]:
-        """Get available body parts from integrated DataFrame."""
-        if self._bodyparts is None:
-            df = self.get_integrated_dataframe()
-            # Extract bodyparts from multi-level columns if they exist
-            if isinstance(df.columns, pd.MultiIndex):
-                if df.columns.nlevels >= 2:
-                    self._bodyparts = list(df.columns.get_level_values(1).unique())
-                else:
-                    self._bodyparts = []
-            else:
-                # Look for coordinate columns pattern (bodypart_x, bodypart_y, bodypart_likelihood)
-                bodypart_cols = [col for col in df.columns if col.endswith(('_x', '_y', '_likelihood'))]
-                bodyparts_set = set()
-                for col in bodypart_cols:
-                    for suffix in ['_x', '_y', '_likelihood']:
-                        if col.endswith(suffix):
-                            bodyparts_set.add(col.replace(suffix, ''))
-                            break
-                self._bodyparts = list(bodyparts_set)
-        return self._bodyparts or []
-    
-    @property
-    def coords(self) -> List[str]:
-        """Get coordinate types for backward compatibility."""
-        if self._coords is None:
-            self._coords = ['x', 'y', 'likelihood']  # Standard coordinate types
-        return self._coords
-    
-    @property
-    def likelihood(self) -> Optional[float]:
-        """Get likelihood threshold for backward compatibility."""
-        if self._likelihood_threshold is None:
-            session_settings = self.config.get('session_settings', {})
-            self._likelihood_threshold = session_settings.get('likelihood', 0.3)
-        return self._likelihood_threshold
-    
-    @property
-    def map_labeler(self) -> Any:
-        """Get map labeler from shared resources for backward compatibility."""
-        map_provider = self.shared_resources.get('maze_map')
-        if map_provider:
-            return map_provider
-        else:
-            raise AttributeError("No map provider available in shared resources")
-    
-    @property 
-    def tree(self) -> Any:
-        """Get graph/tree from shared resources for backward compatibility."""
-        graph_provider = self.shared_resources.get('graph')
-        if graph_provider:
-            return graph_provider.get_graph_instance()
-        else:
-            raise AttributeError("No graph provider available in shared resources")
-    
-    @property
-    def path_to_reward(self) -> Optional[List[int]]:
-        """Get shortest path to reward tile for backward compatibility."""
-        if self._path_to_reward is None:
-            try:
-                reward_tile_id = self.config.get('reward_tile_id')
-                if reward_tile_id is not None and 'graph' in self.shared_resources:
-                    graph = self.tree
-                    tree_loc = graph.get_tree_location(reward_tile_id)
-                    
-                    if isinstance(tree_loc, int):
-                        reward_node_id = tree_loc
-                    elif isinstance(tree_loc, tuple):
-                        raise ValueError('tile_id must be related to a node, not an edge, for shortest path calculation')
-                    else:
-                        # Handle frozenset or other complex types
-                        reward_node_id = [item for item in tree_loc if isinstance(item, int)][0]
-                    
-                    self._path_to_reward = graph.get_shortest_path(source=0, target=reward_node_id)
-            except Exception as e:
-                self.logger.warning(f"Could not calculate path to reward: {str(e)}")
-                self._path_to_reward = []
-        
-        return self._path_to_reward
-    
-    def get_coords(self, frame_number: int, body_part: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-        """Get coordinates for specific frame and body part.
-        
-        Args:
-            frame_number: Frame index to get coordinates for
-            body_part: Body part name (e.g., 'nose', 'tailbase')
-            
         Returns:
-            Tuple of (x, y, likelihood) or (None, None, None) if not found/low confidence
+            DataFrame with all plugin-added columns
         """
-        if body_part not in self.bodyparts:
-            raise KeyError(f'Required bodypart not documented in session. Available bodyparts: {self.bodyparts}')
+        if self._integrated_dataframe is None:
+            self._integrated_dataframe = self._execute_plugins()
+        return self._integrated_dataframe
+    
+    def get_shared_resources(self) -> Dict[str, Any]:
+        """Get shared resources dictionary.
         
-        df = self.get_integrated_dataframe()
+        Returns:
+            Copy of shared resources
+        """
+        return self.shared_resources.copy()
+    
+    def get_session_id(self) -> str:
+        """Get session identifier.
         
-        if frame_number not in df.index:
-            return None, None, None
+        Returns:
+            Session ID string
+        """
+        return self.session_id
+    
+    def _create_graph_structure(self) -> None:
+        """Create graph structure from config and load mandatory spatial mapping."""
+        graph_config = self.config.get('graph')
+        if not graph_config:
+            raise NavigraphError(
+                "Graph configuration is required. Please provide 'graph' section in config with "
+                "'builder' and 'mapping_file' specifications."
+            )
         
         try:
-            # Try multi-level column access first (DeepLabCut format)
-            if isinstance(df.columns, pd.MultiIndex):
-                if df.columns.nlevels >= 2:
-                    # Look for scorer/bodypart/coord structure
-                    scorer_level = df.columns.get_level_values(0)[0]  # Get first scorer
-                    x = df.loc[frame_number, (scorer_level, body_part, 'x')]
-                    y = df.loc[frame_number, (scorer_level, body_part, 'y')]
-                    likelihood = df.loc[frame_number, (scorer_level, body_part, 'likelihood')]
-                else:
-                    # Two-level: bodypart/coord
-                    x = df.loc[frame_number, (body_part, 'x')]
-                    y = df.loc[frame_number, (body_part, 'y')]
-                    likelihood = df.loc[frame_number, (body_part, 'likelihood')]
-            else:
-                # Flat column structure
-                x = df.loc[frame_number, f'{body_part}_x']
-                y = df.loc[frame_number, f'{body_part}_y']
-                likelihood = df.loc[frame_number, f'{body_part}_likelihood']
+            # Import graph components
+            from .graph.structures import GraphStructure
+            from .graph.mapping import SpatialMapping
             
-            # Check likelihood threshold
-            if self.likelihood is not None and likelihood < self.likelihood:
-                return None, None, None
-            else:
-                return float(x), float(y), float(likelihood)
-                
-        except (KeyError, IndexError) as e:
-            self.logger.debug(f"Could not get coordinates for frame {frame_number}, bodypart {body_part}: {str(e)}")
-            return None, None, None
-    
-    def get_map_coords(self, frame_number: int, body_part: str) -> Tuple[Optional[int], Optional[int]]:
-        """Get map coordinates for specific frame and body part.
-        
-        Args:
-            frame_number: Frame index 
-            body_part: Body part name
+            # Get builder configuration
+            builder = graph_config.get('builder', {})
+            builder_type = builder.get('type')
+            builder_params = builder.get('config', {})
             
-        Returns:
-            Tuple of (map_x, map_y) or (None, None) if coordinates unavailable
-        """
-        x, y, _ = self.get_coords(frame_number, body_part)
-        if x is None or y is None:
-            return None, None
-        
-        try:
-            return self.map_labeler.get_map_coords(row=int(y), col=int(x))
-        except Exception as e:
-            self.logger.debug(f"Could not get map coordinates: {str(e)}")
-            return None, None
-    
-    def get_map_tile(self, frame_number: int, body_part: str) -> Tuple[Optional[Any], Optional[int]]:
-        """Get map tile information for specific frame and body part.
-        
-        Args:
-            frame_number: Frame index
-            body_part: Body part name
+            if not builder_type:
+                raise NavigraphError("Graph builder type is required in graph.builder.type")
             
-        Returns:
-            Tuple of (tile_bbox, tile_id) or (None, None) if unavailable
-        """
-        x, y, likelihood = self.get_coords(frame_number, body_part)
-        if x is None or y is None:
-            return None, None
-        
-        try:
-            return self.map_labeler.get_tile_by_img_coords(row=int(y), col=int(x))
-        except Exception as e:
-            self.logger.debug(f"Could not get map tile: {str(e)}")
-            return None, None
-    
-    def get_df(self, body_part: str) -> pd.DataFrame:
-        """Get DataFrame for specific body part with tile and tree information.
-        
-        Args:
-            body_part: Body part to get DataFrame for
+            # Create graph structure using from_config
+            graph = GraphStructure.from_config(builder_type, builder_params)
             
-        Returns:
-            DataFrame with coordinates, tile info, and tree positions
-        """
-        df = self.get_integrated_dataframe()
-        
-        # Extract bodypart data
-        if isinstance(df.columns, pd.MultiIndex):
-            if df.columns.nlevels >= 2:
-                # Multi-level columns: get first scorer's data for this bodypart
-                scorer_level = df.columns.get_level_values(0)[0]
-                try:
-                    bodypart_df = df[(scorer_level, body_part)].copy()
-                except KeyError:
-                    raise KeyError(f"Body part '{body_part}' not found in data")
-            else:
-                # Two-level: bodypart/coord
-                try:
-                    bodypart_df = df[body_part].copy()
-                except KeyError:
-                    raise KeyError(f"Body part '{body_part}' not found in data")
-        else:
-            # Flat columns - extract columns matching bodypart pattern
-            bodypart_cols = [col for col in df.columns if col.startswith(f'{body_part}_')]
-            if not bodypart_cols:
-                raise KeyError(f"No columns found for body part '{body_part}'")
-            bodypart_df = df[bodypart_cols].copy()
-            # Rename columns to remove bodypart prefix
-            bodypart_df.columns = [col.replace(f'{body_part}_', '') for col in bodypart_cols]
-        
-        # Add tile data if map labeler available
-        if 'maze_map' in self.shared_resources:
-            try:
-                tile_data = bodypart_df.apply(
-                    lambda row: self.map_labeler.get_tile_by_img_coords(row=row.y, col=row.x) 
-                    if pd.notna(row.x) and pd.notna(row.y) else (None, -1), 
-                    axis=1
+            # Get mapping file - this is MANDATORY
+            mapping_file = graph_config.get('mapping_file')
+            if not mapping_file:
+                raise NavigraphError(
+                    "Graph mapping file is required. Please provide 'mapping_file' in graph config. "
+                    "Use 'navigraph setup graph' command to create a mapping file."
                 )
-                bodypart_df[['tile_box', 'tile_id']] = pd.DataFrame(tile_data.tolist(), index=bodypart_df.index)
-            except Exception as e:
-                self.logger.debug(f"Could not add tile data: {str(e)}")
-                bodypart_df['tile_box'] = None
-                bodypart_df['tile_id'] = -1
-        
-        # Add tree position data if graph available
-        if 'graph' in self.shared_resources:
-            try:
-                def get_tree_position(tile_id):
-                    if pd.isna(tile_id) or tile_id == -1:
-                        return None
-                    try:
-                        return self.tree.get_tree_location(int(tile_id))
-                    except:
-                        return None
+            
+            # Create spatial mapping with conflict strategy
+            conflict_strategy = graph_config.get('conflict_strategy', 'node_priority')
+            mapping = SpatialMapping(graph, conflict_strategy=conflict_strategy)
+            
+            # Load mapping from file (mandatory)
+            mapping_path = self.experiment_path / mapping_file
+            if not mapping_path.exists():
+                raise NavigraphError(
+                    f"Mapping file not found: {mapping_path}\n"
+                    f"Please ensure the mapping file exists or create one using 'navigraph setup graph' command."
+                )
+            
+            # Load the mapping data
+            with open(mapping_path, 'rb') as f:
+                mapping_data = pickle.load(f)
+            
+            # Check if mapping file has builder info and validate it matches config
+            if 'builder' in mapping_data:
+                file_builder = mapping_data['builder']
+                file_builder_type = file_builder.get('type')
+                file_builder_config = file_builder.get('config', {})
                 
-                bodypart_df['tree_position'] = bodypart_df['tile_id'].apply(get_tree_position)
-            except Exception as e:
-                self.logger.debug(f"Could not add tree position data: {str(e)}")
-                bodypart_df['tree_position'] = None
-        
-        # Apply likelihood threshold
-        if self.likelihood is not None and 'likelihood' in bodypart_df.columns:
-            low_conf_mask = bodypart_df['likelihood'] < self.likelihood
-            bodypart_df.loc[low_conf_mask] = np.nan
-        
-        return bodypart_df
-    
-    def draw_tree(self, tile_id: Union[int, List[int]], mode: str = 'current') -> np.ndarray:
-        """Simplified tree drawing method."""
-        if 'graph' not in self.shared_resources:
-            raise AttributeError("No graph provider available for tree drawing")
-        
-        # Simplified tree drawing - delegate to graph provider
-        return self.tree.draw_simple_tree(tile_id, mode)
-    
-    def insert_data(self, body_part: str, col_name: str, col_values: Any) -> None:
-        """Insert additional data column for a specific body part.
-        
-        Args:
-            body_part: Body part name
-            col_name: Column name to add
-            col_values: Column values to insert
-        """
-        try:
-            df = self.get_integrated_dataframe()
-            
-            # Handle multi-level vs flat column structure
-            if isinstance(df.columns, pd.MultiIndex):
-                if df.columns.nlevels >= 2:
-                    # Add to multi-level structure
-                    scorer_level = df.columns.get_level_values(0)[0]  # Use first scorer
-                    df[(scorer_level, body_part, col_name)] = col_values
-                else:
-                    # Two-level structure
-                    df[(body_part, col_name)] = col_values
+                # Check if builder type matches
+                if file_builder_type != builder_type:
+                    self.logger.error(
+                        f"⚠️ BUILDER MISMATCH: Mapping file was created with '{file_builder_type}' builder "
+                        f"but config specifies '{builder_type}' builder. This may cause incorrect graph mappings!"
+                    )
+                    raise NavigraphError(
+                        f"Builder type mismatch: mapping file uses '{file_builder_type}' "
+                        f"but config uses '{builder_type}'. Please regenerate mapping or update config."
+                    )
+                
+                # Warn if builder config differs
+                if file_builder_config != builder_params:
+                    self.logger.warning(
+                        f"⚠️ BUILDER CONFIG DIFFERS: Mapping file builder config differs from current config.\n"
+                        f"  Mapping file: {file_builder_config}\n"
+                        f"  Current config: {builder_params}\n"
+                        f"This may cause incorrect spatial mappings!"
+                    )
+                    # Don't fail, just warn - config differences might be intentional
             else:
-                # Flat structure
-                df[f'{body_part}_{col_name}'] = col_values
+                self.logger.warning(
+                    f"⚠️ Mapping file has no builder information - cannot validate compatibility. "
+                    f"Consider regenerating the mapping file."
+                )
             
-            # Update the cached dataframe
-            self._integrated_dataframe = df
+            # Load mapping using from_simple_format
+            if 'mappings' not in mapping_data:
+                raise NavigraphError(
+                    f"Invalid mapping file format: {mapping_file}. "
+                    f"Missing 'mappings' key. Please recreate using 'navigraph setup graph'."
+                )
+            
+            mapping.from_simple_format(mapping_data['mappings'])
+            
+            # Validate mapping has actual mappings
+            mapped_nodes = len(mapping.get_mapped_nodes())
+            mapped_edges = len(mapping.get_mapped_edges())
+            
+            if mapped_nodes == 0 and mapped_edges == 0:
+                raise NavigraphError(
+                    f"Mapping file {mapping_file} contains no spatial mappings. "
+                    f"Please create mappings using 'navigraph setup graph' command."
+                )
+            
+            self.logger.info(
+                f"Loaded spatial mapping: {mapped_nodes} nodes, {mapped_edges} edges mapped"
+            )
+            
+            # Add to shared resources (first resources)
+            self.shared_resources['graph'] = graph
+            self.shared_resources['graph_mapping'] = mapping
+            self.shared_resources['graph_metadata'] = graph_config.get('metadata', {})
+            
+            self.logger.info(f"Graph created: {graph.num_nodes} nodes, {graph.num_edges} edges")
             
         except Exception as e:
-            self.logger.error(f"Failed to insert data for {body_part}.{col_name}: {str(e)}")
+            self.logger.error(f"Graph creation failed: {str(e)}")
             raise
     
-    def _initialize_session(self) -> None:
-        """Initialize session by discovering files and loading data sources."""
-        self._discover_session_files()
-        self._load_and_validate_data_sources()
-        
-        self.logger.debug(
-            f"Session initialization complete: {len(self.data_source_instances)} data sources loaded"
-        )
-    
-    def _discover_session_files(self) -> None:
-        """Discover files for this session using data source specifications."""
-        if not self.data_source_specifications:
-            raise NavigraphError(
-                f"No data source specifications provided for session {self.session_id}. "
-                f"Make sure data_source_specifications are passed to the session."
-            )
-        
-        # Extract file patterns from data source specifications, separating session and shared
-        session_patterns = {}
-        shared_patterns = {}
-        
-        for ds_spec in self.data_source_specifications:
-            if 'file_pattern' in ds_spec:
-                pattern_name = ds_spec['name']
-                pattern = ds_spec['file_pattern']
-                
-                # Check if this is a shared resource
-                if ds_spec.get('shared', False):
-                    shared_patterns[pattern_name] = pattern
-                else:
-                    session_patterns[pattern_name] = pattern
-        
-        if session_patterns or shared_patterns:
-            # Call file discovery with both pattern sets
-            # Use session_id as the folder name to search in the session directory
-            self._discovered_file_paths = self.file_discovery.match_files_in_session(
-                self.session_id, 
-                session_patterns,
-                shared_pattern_mapping=shared_patterns
-            )
-            
-            # Log discovery results
-            found_files = sum(1 for path in self._discovered_file_paths.values() if path is not None)
-            total_patterns = len(session_patterns) + len(shared_patterns)
-            self.logger.info(
-                f"File discovery for {self.session_id}: {found_files}/{total_patterns} files found "
-                f"({len(session_patterns)} session, {len(shared_patterns)} shared)"
-            )
-        else:
-            self.logger.debug(f"No file patterns specified for session {self.session_id}")
-    
-    def _load_and_validate_data_sources(self) -> None:
-        """Load and validate data sources in specification order (NO SORTING)."""
-        for ds_spec in self.data_source_specifications:
-            ds_name = ds_spec['name']
-            ds_type = ds_spec['type']
-            
-            try:
-                # Handle shared resources (create if not exists)
-                if ds_spec.get('shared', False):
-                    self._ensure_shared_resource(ds_spec)
-                
-                # Get plugin class from registry
-                if not self.registry:
-                    from .registry import registry
-                    self.registry = registry
-                ds_class = self.registry.get_data_source_plugin(ds_type)
-                ds_instance = ds_class()
-                
-                # Store in specification order (no sorting!)
-                self.data_source_instances.append((ds_name, ds_instance, ds_spec))
-                
-                self.logger.debug(f"Loaded data source plugin: {ds_name} ({ds_type})")
-                
-            except Exception as e:
-                error_msg = (
-                    f"Failed to load data source '{ds_name}' of type '{ds_type}' "
-                    f"for session {self.session_id}: {str(e)}"
-                )
-                self.logger.error(error_msg)
-                
-                # Check if this is a required data source
-                if ds_spec.get('required', True):
-                    raise NavigraphError(error_msg) from e
-                else:
-                    self.logger.warning(f"Skipping optional data source: {ds_name}")
-    
-    
-    def _ensure_shared_resource(self, ds_spec: Dict[str, Any]) -> None:
-        """Ensure a shared resource exists, creating it if necessary."""
-        resource_name = ds_spec['name']
-        data_source_type = ds_spec['type']
-        
-        # Map data source types to shared resource types
-        type_mapping = {
-            'map_integration': 'map_provider',
-            'graph_integration': 'graph_provider'
-        }
-        
-        shared_resource_type = type_mapping.get(data_source_type)
-        
-        # Some data sources with shared=true are regular data sources that populate shared_resources
-        # (e.g., calibration), not actual shared resource types that need special creation
-        if not shared_resource_type:
-            self.logger.debug(f"Data source type '{data_source_type}' with shared=true will be handled as regular data source")
+    def _load_plugins(self) -> None:
+        """Load plugin instances from specifications."""
+        if not self.plugin_specifications:
+            self.logger.warning("No plugins specified")
             return
         
-        if resource_name not in self.shared_resources:
+        # Import plugin registry
+        from .registry import registry
+        
+        for spec in self.plugin_specifications:
+            plugin_name = spec.get('name', 'unnamed')
+            plugin_type = spec.get('type')
+            
+            # Skip disabled plugins
+            if not spec.get('enable', True):
+                self.logger.info(f"Skipping disabled: {plugin_name}")
+                continue
+            
             try:
-                # Get plugin class from registry and instantiate
-                if not self.registry:
-                    from .registry import registry
-                    self.registry = registry
+                # Get plugin class from registry
+                plugin_class = registry.get_plugin_class(plugin_type)
+                if not plugin_class:
+                    raise NavigraphError(f"Unknown plugin type: {plugin_type}")
                 
-                resource_class = self.registry.get_shared_resource_plugin(shared_resource_type)
+                # Create plugin instance
+                plugin = plugin_class(spec, self.session_path, self.experiment_path)
                 
-                # Create resource config with session configuration data
-                resource_config = ds_spec.get('config', {}).copy()
+                # Store by name (allows multiple instances of same type)
+                if plugin_name in self.plugin_instances:
+                    self.logger.warning(f"Overwriting plugin with duplicate name: {plugin_name}")
                 
-                # Add additional config from session configuration
-                if shared_resource_type == 'map_provider' and 'map_settings' in self.config:
-                    resource_config['map_settings'] = self.config['map_settings']
-                    if 'map_path' in self.config:
-                        resource_config['map_path'] = self.config['map_path']
-                        
-                elif shared_resource_type == 'graph_provider' and 'graph' in self.config:
-                    resource_config.update(self.config['graph'])
-                
-                resource_config['experiment_path'] = self.experiment_path
-                
-                resource_instance = resource_class.from_config(resource_config, self.logger)
-                self.shared_resources[resource_name] = resource_instance
-                self.logger.debug(f"Created shared resource: {resource_name} ({shared_resource_type})")
+                self.plugin_instances[plugin_name] = plugin
+                self.logger.info(f"Loaded: {plugin_name} ({plugin_type})")
                 
             except Exception as e:
-                self.logger.error(f"Failed to create shared resource '{resource_name}': {e}")
-                raise
+                error = f"Failed to load {plugin_name}: {str(e)}"
+                if spec.get('required', True):
+                    raise NavigraphError(error) from e
+                else:
+                    self.logger.warning(f"Optional plugin failed: {error}")
     
-    def _integrate_all_data_sources(self) -> pd.DataFrame:
-        """Sequentially integrate all data sources in configuration order.
+    def _execute_plugins(self) -> pd.DataFrame:
+        """Execute plugins in two phases: provide then augment_data.
         
-        Data flows through plugins in the order specified in the config:
-        1. Each plugin receives the current DataFrame
-        2. Plugin adds its columns/data via integrate_data_into_session()
-        3. Updated DataFrame is passed to the next plugin
-        
-        Plugins are responsible for checking their own prerequisites and
-        raising descriptive errors if dependencies are missing.
+        Returns:
+            Integrated DataFrame
         """
-        if not self.data_source_instances:
-            raise DataSourceError(
-                f"No data sources available for integration in session {self.session_id}"
-            )
+        if not self.plugin_instances:
+            self.logger.warning("No plugins - returning empty DataFrame")
+            return pd.DataFrame()
         
-        # Start with empty DataFrame - first data source will establish structure
-        current_dataframe = pd.DataFrame()
+        self.logger.info(f"Executing {len(self.plugin_instances)} plugins")
         
-        self.logger.info(
-            f"Starting data integration for {self.session_id}: "
-            f"{len(self.data_source_instances)} data sources"
-        )
-        
-        for position, (ds_name, ds_instance, ds_spec) in enumerate(self.data_source_instances):
-            self.logger.info(f"Integrating data source {position+1}/{len(self.data_source_instances)}: {ds_name}")
-            
-            # Add discovered file path to specification
-            if ds_name in self._discovered_file_paths:
-                ds_spec = ds_spec.copy()  # Don't modify original
-                ds_spec['discovered_file_path'] = self._discovered_file_paths[ds_name]
-            
-            # Perform integration
+        # Phase 1: Provide
+        self.logger.info("PHASE 1: Provide")
+        for name, plugin in self.plugin_instances.items():
             try:
-                current_dataframe = ds_instance.integrate_data_into_session(
-                    current_dataframe, ds_spec, self.shared_resources, self.logger
-                )
-                
-                provided_columns = ds_instance.get_provided_column_names()
-                self.logger.info(
-                    f"✓ Successfully integrated {ds_name}: "
-                    f"+{len(provided_columns)} columns, {len(current_dataframe)} frames total"
-                )
-                
+                plugin.provide(self.shared_resources)
+                self.logger.debug(f"✓ {name} provide complete")
             except Exception as e:
-                error_message = (
-                    f"Data source '{ds_name}' integration failed for session {self.session_id}: {str(e)}"
-                )
-                self.logger.error(error_message)
-                raise DataSourceError(error_message) from e
+                error = f"{name} provide failed: {str(e)}"
+                if plugin.config.get('required', True):
+                    raise NavigraphError(error) from e
+                self.logger.warning(error)
         
-        self._integrated_dataframe = current_dataframe
+        self.logger.info(f"Resources available: {list(self.shared_resources.keys())}")
         
-        self.logger.info(
-            f"✓ Data integration complete for {self.session_id}: "
-            f"{len(current_dataframe.columns)} columns, {len(current_dataframe)} frames"
+        # Phase 2: Augment Data
+        self.logger.info("PHASE 2: Augment Data")
+        dataframe = pd.DataFrame()
+        
+        for name, plugin in self.plugin_instances.items():
+            try:
+                cols_before = len(dataframe.columns)
+                dataframe = plugin.augment_data(dataframe, self.shared_resources)
+                cols_added = len(dataframe.columns) - cols_before
+                
+                if cols_added > 0:
+                    self.logger.info(f"✓ {name}: +{cols_added} columns")
+                else:
+                    self.logger.debug(f"✓ {name}: no columns added")
+                    
+            except Exception as e:
+                error = f"{name} augment failed: {str(e)}"
+                if plugin.config.get('required', True):
+                    raise NavigraphError(error) from e
+                self.logger.warning(error)
+        
+        self.logger.info(f"Complete: {len(dataframe.columns)} columns, {len(dataframe)} frames")
+        return dataframe
+    
+    def run_analyses(self) -> Dict[str, Any]:
+        """Run all configured analyses through SessionAnalyzer.
+        
+        Returns:
+            Dict of analysis results
+        """
+        if self._integrated_dataframe is None:
+            self._integrated_dataframe = self._execute_plugins()
+        
+        return self.analyzer.run_analyses(
+            dataframe=self._integrated_dataframe,
+            shared_resources=self.shared_resources
         )
+    
+    def create_visualization(self, video_path: Optional[str] = None, output_name: Optional[str] = None) -> Optional[str]:
+        """Create visualization through SessionVisualizer.
         
-        return current_dataframe
+        Args:
+            video_path: Path to input video (auto-detected if None)
+            output_name: Name for output file (defaults to session_id)
+            
+        Returns:
+            Path to created video or None
+        """
+        if self._integrated_dataframe is None:
+            self._integrated_dataframe = self._execute_plugins()
+        
+        # Auto-detect video if not provided
+        if video_path is None:
+            video_path = self.visualizer.find_video(self.session_path)
+            if video_path is None:
+                self.logger.error("No video file found in session directory")
+                return None
+            video_path = str(video_path)
+        
+        output_name = output_name or self.session_id
+        
+        return self.visualizer.process_video(
+            video_path=video_path,
+            dataframe=self._integrated_dataframe,
+            shared_resources=self.shared_resources,
+            output_name=output_name
+        )

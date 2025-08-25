@@ -1,0 +1,16 @@
+# Configuration for Star Maze with peripheral connections
+# Tests the star builder with connect_periphery=true
+
+experiment_path: ./
+map_path: resources/star_maze_map.png
+
+# Graph structure using star builder with peripheral connections
+graph_structure:
+  type: star
+  parameters:
+    n_peripheral_nodes: 18
+    connect_periphery: true
+
+# Where to save the spatial mapping
+graph_mapping:
+  mapping_file: resources/graph_mapping_star_connected.pkl

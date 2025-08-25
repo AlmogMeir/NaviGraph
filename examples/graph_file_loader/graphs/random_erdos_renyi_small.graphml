@@ -1,0 +1,95 @@
+<?xml version='1.0' encoding='utf-8'?>
+<graphml xmlns="http://graphml.graphdrawing.org/xmlns" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://graphml.graphdrawing.org/xmlns http://graphml.graphdrawing.org/xmlns/1.0/graphml.xsd">
+  <key id="d5" for="node" attr.name="y" attr.type="double" />
+  <key id="d4" for="node" attr.name="x" attr.type="double" />
+  <key id="d3" for="graph" attr.name="edges" attr.type="long" />
+  <key id="d2" for="graph" attr.name="nodes" attr.type="long" />
+  <key id="d1" for="graph" attr.name="description" attr.type="string" />
+  <key id="d0" for="graph" attr.name="name" attr.type="string" />
+  <graph edgedefault="undirected">
+    <node id="0">
+      <data key="d4">0.025340701735520398</data>
+      <data key="d5">-0.013503589156954581</data>
+    </node>
+    <node id="1">
+      <data key="d4">-0.1788249224161536</data>
+      <data key="d5">-0.27148214932038156</data>
+    </node>
+    <node id="2">
+      <data key="d4">0.012934462416223426</data>
+      <data key="d5">-0.10501114980409548</data>
+    </node>
+    <node id="3">
+      <data key="d4">0.11484375622358432</data>
+      <data key="d5">-0.06954097588919808</data>
+    </node>
+    <node id="4">
+      <data key="d4">-0.2678984451016521</data>
+      <data key="d5">0.07780559378583737</data>
+    </node>
+    <node id="5">
+      <data key="d4">-0.2554902005501972</data>
+      <data key="d5">0.2742371487608003</data>
+    </node>
+    <node id="6">
+      <data key="d4">0.30832951300567607</data>
+      <data key="d5">0.00843478153388944</data>
+    </node>
+    <node id="7">
+      <data key="d4">-0.2393113515070483</data>
+      <data key="d5">-0.4469285265681375</data>
+    </node>
+    <node id="8">
+      <data key="d4">-0.06803386016336745</data>
+      <data key="d5">0.009872841734813998</data>
+    </node>
+    <node id="9">
+      <data key="d4">0.14699079235582696</data>
+      <data key="d5">-0.2157439443642469</data>
+    </node>
+    <node id="10">
+      <data key="d4">0.2120707354041024</data>
+      <data key="d5">-0.11270889629762085</data>
+    </node>
+    <node id="11">
+      <data key="d4">-0.14563671619840626</data>
+      <data key="d5">-0.062258844912794015</data>
+    </node>
+    <node id="12">
+      <data key="d4">0.5132381188655539</data>
+      <data key="d5">1.0</data>
+    </node>
+    <node id="13">
+      <data key="d4">-0.1499129050236239</data>
+      <data key="d5">0.10525607635437953</data>
+    </node>
+    <node id="14">
+      <data key="d4">-0.028639679046038813</data>
+      <data key="d5">-0.17842836585629132</data>
+    </node>
+    <edge source="0" target="2" />
+    <edge source="0" target="8" />
+    <edge source="0" target="10" />
+    <edge source="0" target="13" />
+    <edge source="0" target="14" />
+    <edge source="1" target="7" />
+    <edge source="1" target="11" />
+    <edge source="1" target="14" />
+    <edge source="2" target="3" />
+    <edge source="3" target="6" />
+    <edge source="3" target="9" />
+    <edge source="3" target="11" />
+    <edge source="4" target="11" />
+    <edge source="4" target="13" />
+    <edge source="5" target="13" />
+    <edge source="8" target="13" />
+    <edge source="8" target="14" />
+    <edge source="9" target="10" />
+    <edge source="9" target="14" />
+    <edge source="11" target="13" />
+    <data key="d0">random_erdos_renyi_small</data>
+    <data key="d1">Small Erdős–Rényi graph (15 nodes, p=0.2)</data>
+    <data key="d2">15</data>
+    <data key="d3">20</data>
+  </graph>
+</graphml>

@@ -105,6 +105,8 @@ def register_graph_builder(name: str):
                 pass
     """
     def decorator(builder_class: Type[GraphBuilder]) -> Type[GraphBuilder]:
+        # Set the registry name on the class so instances know their registry name
+        builder_class._registry_name = name
         _registry.register(name, builder_class)
         return builder_class
     return decorator

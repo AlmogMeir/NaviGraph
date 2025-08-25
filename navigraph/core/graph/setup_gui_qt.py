@@ -2516,6 +2516,75 @@ class GraphSetupWindow(QMainWindow):
         """Update progress indicators (backward compatibility)."""
         self._update_progress_display()
         
+    def _validate_builder_compatibility(self, loaded_mapping):
+        """Validate that loaded mapping is compatible with current graph structure.
+        
+        Args:
+            loaded_mapping: The mapping loaded from file
+            
+        Raises:
+            ValueError: If builders are incompatible
+        """
+        if not self.graph or not loaded_mapping.graph:
+            return
+            
+        current_metadata = self.graph.metadata
+        loaded_metadata = loaded_mapping.graph.metadata
+        
+        current_builder = current_metadata.get('builder_type', 'unknown')
+        loaded_builder = loaded_metadata.get('builder_type', 'unknown')
+        
+        # Check if builder types match
+        if current_builder != loaded_builder:
+            raise ValueError(
+                f"Graph builder mismatch!\n\n"
+                f"Current config uses: '{current_builder}'\n"
+                f"Loaded mapping uses: '{loaded_builder}'\n\n"
+                f"The mapping was created with a different graph structure.\n"
+                f"Please use a config with the same builder type, or create a new mapping."
+            )
+        
+        # For same builder types, check if key parameters match
+        current_params = current_metadata.get('parameters', {})
+        loaded_params = loaded_metadata.get('parameters', {})
+        
+        # Check critical parameters that affect graph structure
+        critical_params = ['height', 'n_nodes', 'filepath', 'graph_type']  # Add more as needed
+        mismatched_params = []
+        
+        for param in critical_params:
+            if param in current_params and param in loaded_params:
+                if current_params[param] != loaded_params[param]:
+                    mismatched_params.append(
+                        f"  {param}: current='{current_params[param]}', mapping='{loaded_params[param]}'"
+                    )
+        
+        if mismatched_params:
+            param_details = '\n'.join(mismatched_params)
+            raise ValueError(
+                f"Graph parameters mismatch!\n\n"
+                f"Builder type: '{current_builder}'\n"
+                f"Parameter differences:\n{param_details}\n\n"
+                f"The mapping was created with different graph parameters.\n"
+                f"Please use a config with matching parameters, or create a new mapping."
+            )
+        
+        # Final check: compare actual node sets
+        current_nodes = set(self.graph.graph.nodes())
+        loaded_nodes = set(loaded_mapping.get_mapped_nodes())
+        missing_nodes = loaded_nodes - current_nodes
+        
+        if missing_nodes:
+            raise ValueError(
+                f"Graph structure mismatch!\n\n"
+                f"Mapping contains nodes that don't exist in current graph:\n"
+                f"Missing nodes: {sorted(list(missing_nodes))}\n\n"
+                f"Current graph nodes: {sorted(list(current_nodes))}\n"
+                f"Mapped nodes: {sorted(list(loaded_nodes))}\n\n"
+                f"This usually means the graphs have different sizes or structures.\n"
+                f"Please verify your graph configuration matches the saved mapping."
+            )
+        
     def _update_unmapped_list(self):
         """Update the list of unmapped elements (no longer needed in simplified UI)."""
         # This method is kept for backward compatibility but no longer updates a list
@@ -2553,6 +2622,9 @@ class GraphSetupWindow(QMainWindow):
                 from pathlib import Path
                 # Load mapping data but preserve original graph structure
                 loaded_mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+                
+                # Validate builder compatibility before attempting to copy mappings
+                self._validate_builder_compatibility(loaded_mapping)
                 
                 # IMPORTANT: Preserve the original graph from config, only load contour mappings
                 # This ensures the graph structure (e.g., height=7) stays as configured
@@ -2726,6 +2798,9 @@ class GraphSetupWindow(QMainWindow):
                 from pathlib import Path
                 # Load mapping data but preserve original graph structure
                 loaded_mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+                
+                # Validate builder compatibility before attempting to copy mappings
+                self._validate_builder_compatibility(loaded_mapping)
                 
                 # IMPORTANT: Preserve the original graph from config, only load contour mappings
                 # This ensures the graph structure (e.g., height=7) stays as configured

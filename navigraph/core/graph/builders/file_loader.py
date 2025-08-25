@@ -58,4 +58,46 @@ class FileGraphBuilder(GraphBuilder):
         elif self.format == 'edgelist':
             self._graph = nx.read_edgelist(str(self.filepath))
         
+        # Convert string node IDs to integers if they are numeric
+        # This ensures compatibility with programmatically generated graphs
+        self._graph = self._normalize_node_ids(self._graph)
+        
         return self._graph
+    
+    def _normalize_node_ids(self, graph: nx.Graph) -> nx.Graph:
+        """Convert string node IDs to integers if they are numeric.
+        
+        This ensures compatibility with programmatically generated graphs
+        which typically use integer node IDs.
+        
+        Args:
+            graph: Input graph with potentially string node IDs
+            
+        Returns:
+            Graph with normalized node IDs
+        """
+        # Check if all nodes are numeric strings
+        nodes = list(graph.nodes())
+        if not nodes:
+            return graph
+            
+        # Try to convert all node IDs to integers
+        try:
+            # Check if all nodes can be converted to integers
+            int_nodes = []
+            for node in nodes:
+                if isinstance(node, str) and node.isdigit():
+                    int_nodes.append(int(node))
+                elif isinstance(node, (int, float)):
+                    int_nodes.append(int(node))
+                else:
+                    # If any node cannot be converted, return original graph
+                    return graph
+            
+            # All nodes are convertible, create mapping
+            node_mapping = {str(i): i for i in int_nodes}
+            return nx.relabel_nodes(graph, node_mapping)
+            
+        except (ValueError, TypeError):
+            # If conversion fails, return original graph
+            return graph

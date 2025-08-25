@@ -1,0 +1,18 @@
+# Configuration for testing FileGraphBuilder with GUI
+# Tests loading graphs from files and using base visualization
+
+experiment_path: ./
+
+# Map image for spatial mapping
+map_path: resources/test_map.png
+
+# Graph structure using file_loader builder
+graph_structure:
+  type: file_loader
+  parameters:
+    filepath: graphs/random_erdos_renyi_small.graphml
+    format: graphml
+
+# Where to save the spatial mapping
+graph_mapping:
+  mapping_file: resources/graph_mapping.pkl

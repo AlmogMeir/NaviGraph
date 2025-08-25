@@ -1,0 +1,13 @@
+# Configuration for testing Barabási-Albert graph from file
+
+experiment_path: ./
+map_path: resources/test_map.png
+
+graph_structure:
+  type: file_loader
+  parameters:
+    filepath: /home/elior/PycharmProjects/NaviGraph/examples/graph_file_loader/graphs/random_barabasi_albert.graphml
+    format: graphml
+
+graph_mapping:
+  mapping_file: resources/graph_mapping_barabasi.pkl

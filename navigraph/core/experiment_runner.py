@@ -13,7 +13,6 @@ from omegaconf import DictConfig, OmegaConf
 from loguru import logger
 
 from .session import Session
-from .visualization_pipeline import VisualizationPipeline
 from .enums import SystemMode
 from .config_spec import ExperimentConfig, validate_config
 from .models import SessionInfo, SessionValidation, ValidationReport, PluginValidationResult, CrossSessionResults
@@ -239,93 +238,8 @@ class ExperimentRunner:
     
     def run_analysis(self) -> None:
         """Run analysis on all sessions using analyzer plugins."""
-        # Load plugins for analysis
-        from ..plugins import data_sources, shared_resources, analyzers, visualizers  # noqa: F401
-        from .registry import registry
-        
-        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} Starting analysis")
-        
-        try:
-            # Get available analyzer plugins
-            available_analyzers = registry.list_all_plugins()['analyzers']
-            logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} Available analyzers: {', '.join(available_analyzers)}")
-            
-            # Clear previous results
-            self.session_results.clear()
-            analysis_results = {}  # For cross-session analysis (AnalysisResult objects)
-            
-            for i, session in enumerate(self.sessions):
-                progress = LogFormats.PROGRESS.format(current=i+1, total=len(self.sessions))
-                logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} Analyzing session {progress}: {session.session_id}")
-                
-                session_metrics = {}
-                session_analysis_results = {}
-                
-                # Run each analyzer plugin
-                for analyzer_name in available_analyzers:
-                    try:
-                        # Get analyzer class and instantiate using factory pattern
-                        analyzer_class = registry.get_analyzer_plugin(analyzer_name)
-                        analyzer = analyzer_class.from_config({}, logger)
-                        
-                        # Run analysis
-                        result = analyzer.analyze_session(session)
-                        # Store both the result object and extracted metrics
-                        session_analysis_results[analyzer_name] = result
-                        session_metrics.update(result.metrics)
-                        
-                        metric_count = len(result.metrics)
-                        logger.debug(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} {analyzer_name}: {metric_count} metrics")
-                        
-                    except Exception as e:
-                        logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} {analyzer_name} {LogFormats.FAILED} for {session.session_id}: {str(e)}")
-                        continue
-                
-                self.session_results[session.session_id] = session_metrics
-                analysis_results[session.session_id] = session_analysis_results
-                
-                metric_count = len(session_metrics)
-                logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} Session {session.session_id}: {metric_count} total metrics")
-            
-            # Run cross-session analysis
-            if len(self.sessions) > 1:
-                logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} Running cross-session analysis")
-                self.cross_session_results = CrossSessionResults(
-                    session_ids=[s.session_id for s in self.sessions]
-                )
-                
-                for analyzer_name in available_analyzers:
-                    try:
-                        analyzer_class = registry.get_analyzer_plugin(analyzer_name)
-                        analyzer = analyzer_class()
-                        
-                        # Collect AnalysisResult objects for this analyzer across sessions
-                        analyzer_results = {}
-                        for session_id, session_analyzers in analysis_results.items():
-                            if analyzer_name in session_analyzers:
-                                analyzer_results[session_id] = session_analyzers[analyzer_name]
-                        
-                        if analyzer_results:
-                            cross_metrics = analyzer.analyze_cross_session(self.sessions, analyzer_results)
-                            self.cross_session_results.metrics.update(cross_metrics)
-                            
-                            metric_count = len(cross_metrics)
-                            logger.debug(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} {analyzer_name}: {metric_count} cross-session metrics")
-                        
-                    except Exception as e:
-                        logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} Cross-session {analyzer_name} {LogFormats.FAILED}: {str(e)}")
-                        continue
-            
-            # Save results
-            self._save_analysis_results()
-            
-            session_count = len(self.session_results)
-            metric_count = len(next(iter(self.session_results.values()))) if self.session_results else 0
-            logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ANALYSIS)} {LogFormats.SUCCESS} - {session_count} sessions, {metric_count} metrics per session")
-            
-        except Exception as e:
-            logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} Analysis {LogFormats.FAILED}: {str(e)}")
-            raise
+        logger.warning("Analysis system is being migrated to new architecture")
+        return
     
     def validate_sessions(self, sessions: List[SessionInfo]) -> ValidationReport:
         """Validate sessions using configured data source plugins.
@@ -339,7 +253,6 @@ class ExperimentRunner:
         logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.VALIDATION)} Validating sessions")
         
         # Load plugins to ensure they're available
-        from ..plugins import data_sources, shared_resources  # noqa: F401
         from .registry import registry
         
         all_validations = []
@@ -398,7 +311,6 @@ class ExperimentRunner:
             sessions: List of session directories
         """
         # Load plugins for calibration
-        from ..plugins import shared_resources  # noqa: F401
         from .registry import registry
         
         logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Starting calibration mode")
@@ -578,7 +490,6 @@ class ExperimentRunner:
     def _test_saved_calibration(self, sessions: List[SessionInfo]) -> None:
         """Test saved calibration using calibration plugin."""
         # Load plugins for calibration testing
-        from ..plugins import shared_resources  # noqa: F401
         from .registry import registry
         
         logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Testing saved calibration")
@@ -634,62 +545,5 @@ class ExperimentRunner:
     
     def _run_visualization(self) -> None:
         """Run visualization mode using plugin system."""
-        # Load plugins for visualization
-        from ..plugins import visualizers  # noqa: F401
-        from .registry import registry
-        
-        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.VISUALIZATION)} Starting visualization")
-        
-        try:
-            # Check if we have sessions
-            if not self.sessions:
-                logger.warning(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.WARNING)} No sessions available for visualization")
-                return
-            
-            # Check if visualization config exists
-            if ConfigKeys.VISUALIZATIONS not in self.config:
-                logger.warning(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.WARNING)} No visualization configuration found")
-                return
-            
-            # Create visualization pipeline
-            viz_pipeline = VisualizationPipeline(self.config, registry, logger)
-            
-            # Process each session
-            all_results = {}
-            for i, session in enumerate(self.sessions):
-                progress = LogFormats.PROGRESS.format(current=i+1, total=len(self.sessions))
-                logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.VISUALIZATION)} {LogFormats.PROCESSING} session {progress}: {session.session_id}")
-                
-                # Create session output directory
-                session_output_path = self.experiment_folder / Directories.SESSIONS / session.session_id
-                
-                # Use experiment path as session path for file discovery
-                session_path = self.experiment_path
-                
-                if not session_path:
-                    logger.warning(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.WARNING)} No session path for {session.session_id}")
-                    continue
-                
-                logger.debug(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.VISUALIZATION)} Using session path: {session_path}")
-                
-                # Create visualizations
-                session_results = viz_pipeline.create_session_visualizations(
-                    session,
-                    output_path=str(session_output_path),
-                    session_path=str(session_path)
-                )
-                
-                all_results[session.session_id] = session_results
-                
-                # Log results
-                for viz_name, outputs in session_results.items():
-                    if outputs:
-                        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.VISUALIZATION)} {viz_name} created {len(outputs)} outputs")
-                    else:
-                        logger.warning(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.WARNING)} {viz_name} produced no output")
-            
-            logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.VISUALIZATION)} {LogFormats.SUCCESS} - {len(all_results)} sessions processed")
-            
-        except Exception as e:
-            logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} Visualization {LogFormats.FAILED}: {str(e)}")
-            raise
+        logger.warning("Visualization pipeline is being migrated to new architecture")
+        return
