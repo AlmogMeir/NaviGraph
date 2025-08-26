@@ -13,6 +13,7 @@ import numpy as np
 from PyQt5.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PyQt5.QtWidgets import (
+    QAction,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -29,11 +30,13 @@ from PyQt5.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QShortcut,
     QSizePolicy,
     QSpinBox,
     QSplitter,
     QStackedWidget,
     QStatusBar,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -823,6 +826,12 @@ class MapWidget(QWidget):
         self.user_scale_factor = 1.0
         self.update()
     
+    def resizeEvent(self, event):
+        """Handle widget resize by recalculating scale factors."""
+        super().resizeEvent(event)
+        # Recalculate base scale factor to fit the new widget size
+        self.update()  # This will recalculate base_scale_factor in paintEvent
+    
     def highlight_contour(self, region_id: str):
         """Highlight a specific contour on the map persistently."""
         # First unhighlight any currently highlighted contour
@@ -1138,6 +1147,7 @@ class GraphSetupWindow(QMainWindow):
         # Initialize UI
         self.setWindowTitle("NaviGraph - Interactive Graph Mapping Setup")
         self.setGeometry(100, 100, 1600, 1000)
+        self.setMinimumSize(800, 600)  # Reasonable minimum size
         
         # Set application style with improved UI
         self.setStyleSheet("""
@@ -1267,8 +1277,14 @@ class GraphSetupWindow(QMainWindow):
             }
         """)
         
+        # Create toolbar with window controls
+        self._create_toolbar()
+        
         self._init_ui()
         self._connect_signals()
+        
+        # Add keyboard shortcuts
+        self._setup_shortcuts()
         
     def _init_ui(self):
         """Initialize the user interface."""
@@ -3692,6 +3708,72 @@ class GraphSetupWindow(QMainWindow):
             self.status_bar.showMessage(f"Error highlighting {elem_type} {elem_id}: {e}")
             print(f"Error highlighting {elem_type} {elem_id}: {e}")
     
+    def _create_toolbar(self):
+        """Create toolbar with window controls."""
+        self.toolbar = QToolBar("Window Controls")
+        self.toolbar.setMovable(False)
+        self.toolbar.setStyleSheet("""
+            QToolBar {
+                background-color: #f8f9fa;
+                border-bottom: 1px solid #dee2e6;
+                spacing: 5px;
+                padding: 5px;
+            }
+            QAction {
+                padding: 5px 10px;
+                margin: 2px;
+            }
+            QToolBar QAction:hover {
+                background-color: #e9ecef;
+                border-radius: 4px;
+            }
+        """)
+        
+        # Add spacer to push controls to the right
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.toolbar.addWidget(spacer)
+        
+        # Add maximize/restore button
+        self.maximize_action = QAction("⬜", self)
+        self.maximize_action.setToolTip("Maximize window (F11 or Ctrl+M)")
+        self.maximize_action.triggered.connect(self.toggle_maximize)
+        self.toolbar.addAction(self.maximize_action)
+        
+        self.addToolBar(self.toolbar)
+    
+    def _setup_shortcuts(self):
+        """Setup keyboard shortcuts for window controls."""
+        # F11 for fullscreen toggle
+        fullscreen_shortcut = QShortcut("F11", self)
+        fullscreen_shortcut.activated.connect(self.toggle_fullscreen)
+        
+        # Ctrl+M for maximize
+        maximize_shortcut = QShortcut("Ctrl+M", self)
+        maximize_shortcut.activated.connect(self.toggle_maximize)
+    
+    def toggle_maximize(self):
+        """Toggle between maximized and normal window state."""
+        if self.isMaximized():
+            self.showNormal()
+            self.maximize_action.setText("⬜")
+            self.maximize_action.setToolTip("Maximize window (F11 or Ctrl+M)")
+        else:
+            self.showMaximized()
+            self.maximize_action.setText("⬚")
+            self.maximize_action.setToolTip("Restore window (F11 or Ctrl+M)")
+    
+    def toggle_fullscreen(self):
+        """Toggle between fullscreen and normal window state."""
+        if self.isFullScreen():
+            self.showNormal()
+            self.maximize_action.setText("⬜")
+            self.toolbar.setVisible(True)
+        else:
+            self.showFullScreen()
+            self.maximize_action.setText("⬚")
+            # Hide toolbar in fullscreen for maximum space
+            self.toolbar.setVisible(False)
                 
     def get_mapping(self) -> SpatialMapping:
         """Get the current mapping."""
