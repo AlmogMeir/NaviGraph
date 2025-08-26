@@ -1286,6 +1286,9 @@ class GraphSetupWindow(QMainWindow):
         # Add keyboard shortcuts
         self._setup_shortcuts()
         
+        # Initialize scaled fonts
+        self.update_font_sizes()
+        
     def _init_ui(self):
         """Initialize the user interface."""
         # Central widget
@@ -1294,13 +1297,18 @@ class GraphSetupWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
         
-        # Left panel - Controls (fixed width)
+        # Create main horizontal splitter for resizable panels
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(self.main_splitter)
+        
+        # Left panel - Controls (resizable)
         self.control_panel = self._create_control_panel()
-        self.control_panel.setFixedWidth(420)
+        self.control_panel.setMinimumWidth(350)
+        self.control_panel.setMaximumWidth(600)  # Cap at 600px even on large screens
         self.control_panel.setStyleSheet(
             "QWidget { background-color: #f8f9fa; border-right: 2px solid #dee2e6; }"
         )
-        main_layout.addWidget(self.control_panel)
+        self.main_splitter.addWidget(self.control_panel)
         
         # Right panel - Views (expandable)
         views_widget = QWidget()
@@ -1337,7 +1345,11 @@ class GraphSetupWindow(QMainWindow):
         views_layout.setStretchFactor(graph_group, 1)
         views_layout.setStretchFactor(map_group, 1)
         
-        main_layout.addWidget(views_widget)
+        # Add views to splitter and set initial sizes
+        self.main_splitter.addWidget(views_widget)
+        self.main_splitter.setSizes([450, 1150])  # Initial ratio - slightly bigger control panel
+        self.main_splitter.setStretchFactor(0, 0)  # Control panel doesn't stretch much
+        self.main_splitter.setStretchFactor(1, 1)  # Views stretch
         
         # Status bar
         self.status_bar = QStatusBar()
@@ -3708,6 +3720,184 @@ class GraphSetupWindow(QMainWindow):
             self.status_bar.showMessage(f"Error highlighting {elem_type} {elem_id}: {e}")
             print(f"Error highlighting {elem_type} {elem_id}: {e}")
     
+    def calculate_font_scale(self):
+        """Calculate font scale factor based on window size."""
+        base_width = 1600  # Original design width
+        current_width = self.width()
+        
+        # More conservative scaling: 0.85x to 1.15x (instead of 0.7x to 1.3x)
+        # This prevents text from getting too large on big screens
+        scale = max(0.85, min(1.15, current_width / base_width))
+        
+        # Further reduce scale if window is very wide (maximized)
+        if current_width > 2000:
+            scale = min(scale, 1.0)  # Don't go above normal size on very wide screens
+        
+        return scale
+
+    def generate_scaled_stylesheet(self, scaled_sizes):
+        """Generate stylesheet with scaled font sizes."""
+        return f"""
+            QMainWindow {{
+                background-color: #fafafa;
+            }}
+            QGroupBox {{
+                font-weight: 600;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                margin: 8px;
+                padding-top: 20px;
+                background-color: white;
+                font-size: {scaled_sizes['title']}px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 4px 10px;
+                color: #424242;
+                background-color: white;
+                font-size: {scaled_sizes['title']}px;
+                font-weight: 600;
+            }}
+            QPushButton {{
+                background-color: #ffffff;
+                color: #424242;
+                border: 2px solid #d0d0d0;
+                padding: 8px 15px;
+                border-radius: 6px;
+                font-weight: 500;
+                font-size: {scaled_sizes['normal']}px;
+                text-align: center;
+            }}
+            QPushButton:hover {{
+                background-color: #f5f5f5;
+                border-color: #b0b0b0;
+            }}
+            QPushButton:pressed {{
+                background-color: #e0e0e0;
+            }}
+            QPushButton:checked {{
+                background-color: #e3f2fd;
+                border-color: #2196f3;
+                color: #1976d2;
+                font-weight: 600;
+            }}
+            QLabel {{
+                color: #424242;
+                font-size: {scaled_sizes['normal']}px;
+            }}
+            QStatusBar {{
+                background-color: #f5f5f5;
+                border-top: 1px solid #e0e0e0;
+                color: #616161;
+                font-size: {scaled_sizes['small']}px;
+            }}
+            QListWidget {{
+                background-color: white;
+                border: 1px solid #e0e0e0;
+                border-radius: 4px;
+                font-size: {scaled_sizes['small']}px;
+            }}
+            QListWidget::item {{
+                padding: 6px;
+                border-bottom: 1px solid #f0f0f0;
+            }}
+            QListWidget::item:selected {{
+                background-color: #e3f2fd;
+                color: #1976d2;
+            }}
+            QListWidget::item:hover {{
+                background-color: #f5f5f5;
+            }}
+            QComboBox {{
+                background-color: white;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font-size: {scaled_sizes['normal']}px;
+                min-width: 120px;
+            }}
+            QComboBox:hover {{
+                border-color: #b0b0b0;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+            }}
+            QSpinBox, QDoubleSpinBox {{
+                background-color: white;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                padding: 4px;
+                font-size: {scaled_sizes['normal']}px;
+                min-height: 24px;
+            }}
+            QCheckBox {{
+                font-size: {scaled_sizes['normal']}px;
+                color: #424242;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+            }}
+            QProgressBar {{
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                background-color: #f5f5f5;
+                text-align: center;
+                font-size: {scaled_sizes['tiny']}px;
+            }}
+            QProgressBar::chunk {{
+                background-color: #2196f3;
+                border-radius: 3px;
+            }}
+        """
+
+    def update_font_sizes(self):
+        """Update all font sizes based on window size."""
+        scale = self.calculate_font_scale()
+        
+        # Base font sizes
+        base_sizes = {
+            'title': 14,
+            'normal': 13,
+            'small': 12,
+            'tiny': 11
+        }
+        
+        # Scale all sizes
+        scaled_sizes = {k: int(v * scale) for k, v in base_sizes.items()}
+        
+        # Update stylesheet dynamically
+        self.setStyleSheet(self.generate_scaled_stylesheet(scaled_sizes))
+        
+        # Update button heights
+        if hasattr(self, 'grid_mode_button'):
+            button_height = max(30, int(40 * scale))
+            self.grid_mode_button.setFixedHeight(button_height)
+            self.manual_mode_button.setFixedHeight(button_height)
+            self.test_mode_button.setFixedHeight(button_height)
+        
+        # Update +/- button sizes
+        button_size = max(18, int(24 * scale))
+        for widget_name in ['rows_minus_btn', 'rows_plus_btn', 'cols_minus_btn', 'cols_plus_btn', 'size_minus_btn', 'size_plus_btn']:
+            if hasattr(self, widget_name):
+                button = getattr(self, widget_name)
+                button.setFixedSize(button_size, button_size)
+
+    def resizeEvent(self, event):
+        """Handle window resize by updating font sizes."""
+        super().resizeEvent(event)
+        self.update_font_sizes()
+        
+        # Adjust splitter proportions based on window size
+        if hasattr(self, 'main_splitter'):
+            total_width = self.width()
+            if total_width > 1800:  # Large/maximized window
+                # Control panel stays reasonable size, views get more space
+                control_width = min(500, int(total_width * 0.25))  # Max 25% of width or 500px
+                views_width = total_width - control_width - 50  # Account for margins/splitter
+                self.main_splitter.setSizes([control_width, views_width])
+
     def _create_toolbar(self):
         """Create toolbar with window controls."""
         self.toolbar = QToolBar("Window Controls")
