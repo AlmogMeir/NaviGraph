@@ -4,24 +4,59 @@ A flexible framework for spatial navigation analysis with pluggable graph archit
 
 ## Installation
 
+### Requirements
+- Python 3.9, 3.10, 3.11, or 3.12
+
+### Quick Install
+
 ```bash
-poetry install
+# Linux/Mac:
+./install.sh
+
+# Windows:
+install.bat
 ```
 
-## Quick Start
+The script automatically installs UV (if needed) and runs `uv sync` to set up everything.
+
+### Manual Installation
+
+If you already have UV installed:
 
 ```bash
-# Setup graph mapping interactively
+uv sync  # That's it! Creates venv, installs dependencies, sets up CLI
+```
+
+To use a specific Python version:
+
+```bash
+uv sync --python 3.10  # Use Python 3.10
+uv sync --python 3.12  # Use Python 3.12
+```
+
+## Usage
+
+### Option 1: UV Run (No Activation Needed)
+
+```bash
+uv run navigraph --help
+uv run navigraph setup graph config.yaml   # Setup graph mapping
+uv run navigraph test graph config.yaml    # Test graph mapping  
+uv run navigraph run config.yaml           # Run full analysis
+```
+
+### Option 2: Traditional Activation
+
+```bash
+# Activate environment once
+source .venv/bin/activate  # Linux/Mac
+.venv\Scripts\activate      # Windows
+
+# Then use navigraph directly
+navigraph --help
 navigraph setup graph config.yaml
-
-# Test graph mapping
 navigraph test graph config.yaml
-
-# Run full analysis
 navigraph run config.yaml
-
-# List available graph builders
-navigraph list-graph-builders
 ```
 
 ## Graph Architecture
