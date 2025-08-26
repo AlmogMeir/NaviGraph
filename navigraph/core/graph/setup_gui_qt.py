@@ -1032,7 +1032,9 @@ class GraphWidget(QWidget):
             
             height, width, channel = image_array.shape
             bytes_per_line = 3 * width
-            q_image = QImage(image_array.data, width, height, bytes_per_line, QImage.Format_RGB888)
+            # Ensure array is contiguous and convert to bytes for QImage
+            image_array = np.ascontiguousarray(image_array)
+            q_image = QImage(image_array.tobytes(), width, height, bytes_per_line, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(q_image)
             
             # Scale to fit widget while maintaining aspect ratio

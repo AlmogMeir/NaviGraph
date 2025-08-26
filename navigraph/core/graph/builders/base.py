@@ -95,8 +95,15 @@ class GraphBuilder(ABC):
             
             # Convert to image array
             fig.canvas.draw()
-            buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+            # Try new method first, fall back to old if not available
+            try:
+                # matplotlib >= 3.8
+                buf = np.asarray(fig.canvas.buffer_rgba())
+                buf = buf[:, :, :3]  # Drop alpha channel to get RGB
+            except AttributeError:
+                # matplotlib < 3.8 fallback
+                buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+                buf = buf.reshape(fig.canvas.get_width_height()[::-1] + (3,))
             
             plt.close(fig)
             return buf
