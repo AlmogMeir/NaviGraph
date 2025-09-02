@@ -118,7 +118,7 @@ class MapWidget(QWidget):
         self.original_contour_colors: Dict[str, QColor] = {}  # Store original colors for unhighlighting
         
         self.setMouseTracking(True)
-        self.setMinimumSize(800, 600)
+        # Remove minimum size to prevent window resizing
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Enable keyboard focus
         
         # Enable tooltips with faster response
@@ -178,6 +178,7 @@ class MapWidget(QWidget):
         self.selected_cells.clear()
         # Don't clear cell_colors as they track mapped cells
         self.update()
+        
     
     def reset_all(self):
         """Reset all visualizations and mappings."""
@@ -935,6 +936,9 @@ class GraphWidget(QWidget):
         self.default_edge_color = 'gray'
         self.default_edge_width = 2.0  # Thicker than NetworkX default 1.0
         
+        # Prevent recursive resize events
+        self._drawing = False
+        
         # Setup UI
         from PyQt5.QtCore import Qt
         from PyQt5.QtWidgets import QLabel, QVBoxLayout
@@ -946,13 +950,18 @@ class GraphWidget(QWidget):
         layout.addWidget(self.image_label)
         self.setLayout(layout)
         
-        self.setMinimumSize(800, 600)
+        # Set reasonable minimum size for stability
+        self.setMinimumSize(300, 200)
         self.draw_graph()
         
         # Note: Graph click detection removed - using dropdown selection in test mode instead
 
     def draw_graph(self):
         """Draw or redraw the graph using the builder's visualization."""
+        if self._drawing:
+            return  # Prevent recursive calls
+            
+        self._drawing = True
         try:
             # Prepare node colors
             node_colors = []
@@ -1070,12 +1079,15 @@ class GraphWidget(QWidget):
             traceback.print_exc()
             # Show error message
             self.image_label.setText(f"Error displaying graph:\n{str(e)}")
+        finally:
+            self._drawing = False
 
     def resizeEvent(self, event):
         """Handle widget resize."""
         super().resizeEvent(event)
         # Update visualization when widget is resized to maintain proper scaling
-        if hasattr(self, 'image_label') and self.image_label.pixmap():
+        # But prevent recursive calls during drawing
+        if hasattr(self, 'image_label') and self.image_label.pixmap() and not self._drawing:
             self.draw_graph()
 
     def highlight_nodes(self, nodes: Set, color: str = 'lightgreen'):
@@ -1147,7 +1159,7 @@ class GraphSetupWindow(QMainWindow):
         # Initialize UI
         self.setWindowTitle("NaviGraph - Interactive Graph Mapping Setup")
         self.setGeometry(100, 100, 1600, 1000)
-        self.setMinimumSize(800, 600)  # Reasonable minimum size
+        # Remove minimum size to prevent unwanted window resizing
         
         # Set application style with improved UI
         self.setStyleSheet("""
@@ -1289,6 +1301,8 @@ class GraphSetupWindow(QMainWindow):
         # Initialize scaled fonts
         self.update_font_sizes()
         
+        # Let splitters handle their own initial sizing
+        
     def _init_ui(self):
         """Initialize the user interface."""
         # Central widget
@@ -1303,32 +1317,29 @@ class GraphSetupWindow(QMainWindow):
         
         # Left panel - Controls (resizable)
         self.control_panel = self._create_control_panel()
+        # Set minimum width for stability but remove maximum to allow splitter expansion
         self.control_panel.setMinimumWidth(350)
-        self.control_panel.setMaximumWidth(600)  # Cap at 600px even on large screens
         self.control_panel.setStyleSheet(
             "QWidget { background-color: #f8f9fa; border-right: 2px solid #dee2e6; }"
         )
         self.main_splitter.addWidget(self.control_panel)
         
-        # Right panel - Views (expandable)
-        views_widget = QWidget()
-        views_layout = QVBoxLayout(views_widget)
-        views_layout.setContentsMargins(5, 5, 5, 5)
+        # Right panel - Views with vertical splitter between graph and map
+        self.views_splitter = QSplitter(Qt.Vertical)
         
-        # Graph view (top, smaller)
+        # Graph view (top)
         graph_group = QGroupBox("📊 Graph Structure")
         graph_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
         graph_layout = QVBoxLayout(graph_group)
         graph_layout.setContentsMargins(8, 20, 8, 8)
         
         self.graph_widget = GraphWidget(self.graph)
-        self.graph_widget.setMinimumSize(400, 300)  # Same as test mode for same zoom
-        self.graph_widget.setMaximumHeight(400)     # Shorter max height
+        # Remove size constraints to allow flexible splitter resizing
         graph_layout.addWidget(self.graph_widget)
         
-        views_layout.addWidget(graph_group)
+        self.views_splitter.addWidget(graph_group)
         
-        # Map view (bottom, larger)
+        # Map view (bottom)
         map_group = QGroupBox("🗺️ Interactive Mapping Area")
         map_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
         map_layout = QVBoxLayout(map_group)
@@ -1336,18 +1347,24 @@ class GraphSetupWindow(QMainWindow):
         
         self.map_widget = MapWidget(self.map_image)
         self.map_widget.gui_parent = self  # Allow map widget to access mapping
-        self.map_widget.setMinimumHeight(350)
+        # Remove minimum height to allow flexible splitter resizing
         map_layout.addWidget(self.map_widget)
         
-        views_layout.addWidget(map_group)
+        self.views_splitter.addWidget(map_group)
         
-        # Set stretch factors (graph:map = 1:1 equal like test mode)  
-        views_layout.setStretchFactor(graph_group, 1)
-        views_layout.setStretchFactor(map_group, 1)
+        # Set initial sizes for graph:map (1:2 ratio - map larger by default)
+        self.views_splitter.setSizes([300, 600])
+        self.views_splitter.setStretchFactor(0, 1)  # Graph
+        self.views_splitter.setStretchFactor(1, 2)  # Map
         
-        # Add views to splitter and set initial sizes
-        self.main_splitter.addWidget(views_widget)
-        self.main_splitter.setSizes([450, 1150])  # Initial ratio - slightly bigger control panel
+        # Add views splitter to main splitter
+        self.main_splitter.addWidget(self.views_splitter)
+        
+        # Set initial sizes based on proportions rather than fixed values
+        initial_width = 1600  # Default window width
+        control_width = 400   # Control panel width
+        views_width = initial_width - control_width
+        self.main_splitter.setSizes([control_width, views_width])
         self.main_splitter.setStretchFactor(0, 0)  # Control panel doesn't stretch much
         self.main_splitter.setStretchFactor(1, 1)  # Views stretch
         
@@ -1499,6 +1516,7 @@ class GraphSetupWindow(QMainWindow):
         config_group = QGroupBox("Grid Configuration")
         config_layout = QVBoxLayout(config_group)
         config_layout.setSpacing(10)
+        
         
         # Grid dimensions in a properly aligned grid
         dims_layout = QGridLayout()
@@ -1815,7 +1833,7 @@ class GraphSetupWindow(QMainWindow):
                 self.setup_mode = 'grid'
                 self.mode_stack.setCurrentIndex(1)  # Grid controls
                 
-                # Recreate UI fresh when entering grid mode FIRST
+                # Recreate UI fresh when entering grid mode
                 self._recreate_fresh_ui()
                 
                 # Then reset to fresh state with new widgets
@@ -1861,7 +1879,7 @@ class GraphSetupWindow(QMainWindow):
                 self.setup_mode = 'manual'
                 self.mode_stack.setCurrentIndex(2)  # Manual controls
                 
-                # Recreate UI fresh when entering manual mode FIRST
+                # Recreate UI fresh when entering manual mode
                 self._recreate_fresh_ui()
                 
                 # Then reset to fresh state with new widgets
@@ -1916,14 +1934,15 @@ class GraphSetupWindow(QMainWindow):
                 self.setup_mode = 'test'
                 self.mode_stack.setCurrentIndex(3)  # Test controls
                 
-                # Recreate UI fresh when entering test mode FIRST
+                # Recreate UI fresh when entering test mode
                 self._recreate_fresh_ui()
                 
                 # Then setup test-specific state with new widgets
                 try:
                     self._reset_mapping_state()
-                    # Switch to test mode layout with fresh widgets
-                    self._setup_test_layout()
+                    # Test mode initialization - populate element combos
+                    self._populate_element_combos()
+                    self.status_bar.showMessage("Test mode ready - use same layout as other modes")
                 except Exception as reset_error:
                     self.status_bar.showMessage(f"Error setting up test mode: {str(reset_error)}")
                     print(f"Test mode setup error: {reset_error}")
@@ -3419,7 +3438,7 @@ class GraphSetupWindow(QMainWindow):
                 except:
                     pass
             
-            # Clear all widget references BEFORE layout operations
+            # Clear all widget references BEFORE layout operations  
             old_graph_widget = getattr(self, 'graph_widget', None)
             old_map_widget = getattr(self, 'map_widget', None)
             old_test_graph_widget = getattr(self, 'test_graph_widget', None)
@@ -3441,15 +3460,15 @@ class GraphSetupWindow(QMainWindow):
             if hasattr(self, 'original_mouse_press'):
                 delattr(self, 'original_mouse_press')
             
-            # Clear the main layout completely
-            main_layout = self.centralWidget().layout()
+            # Clear the main splitter (not main_layout which should only contain main_splitter)
             control_panel_ref = self.control_panel
             
-            # Remove all widgets from layout
-            while main_layout.count():
-                child = main_layout.takeAt(0)
-                if child.widget() and child.widget() != control_panel_ref:
-                    child.widget().setParent(None)
+            # Remove old views_splitter from main_splitter (keep control_panel)
+            old_views_splitter = getattr(self, 'views_splitter', None)
+            if old_views_splitter and hasattr(self, 'main_splitter'):
+                # Proper way to remove from splitter - just set parent to None
+                if old_views_splitter.parent() == self.main_splitter:
+                    old_views_splitter.setParent(None)
             
             # Safely delete old widgets
             def safe_delete_widget(widget):
@@ -3464,13 +3483,12 @@ class GraphSetupWindow(QMainWindow):
             safe_delete_widget(old_map_widget)
             safe_delete_widget(old_test_graph_widget)
             safe_delete_widget(old_test_splitter)
+            safe_delete_widget(old_views_splitter)
             
-            # Recreate the right panel (views) from scratch
-            views_widget = QWidget()
-            views_layout = QVBoxLayout(views_widget)
-            views_layout.setContentsMargins(5, 5, 5, 5)
+            # Recreate the right panel (views) with vertical splitter
+            self.views_splitter = QSplitter(Qt.Vertical)
             
-            # Graph view (top, smaller)
+            # Graph view (top)
             graph_group = QGroupBox("📊 Graph Structure")
             graph_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
             graph_layout = QVBoxLayout(graph_group)
@@ -3478,13 +3496,12 @@ class GraphSetupWindow(QMainWindow):
             
             # Recreate graph widget
             self.graph_widget = GraphWidget(self.graph)
-            self.graph_widget.setMinimumSize(400, 300)
-            self.graph_widget.setMaximumHeight(400)
+            # Remove size constraints to allow flexible splitter resizing
             graph_layout.addWidget(self.graph_widget)
             
-            views_layout.addWidget(graph_group)
+            self.views_splitter.addWidget(graph_group)
             
-            # Map view (bottom, larger) - recreate from scratch
+            # Map view (bottom) - recreate from scratch
             map_group = QGroupBox("🗺️ Interactive Mapping Area")
             map_group.setStyleSheet("QGroupBox { font-weight: 600; font-size: 14px; color: #424242; }")
             map_layout = QVBoxLayout(map_group)
@@ -3493,18 +3510,21 @@ class GraphSetupWindow(QMainWindow):
             # Recreate map widget completely fresh
             self.map_widget = MapWidget(self.map_image)
             self.map_widget.gui_parent = self  # Allow map widget to access mapping
-            self.map_widget.setMinimumHeight(350)
+            # Remove minimum height to allow flexible splitter resizing
             map_layout.addWidget(self.map_widget)
             
-            views_layout.addWidget(map_group)
+            self.views_splitter.addWidget(map_group)
             
-            # Set stretch factors (graph:map = 1:1)
-            views_layout.setStretchFactor(graph_group, 1)
-            views_layout.setStretchFactor(map_group, 1)
+            # Set initial sizes for graph:map (1:2 ratio - map larger by default)
+            self.views_splitter.setSizes([300, 600])
+            self.views_splitter.setStretchFactor(0, 1)  # Graph
+            self.views_splitter.setStretchFactor(1, 2)  # Map
             
-            # Add widgets back to main layout
-            main_layout.addWidget(control_panel_ref)
-            main_layout.addWidget(views_widget)
+            # Add views_splitter back to main_splitter (control_panel should still be there)
+            self.main_splitter.addWidget(self.views_splitter)
+            
+            # Set proper default splitter sizes to restore good ratio
+            self.main_splitter.setSizes([400, 1200])  # 1:3 ratio like original
             
             # Reconnect signals since we have new map_widget
             self._connect_signals()
@@ -3734,6 +3754,15 @@ class GraphSetupWindow(QMainWindow):
             scale = min(scale, 1.0)  # Don't go above normal size on very wide screens
         
         return scale
+        
+    def _set_initial_splitter_sizes(self):
+        """Set initial splitter sizes based on current window size."""
+        if hasattr(self, 'main_splitter'):
+            total_width = self.width()
+            # Use 25% for control panel, but cap at 450px and minimum 350px
+            control_width = max(350, min(450, int(total_width * 0.25)))
+            views_width = total_width - control_width - 20  # Account for splitter handle
+            self.main_splitter.setSizes([control_width, views_width])
 
     def generate_scaled_stylesheet(self, scaled_sizes):
         """Generate stylesheet with scaled font sizes."""
@@ -3889,14 +3918,7 @@ class GraphSetupWindow(QMainWindow):
         super().resizeEvent(event)
         self.update_font_sizes()
         
-        # Adjust splitter proportions based on window size
-        if hasattr(self, 'main_splitter'):
-            total_width = self.width()
-            if total_width > 1800:  # Large/maximized window
-                # Control panel stays reasonable size, views get more space
-                control_width = min(500, int(total_width * 0.25))  # Max 25% of width or 500px
-                views_width = total_width - control_width - 50  # Account for margins/splitter
-                self.main_splitter.setSizes([control_width, views_width])
+        # Remove automatic splitter adjustment to allow manual control
 
     def _create_toolbar(self):
         """Create toolbar with window controls."""
@@ -3924,11 +3946,8 @@ class GraphSetupWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.toolbar.addWidget(spacer)
         
-        # Add maximize/restore button
-        self.maximize_action = QAction("⬜", self)
-        self.maximize_action.setToolTip("Maximize window (F11 or Ctrl+M)")
-        self.maximize_action.triggered.connect(self.toggle_maximize)
-        self.toolbar.addAction(self.maximize_action)
+        # Note: Maximize button removed - using native window controls instead
+        # Keep keyboard shortcuts (F11, Ctrl+M) available
         
         self.addToolBar(self.toolbar)
     
@@ -3946,22 +3965,16 @@ class GraphSetupWindow(QMainWindow):
         """Toggle between maximized and normal window state."""
         if self.isMaximized():
             self.showNormal()
-            self.maximize_action.setText("⬜")
-            self.maximize_action.setToolTip("Maximize window (F11 or Ctrl+M)")
         else:
             self.showMaximized()
-            self.maximize_action.setText("⬚")
-            self.maximize_action.setToolTip("Restore window (F11 or Ctrl+M)")
     
     def toggle_fullscreen(self):
         """Toggle between fullscreen and normal window state."""
         if self.isFullScreen():
             self.showNormal()
-            self.maximize_action.setText("⬜")
             self.toolbar.setVisible(True)
         else:
             self.showFullScreen()
-            self.maximize_action.setText("⬚")
             # Hide toolbar in fullscreen for maximum space
             self.toolbar.setVisible(False)
                 
