@@ -1,0 +1,15 @@
+# Configuration for Fully Connected Maze
+# Tests the new FullyConnectedGraphBuilder with complete graph topology
+
+experiment_path: ./
+map_path: resources/fully_connected_maze_map.png
+
+# Graph structure using the new fully connected builder
+graph_structure:
+  type: fully_connected
+  parameters:
+    n_nodes: 18
+
+# Where to save the spatial mapping
+graph_mapping:
+  mapping_file: resources/graph_mapping_fully_connected.pkl
