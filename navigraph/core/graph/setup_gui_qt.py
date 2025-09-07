@@ -1562,7 +1562,15 @@ class GraphSetupWindow(QMainWindow):
         self.status_bar.addPermanentWidget(self.progress_bar)
         
     def _create_control_panel(self) -> QWidget:
-        """Create the simplified control panel widget."""
+        """Create the simplified control panel widget with scroll support."""
+        # Create scroll area container
+        from PyQt5.QtWidgets import QScrollArea
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        
+        # Create the actual panel widget
         panel = QWidget()
         layout = QVBoxLayout(panel)
         
@@ -1681,7 +1689,9 @@ class GraphSetupWindow(QMainWindow):
         
         layout.addWidget(viz_group)
         
-        return panel
+        # Set the panel as the scroll area's widget and return scroll area
+        scroll_area.setWidget(panel)
+        return scroll_area
         
     def _create_grid_controls(self) -> QWidget:
         """Create simplified grid setup controls."""
