@@ -2432,12 +2432,51 @@ class GraphSetupWindow(QMainWindow):
     def _select_next_element(self):
         """Select the next element to map."""
         if not self.element_queue:
-            self.current_element = None
-            self.status_bar.showMessage("All elements mapped!")
-            QMessageBox.information(self, "Complete", "All elements have been mapped!")
+            # Try to get next from all_elements
+            if hasattr(self, 'all_elements') and self.current_element:
+                try:
+                    current_idx = self.all_elements.index(self.current_element)
+                    if current_idx + 1 < len(self.all_elements):
+                        self.current_element = self.all_elements[current_idx + 1]
+                        self._set_current_element_and_highlight()
+                        return
+                except ValueError:
+                    pass
+            self.status_bar.showMessage("No more elements")
             return
             
         self.current_element = self.element_queue.pop(0)
+        self._set_current_element_and_highlight()
+        
+    def _select_previous_element(self):
+        """Select the previous element to map."""
+        if not hasattr(self, 'all_elements') or not self.all_elements:
+            self.status_bar.showMessage("No elements available")
+            return
+            
+        if self.current_element is None:
+            self.current_element = self.all_elements[-1]
+        else:
+            try:
+                current_idx = self.all_elements.index(self.current_element)
+                if current_idx > 0:
+                    self.current_element = self.all_elements[current_idx - 1]
+                    # Add back to queue if it was removed
+                    if self.current_element not in self.element_queue:
+                        self.element_queue.insert(0, self.current_element)
+                else:
+                    self.status_bar.showMessage("Already at first element")
+                    return
+            except ValueError:
+                self.current_element = self.all_elements[-1]
+                
+        self._set_current_element_and_highlight()
+        
+    def _set_current_element_and_highlight(self):
+        """Set current element and update UI highlighting."""
+        if not self.current_element:
+            return
+            
         elem_type, elem_id = self.current_element
         
         # Update map widget with current element
@@ -2646,6 +2685,27 @@ class GraphSetupWindow(QMainWindow):
         """Skip to next element."""
         self._select_next_element()
         self._update_progress_display()
+    
+    def _on_previous_element(self):
+        """Go back to previous element."""
+        self._select_previous_element()
+        self._update_progress_display()
+    
+    def _on_enter_key(self):
+        """Handle Enter key for assign/commit in both modes."""
+        if self.setup_mode == 'grid':
+            # In grid mode: assign selected cells to current element
+            if (self.current_element and 
+                hasattr(self.map_widget, 'selected_cells') and 
+                self.map_widget.selected_cells):
+                self._on_assign_cells()
+        elif self.setup_mode == 'manual':
+            # In manual mode: commit current contour if drawing
+            if (hasattr(self.map_widget, 'current_contour') and 
+                self.map_widget.current_contour and 
+                len(self.map_widget.current_contour) > 2):
+                # Complete contour using the existing method
+                self.map_widget.finish_current_contour()
         
     def _on_grid_assignment_selected(self, item):
         """Handle grid assignment selection with toggle support."""
@@ -4309,7 +4369,7 @@ class GraphSetupWindow(QMainWindow):
         self.addToolBar(self.toolbar)
     
     def _setup_shortcuts(self):
-        """Setup keyboard shortcuts for window controls."""
+        """Setup keyboard shortcuts for window controls and navigation."""
         # F11 for fullscreen toggle
         fullscreen_shortcut = QShortcut("F11", self)
         fullscreen_shortcut.activated.connect(self.toggle_fullscreen)
@@ -4317,6 +4377,17 @@ class GraphSetupWindow(QMainWindow):
         # Ctrl+M for maximize
         maximize_shortcut = QShortcut("Ctrl+M", self)
         maximize_shortcut.activated.connect(self.toggle_maximize)
+        
+        # Enter key for assign/commit in both modes
+        enter_shortcut = QShortcut("Return", self)
+        enter_shortcut.activated.connect(self._on_enter_key)
+        
+        # Left/Right arrow keys for graph traversal
+        left_shortcut = QShortcut("Left", self)
+        left_shortcut.activated.connect(self._on_previous_element)
+        
+        right_shortcut = QShortcut("Right", self)
+        right_shortcut.activated.connect(self._on_next_element)
     
     def toggle_maximize(self):
         """Toggle between maximized and normal window state."""
