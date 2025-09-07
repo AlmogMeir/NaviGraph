@@ -181,6 +181,13 @@ class MapWidget(QWidget):
         # Don't clear cell_colors as they track mapped cells
         self.update()
         
+    def remove_cell_mapping(self, cell_id: str):
+        """Remove mapping for a specific cell."""
+        if cell_id in self.cell_mappings:
+            del self.cell_mappings[cell_id]
+        if cell_id in self.cell_colors:
+            del self.cell_colors[cell_id]
+        self.update()
     
     def reset_all(self):
         """Reset all visualizations and mappings."""
@@ -1330,6 +1337,7 @@ class GraphSetupWindow(QMainWindow):
         self.all_elements = []  # All elements for selection
         self.mapped_elements = {}  # element -> region_ids
         self.mapping_history = []  # Stack for undo functionality
+        self.highlighted_assignment_cells = None  # Track currently highlighted grid assignment
         
         # Initialize UI
         self.setWindowTitle("NaviGraph - Interactive Graph Mapping Setup")
@@ -1708,7 +1716,7 @@ class GraphSetupWindow(QMainWindow):
         # Rows
         dims_layout.addWidget(QLabel("Rows:"), 0, 0, Qt.AlignRight)
         self.rows_spin = QSpinBox()
-        self.rows_spin.setRange(1, 9999)
+        self.rows_spin.setRange(1, 999999)
         self.rows_spin.setValue(8)
         self.rows_spin.setButtonSymbols(QSpinBox.NoButtons)  # Hide default buttons
         
@@ -1734,7 +1742,7 @@ class GraphSetupWindow(QMainWindow):
         # Columns
         dims_layout.addWidget(QLabel("Cols:"), 0, 2, Qt.AlignRight)
         self.cols_spin = QSpinBox()
-        self.cols_spin.setRange(1, 9999)
+        self.cols_spin.setRange(1, 999999)
         self.cols_spin.setValue(8)
         self.cols_spin.setButtonSymbols(QSpinBox.NoButtons)  # Hide default buttons
         
@@ -1760,7 +1768,7 @@ class GraphSetupWindow(QMainWindow):
         # Cell Size
         dims_layout.addWidget(QLabel("Cell Size:"), 1, 0, Qt.AlignRight)
         self.width_spin = QDoubleSpinBox()
-        self.width_spin.setRange(1, 99999)
+        self.width_spin.setRange(1, 9999999)
         self.width_spin.setValue(50)
         self.width_spin.setSuffix(" px")
         self.width_spin.setDecimals(1)
@@ -1787,12 +1795,9 @@ class GraphSetupWindow(QMainWindow):
         
         config_layout.addLayout(dims_layout)
         
-        # Apply and place buttons
+        # Place grid button
         config_buttons = QHBoxLayout()
         config_buttons.setSpacing(8)
-        self.apply_grid_button = QPushButton("Apply Config")
-        self.apply_grid_button.clicked.connect(self._on_apply_grid_config)
-        config_buttons.addWidget(self.apply_grid_button)
         
         self.place_grid_button = QPushButton("Place Grid")
         self.place_grid_button.setCheckable(True)  # Make it toggleable
@@ -2327,6 +2332,8 @@ class GraphSetupWindow(QMainWindow):
                 self.grid_assignment_list.clear()
             if hasattr(self, 'map_widget') and self.map_widget:
                 self.map_widget.highlighted_cells.clear()
+            # Clear highlighted assignment tracking
+            self.highlighted_assignment_cells = None
             
             # Reset button states
             if hasattr(self, 'assign_button'):
@@ -2452,27 +2459,20 @@ class GraphSetupWindow(QMainWindow):
                 
         self.status_bar.showMessage(f"Mapping {elem_type} {elem_id}")
         
-    def _on_apply_grid_config(self):
-        """Apply grid configuration changes."""
-        config = GridConfig(
-            structure_type='rectangle',  # Fixed to rectangle for now
-            rows=self.rows_spin.value(),
-            cols=self.cols_spin.value(),
-            cell_width=self.width_spin.value(),
-            cell_height=self.width_spin.value()  # Use same value for square cells
-        )
-        self.map_widget.set_grid_config(config)
-        self.grid_status_label.setText("")  # Clear status until grid is placed
-        self.status_bar.showMessage("Grid configuration updated - click 'Place Grid' to position it")
-        
-        # Enable Clear Grid button if grid is already placed
-        if hasattr(self.map_widget, 'grid_enabled') and self.map_widget.grid_enabled:
-            self.clear_grid_button.setEnabled(True)
-        
     def _on_place_grid(self):
         """Start or cancel grid placement mode."""
         if self.place_grid_button.isChecked():
-            # Button was pressed - start placement mode
+            # Button was pressed - first apply current config, then start placement mode
+            config = GridConfig(
+                structure_type='rectangle',  # Fixed to rectangle for now
+                rows=self.rows_spin.value(),
+                cols=self.cols_spin.value(),
+                cell_width=self.width_spin.value(),
+                cell_height=self.width_spin.value()  # Use same value for square cells
+            )
+            self.map_widget.set_grid_config(config)
+            
+            # Now start placement mode
             self.map_widget.set_interaction_mode('place_grid')
             self.status_bar.showMessage("Click on the map to place grid origin")
         else:
@@ -2507,6 +2507,13 @@ class GraphSetupWindow(QMainWindow):
             # Update map widget
             self.map_widget.set_current_element(elem_type, elem_id)
             
+            # Highlight in graph 
+            self.graph_widget.clear_highlights()
+            if elem_type == 'node':
+                self.graph_widget.highlight_nodes({elem_id})
+            elif elem_type == 'edge':
+                self.graph_widget.highlight_edges({elem_id})
+            
             # Update status
             self.status_bar.showMessage(f"Ready to map {elem_type} {elem_id} - Click cells to select")
         
@@ -2531,6 +2538,13 @@ class GraphSetupWindow(QMainWindow):
             self.mapped_elements.clear()
             self.mapping_history.clear()
             
+            # Clear grid assignment list
+            if hasattr(self, 'grid_assignment_list') and self.grid_assignment_list:
+                self.grid_assignment_list.clear()
+            
+            # Clear highlighted assignment tracking
+            self.highlighted_assignment_cells = None
+            
             # Reset element queue to start fresh
             self._init_element_queue()
             self._populate_element_combos()
@@ -2543,8 +2557,8 @@ class GraphSetupWindow(QMainWindow):
             self.clear_grid_button.setEnabled(False)
             # Keep clear_all_grid_button always enabled
             self.assign_button.setEnabled(False)
-            self.next_element_button.setEnabled(False)
-            self.undo_grid_button.setEnabled(False)
+            if hasattr(self, 'delete_grid_assignment_button'):
+                self.delete_grid_assignment_button.setEnabled(False)
             
             # Update progress
             self._update_progress_display()
@@ -2558,6 +2572,12 @@ class GraphSetupWindow(QMainWindow):
         else:
             self.status_bar.showMessage(f"Deselected cell {cell_id}")
             
+        # Update assign button state based on whether we have selected cells and current element
+        if hasattr(self, 'assign_button'):
+            has_selected_cells = bool(self.map_widget.selected_cells)
+            has_current_element = bool(self.current_element)
+            self.assign_button.setEnabled(has_selected_cells and has_current_element)
+            
     def _on_assign_cells(self):
         """Assign selected cells to current element."""
         if not self.current_element or not self.map_widget.selected_cells:
@@ -2565,7 +2585,7 @@ class GraphSetupWindow(QMainWindow):
             
         elem_type, elem_id = self.current_element
         
-        # Track for undo
+        # Track assigned cells for the assignment list
         assigned_cells = list(self.map_widget.selected_cells)
         regions_added = []
         
@@ -2618,21 +2638,34 @@ class GraphSetupWindow(QMainWindow):
         self._update_progress_display()
         
     def _on_grid_assignment_selected(self, item):
-        """Handle grid assignment selection."""
+        """Handle grid assignment selection with toggle support."""
         if item:
-            self.delete_grid_assignment_button.setEnabled(True)
-            # Highlight the cells for this assignment
             data = item.data(Qt.UserRole)
             if data and 'cells' in data:
-                # Clear previous highlights
-                if hasattr(self.map_widget, 'highlighted_cells'):
-                    self.map_widget.highlighted_cells.clear()
+                # Toggle behavior: if clicking the same assignment, deselect it
+                current_highlight = getattr(self, 'highlighted_assignment_cells', None)
+                if current_highlight == data['cells']:
+                    # Deselect: clear highlight and list selection
+                    self.highlighted_assignment_cells = None
+                    self.grid_assignment_list.clearSelection()
+                    self.delete_grid_assignment_button.setEnabled(False)
+                    # Clear highlights
+                    if hasattr(self.map_widget, 'highlighted_cells'):
+                        self.map_widget.highlighted_cells.clear()
+                        self.map_widget.update()
                 else:
-                    self.map_widget.highlighted_cells = set()
-                
-                # Highlight the cells for this assignment
-                self.map_widget.highlighted_cells.update(data['cells'])
-                self.map_widget.update()
+                    # Select: highlight this assignment in yellow
+                    self.highlighted_assignment_cells = data['cells']
+                    self.delete_grid_assignment_button.setEnabled(True)
+                    # Clear previous highlights and set new ones
+                    if hasattr(self.map_widget, 'highlighted_cells'):
+                        self.map_widget.highlighted_cells.clear()
+                    else:
+                        self.map_widget.highlighted_cells = set()
+                    
+                    # Highlight the cells for this assignment
+                    self.map_widget.highlighted_cells.update(data['cells'])
+                    self.map_widget.update()
         else:
             self.delete_grid_assignment_button.setEnabled(False)
             
@@ -2674,6 +2707,9 @@ class GraphSetupWindow(QMainWindow):
         if hasattr(self.map_widget, 'highlighted_cells'):
             self.map_widget.highlighted_cells.clear()
             self.map_widget.update()
+        
+        # Clear highlighted assignment tracking
+        self.highlighted_assignment_cells = None
         
         # Update button state
         self.delete_grid_assignment_button.setEnabled(False)
@@ -3297,7 +3333,9 @@ class GraphSetupWindow(QMainWindow):
             
             # Update UI based on mode
             if self.setup_mode == 'grid':
-                self.assign_button.setEnabled(True)
+                # Enable assign button only if we have selected cells
+                has_selected_cells = bool(self.map_widget.selected_cells)
+                self.assign_button.setEnabled(has_selected_cells)
             elif self.setup_mode == 'manual':
                 # Manual mode navigation handled via jump functionality
                 pass
@@ -3383,17 +3421,54 @@ class GraphSetupWindow(QMainWindow):
             # Re-setup the test layout with new orientation
             self._setup_test_layout()
     
+    def _clear_mappings_only(self):
+        """Clear only mappings, preserve grid placement."""
+        # Clear mapping state but keep grid
+        self.mapping = SpatialMapping(self.graph)
+        self.mapped_elements.clear()
+        self.mapping_history.clear()
+        
+        # Clear grid assignment list
+        if hasattr(self, 'grid_assignment_list') and self.grid_assignment_list:
+            self.grid_assignment_list.clear()
+        
+        # Clear highlighted assignment tracking  
+        self.highlighted_assignment_cells = None
+        
+        # Clear cell mappings but preserve grid structure
+        if hasattr(self.map_widget, 'cell_mappings'):
+            self.map_widget.cell_mappings.clear()
+        if hasattr(self.map_widget, 'cell_colors'):
+            self.map_widget.cell_colors.clear()
+        if hasattr(self.map_widget, 'selected_cells'):
+            self.map_widget.selected_cells.clear()
+        if hasattr(self.map_widget, 'highlighted_cells'):
+            self.map_widget.highlighted_cells.clear()
+            
+        # Reset element queue to start fresh
+        self._init_element_queue()
+        self._populate_element_combos()
+        
+        # Clear graph highlights
+        self.graph_widget.clear_highlights()
+        
+        # Update UI buttons
+        self.assign_button.setEnabled(False)
+        if hasattr(self, 'delete_grid_assignment_button'):
+            self.delete_grid_assignment_button.setEnabled(False)
+        
+        # Update the map display
+        self.map_widget.update()
+        self._update_progress_display()
+
     def _on_clear_all(self):
-        """Clear all mappings and start fresh."""
+        """Clear all mappings but preserve grid placement."""
         reply = QMessageBox.question(self, "Clear All Mappings", 
-                                    "Are you sure you want to clear all mappings? This will reset all progress and start fresh.",
+                                    "Are you sure you want to clear all mappings? The grid placement will be preserved.",
                                     QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
-            self._reset_mapping_state()
-            self._init_element_queue()
-            self._populate_element_combos()
-            self._update_progress_display()
-            self.status_bar.showMessage("All mappings cleared")
+            self._clear_mappings_only()
+            self.status_bar.showMessage("All mappings cleared - grid preserved")
     
     def _on_undo_last(self):
         """Undo the last mapping action."""
