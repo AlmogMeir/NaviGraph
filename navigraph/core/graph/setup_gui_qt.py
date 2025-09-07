@@ -111,6 +111,7 @@ class MapWidget(QWidget):
         self.show_all_mappings = True  # Toggle for showing all mapped regions
         self.show_cell_labels = True  # Toggle for showing cell labels
         self.adaptive_font_size = True  # Toggle for adaptive font sizing
+        self.unified_font_size = False  # Toggle for unified font size
         self.current_element_type = None
         self.current_element_id = None
         
@@ -365,9 +366,25 @@ class MapWidget(QWidget):
                                 bounding_rect = polygon.boundingRect()
                                 centroid = bounding_rect.center()
                                 
-                                label_text = f"N:{node_id}"
+                                label_text = f"N{node_id}"
                                 
-                                if self.adaptive_font_size:
+                                if self.unified_font_size:
+                                    # Unified font size mode - fixed size for all labels
+                                    font_size = 8
+                                    font = painter.font()
+                                    font.setFamily('Arial')  # More compact font
+                                    font.setPointSize(font_size)
+                                    painter.setFont(font)
+                                    painter.setPen(QPen(QColor(50, 50, 50), 1))  # Darker grey for better contrast
+                                    
+                                    # Draw text truly centered
+                                    from PyQt5.QtGui import QFontMetrics
+                                    metrics = QFontMetrics(font)
+                                    text_rect = metrics.boundingRect(label_text)
+                                    text_x = centroid.x() - text_rect.width() / 2
+                                    text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
+                                    painter.drawText(QPointF(text_x, text_y), label_text)
+                                elif self.adaptive_font_size:
                                     # Adaptive mode: Size text to fit inside contour
                                     # Start with a reasonable font size and reduce until text fits
                                     max_font_size = 20
@@ -380,6 +397,7 @@ class MapWidget(QWidget):
                                     
                                     # Find the right font size that fits
                                     font = painter.font()
+                                    font.setFamily('Arial')  # More compact font
                                     for size in range(max_font_size, min_font_size - 1, -1):
                                         font.setPointSize(size)
                                         painter.setFont(font)
@@ -413,9 +431,10 @@ class MapWidget(QWidget):
                                     # Fixed mode: Draw green text at centroid with fixed size
                                     font_size = 9
                                     font = painter.font()
+                                    font.setFamily('Arial')  # More compact font
                                     font.setPointSize(font_size)
                                     painter.setFont(font)
-                                    painter.setPen(QPen(QColor(0, 100, 0), 1))  # Green text
+                                    painter.setPen(QPen(QColor(0, 80, 0), 1))  # Darker green text
                                     painter.drawText(centroid, label_text)
                 
                 # Draw edge regions in orange
@@ -454,11 +473,27 @@ class MapWidget(QWidget):
                                 
                                 # Prepare edge label text
                                 if isinstance(edge, tuple):
-                                    label_text = f"E:{edge[0]},{edge[1]}"
+                                    label_text = f"E{edge[0]},{edge[1]}"
                                 else:
-                                    label_text = f"E:{edge}"
+                                    label_text = f"E{edge}"
                                 
-                                if self.adaptive_font_size:
+                                if self.unified_font_size:
+                                    # Unified font size mode - fixed size for edge labels (smaller than nodes)
+                                    font_size = 7
+                                    font = painter.font()
+                                    font.setFamily('Arial')  # More compact font
+                                    font.setPointSize(font_size)
+                                    painter.setFont(font)
+                                    painter.setPen(QPen(QColor(120, 60, 0), 1))  # Darker brown for better contrast
+                                    
+                                    # Draw text truly centered
+                                    from PyQt5.QtGui import QFontMetrics
+                                    metrics = QFontMetrics(font)
+                                    text_rect = metrics.boundingRect(label_text)
+                                    text_x = centroid.x() - text_rect.width() / 2
+                                    text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
+                                    painter.drawText(QPointF(text_x, text_y), label_text)
+                                elif self.adaptive_font_size:
                                     # Adaptive mode: Size text to fit inside contour
                                     # Start with a reasonable font size and reduce until text fits
                                     max_font_size = 20
@@ -471,6 +506,7 @@ class MapWidget(QWidget):
                                     
                                     # Find the right font size that fits
                                     font = painter.font()
+                                    font.setFamily('Arial')  # More compact font
                                     for size in range(max_font_size, min_font_size - 1, -1):
                                         font.setPointSize(size)
                                         painter.setFont(font)
@@ -504,9 +540,10 @@ class MapWidget(QWidget):
                                     # Fixed mode: Draw orange text at centroid with fixed size
                                     font_size = 9
                                     font = painter.font()
+                                    font.setFamily('Arial')  # More compact font
                                     font.setPointSize(font_size)
                                     painter.setFont(font)
-                                    painter.setPen(QPen(QColor(150, 80, 0), 1))  # Orange text
+                                    painter.setPen(QPen(QColor(120, 60, 0), 1))  # Darker orange text
                                     painter.drawText(centroid, label_text)
                 
             except Exception as e:
@@ -641,7 +678,7 @@ class MapWidget(QWidget):
             painter.setBrush(QBrush(QColor(255, 150, 150)))
             painter.drawEllipse(QPointF(screen_x, screen_y), 3, 3)  # 3 pixel radius filled circle
         
-        # Draw labels independently (if enabled but contours are disabled)
+        # Draw labels independently only when contours are not shown
         if self.show_cell_labels and not self.show_all_mappings:
             self._draw_node_labels(painter)
             self._draw_edge_labels(painter)
@@ -860,7 +897,7 @@ class MapWidget(QWidget):
                     if centroid is None:
                         continue
                         
-                    label_text = f"N:{node_id}"
+                    label_text = f"N{node_id}"
                     self._draw_text_label(painter, centroid, label_text, QColor(100, 100, 100))
                     
         except Exception as e:
@@ -885,9 +922,9 @@ class MapWidget(QWidget):
                         
                     # Prepare edge label text
                     if isinstance(edge, tuple):
-                        label_text = f"E:{edge[0]},{edge[1]}"
+                        label_text = f"E{edge[0]},{edge[1]}"
                     else:
-                        label_text = f"E:{edge}"
+                        label_text = f"E{edge}"
                     self._draw_text_label(painter, centroid, label_text, QColor(150, 80, 0))
                     
         except Exception as e:
@@ -904,12 +941,25 @@ class MapWidget(QWidget):
             
         elif isinstance(region, ContourRegion):
             # Contour centroid (average of points)
-            if not region.contour_points:
+            if region.contour_points is None or len(region.contour_points) == 0:
                 return None
-            sum_x = sum(float(p[0]) for p in region.contour_points)
-            sum_y = sum(float(p[1]) for p in region.contour_points) 
-            center_x = sum_x / len(region.contour_points)
-            center_y = sum_y / len(region.contour_points)
+            try:
+                # Handle both numpy arrays and regular lists/tuples
+                points = []
+                for p in region.contour_points:
+                    if hasattr(p, '__len__') and len(p) >= 2:
+                        points.append((float(p[0]), float(p[1])))
+                
+                if not points:
+                    return None
+                    
+                sum_x = sum(p[0] for p in points)
+                sum_y = sum(p[1] for p in points) 
+                center_x = sum_x / len(points)
+                center_y = sum_y / len(points)
+            except (ValueError, TypeError, IndexError) as e:
+                print(f"Error processing contour points: {e}")
+                return None
             
         else:
             return None
@@ -922,14 +972,21 @@ class MapWidget(QWidget):
     
     def _draw_text_label(self, painter, centroid, label_text, color):
         """Draw a text label at the given centroid."""
-        if self.adaptive_font_size:
+        if self.unified_font_size:
+            # Unified font size mode - smaller size for edge labels
+            if label_text.startswith('E'):
+                font_size = 7  # Smaller for edges
+            else:
+                font_size = 8  # Nodes
+        elif self.adaptive_font_size:
             # Fixed font size for labels without contours (no bounding box to fit)
-            font_size = 10
+            font_size = 8
         else:
             # Fixed mode font size
-            font_size = 9
+            font_size = 7
             
         font = painter.font()
+        font.setFamily('Arial')  # More compact font
         font.setPointSize(font_size)
         painter.setFont(font)
         painter.setPen(QPen(color, 1))
@@ -941,7 +998,7 @@ class MapWidget(QWidget):
         text_x = centroid.x() - text_rect.width() / 2
         text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
         
-        painter.drawText(text_x, text_y, label_text)
+        painter.drawText(int(text_x), int(text_y), label_text)
     
     def resizeEvent(self, event):
         """Handle widget resize by recalculating scale factors."""
@@ -1570,7 +1627,7 @@ class GraphSetupWindow(QMainWindow):
         self.show_mappings_checkbox.stateChanged.connect(self._on_toggle_mappings)
         viz_layout.addWidget(self.show_mappings_checkbox)
         
-        self.show_labels_checkbox = QCheckBox("Show Cell Labels")
+        self.show_labels_checkbox = QCheckBox("Show Contour Labels")
         self.show_labels_checkbox.setChecked(True)
         self.show_labels_checkbox.stateChanged.connect(self._on_toggle_labels)
         viz_layout.addWidget(self.show_labels_checkbox)
@@ -1579,6 +1636,11 @@ class GraphSetupWindow(QMainWindow):
         self.adaptive_font_checkbox.setChecked(True)
         self.adaptive_font_checkbox.stateChanged.connect(self._on_toggle_adaptive_font)
         viz_layout.addWidget(self.adaptive_font_checkbox)
+        
+        self.unified_font_checkbox = QCheckBox("Unified Font Size")
+        self.unified_font_checkbox.setChecked(False)
+        self.unified_font_checkbox.stateChanged.connect(self._on_toggle_unified_font)
+        viz_layout.addWidget(self.unified_font_checkbox)
         
         # Test Mode Layout Options (only visible in test mode)
         self.test_layout_spacer = QLabel("")  # Spacer
@@ -3300,6 +3362,20 @@ class GraphSetupWindow(QMainWindow):
                 self.test_map_widget.update()
         except Exception as e:
             print(f"Error toggling adaptive font: {e}")
+    
+    def _on_toggle_unified_font(self, state):
+        """Toggle unified font sizing."""
+        try:
+            unified_font = (state == Qt.Checked)
+            self.map_widget.unified_font_size = unified_font
+            self.map_widget.update()
+            
+            # Also update test mode widget if it exists  
+            if hasattr(self, 'test_map_widget'):
+                self.test_map_widget.unified_font_size = unified_font
+                self.test_map_widget.update()
+        except Exception as e:
+            print(f"Error toggling unified font: {e}")
     
     def _on_test_layout_changed(self):
         """Handle test mode layout orientation change."""
