@@ -112,7 +112,9 @@ class BinaryTreeBuilder(GraphBuilder):
             'edge_color': kwargs.get('edge_color', 'black'),
             'with_labels': kwargs.get('with_labels', True),
             'font_size': kwargs.get('font_size', 15),
-            'font_weight': kwargs.get('font_weight', 'bold')
+            'font_weight': kwargs.get('font_weight', 'normal'),
+            'font_color': kwargs.get('font_color', 'black'),
+            'font_family': kwargs.get('font_family', 'sans-serif')
         }
         
         # Override with any provided kwargs
@@ -128,7 +130,8 @@ class BinaryTreeBuilder(GraphBuilder):
                                   width: float = 1.0,
                                   with_labels: bool = True,
                                   font_size: int = 15,
-                                  font_weight: str = 'bold',
+                                  font_weight: str = 'normal',
+                                  font_color: str = 'black',
                                   **kwargs) -> np.ndarray:
         """Custom visualization for binary tree with proper aspect ratio.
         
@@ -156,7 +159,7 @@ class BinaryTreeBuilder(GraphBuilder):
             nx.draw(graph, pos=positions, ax=ax,
                     node_size=node_size, node_color=node_color,
                     edge_color=edge_color, width=width, with_labels=with_labels,
-                    font_size=font_size, font_weight=font_weight)
+                    font_size=font_size, font_weight=font_weight, font_color=font_color)
             
             # Convert to image array
             fig.canvas.draw()

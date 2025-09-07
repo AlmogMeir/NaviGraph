@@ -96,6 +96,7 @@ class MapWidget(QWidget):
         self.grid_enabled = False
         self.grid_cells: Dict[str, QRectF] = {}  # cell_id -> QRectF
         self.selected_cells: Set[str] = set()
+        self.highlighted_cells: Set[str] = set()  # For highlighting specific assignments
         self.cell_colors: Dict[str, QColor] = {}  # cell_id -> QColor
         self.cell_mappings: Dict[str, Tuple[str, Any]] = {}  # cell_id -> (elem_type, elem_id) for mapped cells
         
@@ -294,12 +295,23 @@ class MapWidget(QWidget):
                     rect.height() * self.scale_factor
                 )
                 
-                # Check if cell is mapped or selected
+                # Check if cell is mapped, selected, or highlighted
                 is_mapped = cell_id in self.cell_mappings
                 is_selected = cell_id in self.selected_cells
+                is_highlighted = cell_id in self.highlighted_cells
                 
-                # Draw cell based on state
-                if is_mapped and self.show_all_mappings:
+                # Draw cell based on state (priority: selected > highlighted > mapped > empty)
+                if is_selected:
+                    # Currently selected for mapping - bright green
+                    painter.fillRect(scaled_rect, QColor(0, 255, 0, 100))
+                    painter.setPen(QPen(QColor(0, 255, 0), 2))
+                    painter.drawRect(scaled_rect)
+                elif is_highlighted:
+                    # Highlighted from assignment list - bright yellow
+                    painter.fillRect(scaled_rect, QColor(255, 235, 59, 120))  # Yellow highlight
+                    painter.setPen(QPen(QColor(255, 193, 7), 2))  # Darker yellow border
+                    painter.drawRect(scaled_rect)
+                elif is_mapped and self.show_all_mappings:
                     # Mapped cell - show with persistent color
                     color = self.cell_colors.get(cell_id, QColor(200, 200, 200, 100))
                     painter.fillRect(scaled_rect, color)
@@ -307,12 +319,6 @@ class MapWidget(QWidget):
                     painter.drawRect(scaled_rect)
                     
                     # Text will be drawn from mapping section (unified approach)
-                    
-                elif is_selected:
-                    # Currently selected for mapping - bright green
-                    painter.fillRect(scaled_rect, QColor(0, 255, 0, 100))
-                    painter.setPen(QPen(QColor(0, 255, 0), 2))
-                    painter.drawRect(scaled_rect)
                 else:
                     # Empty cell
                     painter.setPen(QPen(QColor(100, 100, 100), 1))
@@ -634,6 +640,11 @@ class MapWidget(QWidget):
             painter.setPen(QPen(QColor(255, 150, 150), 1))
             painter.setBrush(QBrush(QColor(255, 150, 150)))
             painter.drawEllipse(QPointF(screen_x, screen_y), 3, 3)  # 3 pixel radius filled circle
+        
+        # Draw labels independently (if enabled but contours are disabled)
+        if self.show_cell_labels and not self.show_all_mappings:
+            self._draw_node_labels(painter)
+            self._draw_edge_labels(painter)
                 
     def mousePressEvent(self, event):
         """Handle mouse press events."""
@@ -672,6 +683,11 @@ class MapWidget(QWidget):
             elif self.interaction_mode == 'draw_contour':
                 self.current_contour.append((x, y))
                 self.update()
+                
+            elif self.interaction_mode == 'test':
+                # Handle test mode clicks - delegate to parent GUI
+                if hasattr(self, 'gui_parent') and hasattr(self.gui_parent, '_on_test_map_click'):
+                    self.gui_parent._on_test_map_click(event)
     
     def add_contour_point(self, x: float, y: float):
         """Add a point to the current contour."""
@@ -826,6 +842,106 @@ class MapWidget(QWidget):
         """Reset zoom to fit image in widget."""
         self.user_scale_factor = 1.0
         self.update()
+    
+    def _draw_node_labels(self, painter):
+        """Draw node labels independently of contours."""
+        if not (hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and self.gui_parent.mapping):
+            return
+            
+        try:
+            from .regions import RectangleRegion, ContourRegion
+            
+            for node_id in self.gui_parent.mapping.get_mapped_nodes():
+                regions = self.gui_parent.mapping.get_node_regions(node_id)
+                
+                for region in regions:
+                    # Calculate centroid based on region type
+                    centroid = self._get_region_centroid(region)
+                    if centroid is None:
+                        continue
+                        
+                    label_text = f"N:{node_id}"
+                    self._draw_text_label(painter, centroid, label_text, QColor(100, 100, 100))
+                    
+        except Exception as e:
+            print(f"Error drawing node labels: {e}")
+    
+    def _draw_edge_labels(self, painter):
+        """Draw edge labels independently of contours.""" 
+        if not (hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and self.gui_parent.mapping):
+            return
+            
+        try:
+            from .regions import RectangleRegion, ContourRegion
+            
+            for edge in self.gui_parent.mapping.get_mapped_edges():
+                regions = self.gui_parent.mapping.get_edge_regions(edge)
+                
+                for region in regions:
+                    # Calculate centroid based on region type  
+                    centroid = self._get_region_centroid(region)
+                    if centroid is None:
+                        continue
+                        
+                    # Prepare edge label text
+                    if isinstance(edge, tuple):
+                        label_text = f"E:{edge[0]},{edge[1]}"
+                    else:
+                        label_text = f"E:{edge}"
+                    self._draw_text_label(painter, centroid, label_text, QColor(150, 80, 0))
+                    
+        except Exception as e:
+            print(f"Error drawing edge labels: {e}")
+    
+    def _get_region_centroid(self, region):
+        """Calculate the centroid of a region in screen coordinates."""
+        from .regions import RectangleRegion, ContourRegion
+        
+        if isinstance(region, RectangleRegion):
+            # Rectangle centroid
+            center_x = region.x + region.width / 2
+            center_y = region.y + region.height / 2
+            
+        elif isinstance(region, ContourRegion):
+            # Contour centroid (average of points)
+            if not region.contour_points:
+                return None
+            sum_x = sum(float(p[0]) for p in region.contour_points)
+            sum_y = sum(float(p[1]) for p in region.contour_points) 
+            center_x = sum_x / len(region.contour_points)
+            center_y = sum_y / len(region.contour_points)
+            
+        else:
+            return None
+            
+        # Convert to screen coordinates
+        screen_x = self.offset_x + center_x * self.scale_factor
+        screen_y = self.offset_y + center_y * self.scale_factor
+        
+        return QPointF(screen_x, screen_y)
+    
+    def _draw_text_label(self, painter, centroid, label_text, color):
+        """Draw a text label at the given centroid."""
+        if self.adaptive_font_size:
+            # Fixed font size for labels without contours (no bounding box to fit)
+            font_size = 10
+        else:
+            # Fixed mode font size
+            font_size = 9
+            
+        font = painter.font()
+        font.setPointSize(font_size)
+        painter.setFont(font)
+        painter.setPen(QPen(color, 1))
+        
+        # Center the text
+        from PyQt5.QtGui import QFontMetrics
+        metrics = QFontMetrics(font)
+        text_rect = metrics.boundingRect(label_text)
+        text_x = centroid.x() - text_rect.width() / 2
+        text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
+        
+        painter.drawText(text_x, text_y, label_text)
     
     def resizeEvent(self, event):
         """Handle widget resize by recalculating scale factors."""
@@ -1023,7 +1139,9 @@ class GraphWidget(QWidget):
                 'node_size': node_size,
                 'font_size': font_size,
                 'with_labels': True,
-                'font_weight': 'bold'
+                'font_weight': 'normal',
+                'font_color': 'black',
+                'font_family': 'sans-serif'
             }
             
             # Add colors if we have custom ones
@@ -1528,7 +1646,7 @@ class GraphSetupWindow(QMainWindow):
         # Rows
         dims_layout.addWidget(QLabel("Rows:"), 0, 0, Qt.AlignRight)
         self.rows_spin = QSpinBox()
-        self.rows_spin.setRange(1, 20)
+        self.rows_spin.setRange(1, 9999)
         self.rows_spin.setValue(8)
         self.rows_spin.setButtonSymbols(QSpinBox.NoButtons)  # Hide default buttons
         
@@ -1554,7 +1672,7 @@ class GraphSetupWindow(QMainWindow):
         # Columns
         dims_layout.addWidget(QLabel("Cols:"), 0, 2, Qt.AlignRight)
         self.cols_spin = QSpinBox()
-        self.cols_spin.setRange(1, 20)
+        self.cols_spin.setRange(1, 9999)
         self.cols_spin.setValue(8)
         self.cols_spin.setButtonSymbols(QSpinBox.NoButtons)  # Hide default buttons
         
@@ -1580,7 +1698,7 @@ class GraphSetupWindow(QMainWindow):
         # Cell Size
         dims_layout.addWidget(QLabel("Cell Size:"), 1, 0, Qt.AlignRight)
         self.width_spin = QDoubleSpinBox()
-        self.width_spin.setRange(10, 200)
+        self.width_spin.setRange(1, 99999)
         self.width_spin.setValue(50)
         self.width_spin.setSuffix(" px")
         self.width_spin.setDecimals(1)
@@ -1641,24 +1759,33 @@ class GraphSetupWindow(QMainWindow):
         self.assign_button.setEnabled(False)
         assign_layout.addWidget(self.assign_button)
         
-        # Control buttons
-        control_layout = QHBoxLayout()
-        self.next_element_button = QPushButton("Next")
-        self.next_element_button.clicked.connect(self._on_next_element)
-        self.next_element_button.setEnabled(False)
-        control_layout.addWidget(self.next_element_button)
+        # Assignment management section
+        mgmt_group = QGroupBox("Assignment Management")
+        mgmt_layout = QVBoxLayout(mgmt_group)
         
-        self.undo_grid_button = QPushButton("Undo")
-        self.undo_grid_button.clicked.connect(self._on_undo_last)
-        self.undo_grid_button.setEnabled(False)
-        control_layout.addWidget(self.undo_grid_button)
+        self.grid_assignment_list = QListWidget()
+        self.grid_assignment_list.itemClicked.connect(self._on_grid_assignment_selected)
+        self.grid_assignment_list.setStyleSheet(
+            "QListWidget { background-color: white; border: 1px solid #ccc; border-radius: 4px; }"
+            "QListWidget::item { padding: 4px; border-bottom: 1px solid #eee; }"
+            "QListWidget::item:selected { background-color: #ffeb3b; color: black; }"
+            "QListWidget::item:hover { background-color: #f5f5f5; }"
+        )
+        mgmt_layout.addWidget(self.grid_assignment_list)
+        
+        assignment_buttons = QHBoxLayout()
+        self.delete_grid_assignment_button = QPushButton("Delete")
+        self.delete_grid_assignment_button.clicked.connect(self._on_delete_grid_assignment)
+        self.delete_grid_assignment_button.setEnabled(False)
+        assignment_buttons.addWidget(self.delete_grid_assignment_button)
         
         self.clear_all_grid_button = QPushButton("Clear All")
         self.clear_all_grid_button.clicked.connect(self._on_clear_all)
-        self.clear_all_grid_button.setEnabled(True)  # Always enabled
-        control_layout.addWidget(self.clear_all_grid_button)
+        self.clear_all_grid_button.setEnabled(True)
+        assignment_buttons.addWidget(self.clear_all_grid_button)
         
-        assign_layout.addLayout(control_layout)
+        mgmt_layout.addLayout(assignment_buttons)
+        assign_layout.addWidget(mgmt_group)
         layout.addWidget(assign_group)
         
         # Save/Load Mapping buttons
@@ -2132,14 +2259,18 @@ class GraphSetupWindow(QMainWindow):
                 self.contour_list.clear()
             if hasattr(self, 'highlighted_contour_id'):
                 self.highlighted_contour_id = None
+                
+            # Reset grid mode specific state
+            if hasattr(self, 'grid_assignment_list') and self.grid_assignment_list:
+                self.grid_assignment_list.clear()
+            if hasattr(self, 'map_widget') and self.map_widget:
+                self.map_widget.highlighted_cells.clear()
             
             # Reset button states
-            if hasattr(self, 'undo_grid_button'):
-                self.undo_grid_button.setEnabled(False)
             if hasattr(self, 'assign_button'):
                 self.assign_button.setEnabled(False)
-            if hasattr(self, 'next_element_button'):
-                self.next_element_button.setEnabled(False)
+            if hasattr(self, 'delete_grid_assignment_button'):
+                self.delete_grid_assignment_button.setEnabled(False)
             if hasattr(self, 'place_grid_button'):
                 self.place_grid_button.setEnabled(True)
             if hasattr(self, 'clear_contour_button'):
@@ -2236,7 +2367,6 @@ class GraphSetupWindow(QMainWindow):
         # Update UI based on mode
         if self.setup_mode == 'grid':
             self.assign_button.setEnabled(True)
-            self.next_element_button.setEnabled(True)
             
         elif self.setup_mode == 'manual':
             # Manual mode navigation handled via jump functionality
@@ -2403,23 +2533,90 @@ class GraphSetupWindow(QMainWindow):
         # Update mapped elements tracking
         self.mapped_elements[self.current_element] = assigned_cells
         
-        # Add to history for undo
-        self.mapping_history.append({
-            'action': 'assign_cells',
+        # Add to grid assignment list
+        cell_names = ", ".join(sorted(assigned_cells))
+        list_label = f"{elem_type.title()} {elem_id}: {cell_names}"
+        item = QListWidgetItem(list_label)
+        # Store assignment data for later reference
+        item.setData(Qt.UserRole, {
             'element': self.current_element,
             'cells': assigned_cells,
             'regions': regions_added
         })
-        self.undo_grid_button.setEnabled(True)
+        self.grid_assignment_list.addItem(item)
         
-        # Clear selection and move to next
+        # Clear selection and automatically advance to next element
         self.map_widget.clear_selection()
-        self._on_next_element()
-        self._update_progress()
+        self._select_next_element()
+        self._update_progress_display()
         
     def _on_next_element(self):
         """Skip to next element."""
         self._select_next_element()
+        self._update_progress_display()
+        
+    def _on_grid_assignment_selected(self, item):
+        """Handle grid assignment selection."""
+        if item:
+            self.delete_grid_assignment_button.setEnabled(True)
+            # Highlight the cells for this assignment
+            data = item.data(Qt.UserRole)
+            if data and 'cells' in data:
+                # Clear previous highlights
+                if hasattr(self.map_widget, 'highlighted_cells'):
+                    self.map_widget.highlighted_cells.clear()
+                else:
+                    self.map_widget.highlighted_cells = set()
+                
+                # Highlight the cells for this assignment
+                self.map_widget.highlighted_cells.update(data['cells'])
+                self.map_widget.update()
+        else:
+            self.delete_grid_assignment_button.setEnabled(False)
+            
+    def _on_delete_grid_assignment(self):
+        """Delete selected assignment."""
+        current_item = self.grid_assignment_list.currentItem()
+        if not current_item:
+            return
+            
+        # Get assignment data
+        data = current_item.data(Qt.UserRole)
+        if not data:
+            return
+            
+        element = data['element']
+        cells = data['cells']
+        regions = data['regions']
+        
+        # Remove regions from mapping
+        for region in regions:
+            try:
+                self.mapping.remove_region(region.region_id)
+            except Exception as e:
+                print(f"Warning: Could not remove region {region.region_id}: {e}")
+        
+        # Remove cell mappings from map widget
+        for cell_id in cells:
+            self.map_widget.remove_cell_mapping(cell_id)
+        
+        # Remove from mapped elements tracking
+        if element in self.mapped_elements:
+            del self.mapped_elements[element]
+        
+        # Remove from list
+        row = self.grid_assignment_list.row(current_item)
+        self.grid_assignment_list.takeItem(row)
+        
+        # Clear highlights
+        if hasattr(self.map_widget, 'highlighted_cells'):
+            self.map_widget.highlighted_cells.clear()
+            self.map_widget.update()
+        
+        # Update button state
+        self.delete_grid_assignment_button.setEnabled(False)
+        
+        # Update progress
         self._update_progress_display()
         
     def _on_start_drawing(self, checked: bool):
@@ -3039,7 +3236,6 @@ class GraphSetupWindow(QMainWindow):
             # Update UI based on mode
             if self.setup_mode == 'grid':
                 self.assign_button.setEnabled(True)
-                self.next_element_button.setEnabled(True)
             elif self.setup_mode == 'manual':
                 # Manual mode navigation handled via jump functionality
                 pass

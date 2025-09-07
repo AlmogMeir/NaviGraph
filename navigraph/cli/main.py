@@ -858,131 +858,14 @@ def setup_calibration(config_path: Path):
 def test():
     """Testing and validation tools for NaviGraph components.
     
-    Interactive tools for testing graph mappings, calibration accuracy,
-    and validating system configurations.
+    Interactive tools for testing calibration accuracy and validating 
+    system configurations.
     
     \b
     Examples:
-      navigraph test graph config.yaml
       navigraph test calibration config.yaml
     """
     pass
-
-
-@test.command('graph')
-@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
-@click.option('--report', '-r', type=click.Path(path_type=Path),
-              help='Export validation report to file')
-@click.option('--format', '-f',
-              type=click.Choice(['txt', 'html', 'md']),
-              default='txt',
-              help='Report format for export')
-def test_graph(config_path: Path, report: Optional[Path], format: str):
-    """Test and validate graph-space mappings interactively.
-    
-    Launch interactive testing interface for validating spatial mappings.
-    Click on the map to see corresponding nodes, click on nodes to see regions.
-    
-    CONFIG_PATH: Path to configuration file
-    
-    \b
-    Examples:
-      navigraph test graph config.yaml
-      navigraph test graph config.yaml --report validation.html
-    
-    \b
-    Interactive Features:
-      • Click map regions → highlight corresponding nodes
-      • Click graph nodes → highlight corresponding regions  
-      • Path testing between nodes
-      • Overlap and conflict detection
-    
-    \b
-    Required config sections:
-      map_path: Path to the map image
-      graph_mapping.mapping_file: Path to the saved mapping
-    """
-    try:
-        click.echo(f"📋 Loading configuration from: {config_path}")
-        
-        # Load configuration
-        config = OmegaConf.load(config_path)
-        config._config_dir = str(config_path.parent)
-        
-        # Import modules
-        from ..core.graph.storage import MappingStorage
-        from ..core.graph.testing import MappingTester
-        import cv2
-        
-        # Get map path from config
-        map_path = config.get('map_path')
-        if not map_path:
-            click.echo("Error: map_path not found in config", err=True)
-            sys.exit(1)
-        
-        # Resolve map path relative to config directory
-        if not Path(map_path).is_absolute():
-            map_path = Path(config._config_dir) / map_path
-        
-        # Load map image
-        map_array = cv2.imread(str(map_path))
-        if map_array is None:
-            click.echo(f"❌ Failed to load map image: {map_path}", err=True)
-            sys.exit(1)
-        click.echo(f"🗺️  Loaded map from: {map_path}")
-        
-        # Get mapping path from config
-        mapping_path = config.get('graph_mapping', {}).get('mapping_file')
-        if not mapping_path:
-            click.echo("❌ graph_mapping.mapping_file not found in config", err=True)
-            click.echo("💡 Run 'navigraph setup graph' first to create a mapping")
-            sys.exit(1)
-        
-        # Resolve mapping path relative to config directory
-        if not Path(mapping_path).is_absolute():
-            mapping_path = Path(config._config_dir) / mapping_path
-        
-        # Load mapping
-        mapping = MappingStorage.load_mapping(mapping_path)
-        if not mapping:
-            click.echo(f"❌ Failed to load mapping from: {mapping_path}", err=True)
-            sys.exit(1)
-        click.echo(f"📂 Loaded mapping from: {mapping_path}")
-        
-        # Get graph from mapping
-        graph = mapping.graph
-        if not graph:
-            click.echo("❌ No graph found in mapping", err=True)
-            sys.exit(1)
-        
-        click.echo(f"🌳 Graph has {len(graph.nodes)} nodes and {len(graph.edges)} edges")
-        
-        # Create and launch tester
-        click.echo("🎮 Launching interactive testing interface...")
-        click.echo("💡 Tips:")
-        click.echo("   • Click on map to identify nodes/edges")
-        click.echo("   • Click on graph to highlight regions")
-        click.echo("   • Press 'h' for help, 's' for statistics")
-        
-        tester = MappingTester(graph, mapping, map_array)
-        tester.start_interactive_test()
-        
-        # Export report if requested
-        if report:
-            success = MappingStorage.export_mapping_report(mapping, report, format)
-            if success:
-                click.echo(f"📝 Report exported to: {report}")
-            else:
-                click.echo(f"❌ Failed to export report", err=True)
-        
-        click.echo("✅ Testing session complete")
-        
-    except Exception as e:
-        click.echo(f"❌ Test failed: {str(e)}", err=True)
-        if '--verbose' in sys.argv:
-            import traceback
-            click.echo(traceback.format_exc(), err=True)
-        sys.exit(1)
 
 
 @cli.command('list-conflict-resolvers')

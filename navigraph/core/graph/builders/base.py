@@ -49,6 +49,9 @@ class GraphBuilder(ABC):
                               width: float = 1.0,
                               with_labels: bool = True,
                               font_size: int = 10,
+                              font_weight: str = 'normal',
+                              font_color: str = 'black',
+                              font_family: str = 'sans-serif',
                               **kwargs) -> np.ndarray:
         """Default graph visualization implementation.
         
@@ -61,6 +64,9 @@ class GraphBuilder(ABC):
             width: Width of edges (single value or list per edge)
             with_labels: Whether to show node labels
             font_size: Font size for labels
+            font_weight: Font weight for labels ('normal', 'bold', etc.)
+            font_color: Color of font for labels
+            font_family: Font family for labels ('sans-serif', 'serif', 'monospace', etc.)
             **kwargs: Additional parameters (ignored)
             
         Returns:
@@ -89,7 +95,8 @@ class GraphBuilder(ABC):
             nx.draw(graph, pos=positions, ax=ax,
                     node_size=node_size, node_color=node_color,
                     edge_color=edge_color, width=width, with_labels=with_labels,
-                    font_size=font_size, font_weight='bold')
+                    font_size=font_size, font_weight=font_weight, 
+                    font_color=font_color, font_family=font_family)
             
             ax.set_title(f"Graph ({len(graph.nodes)} nodes, {len(graph.edges)} edges)")
             

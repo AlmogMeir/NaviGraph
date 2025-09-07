@@ -11,23 +11,19 @@ Core Components:
 - mapping: Enhanced SpatialMapping system linking regions to nodes/edges
 - storage: Unified persistence system supporting multiple formats
 - setup_gui: Dual-view interactive GUI for creating mappings
-- testing: Interactive tools for validating mappings
 
 Quick Start:
     from navigraph.core.graph import (
-        GraphStructure, build_binary_tree, build_grid_graph,
-        SpatialMapping, GraphSetupGUI, MappingTester
+        GraphStructure, GraphBuilder,
+        SpatialMapping, launch_setup_gui
     )
     
     # Create a graph
-    graph = build_binary_tree(height=4)
+    builder = GraphBuilder.from_config({'type': 'binary_tree', 'height': 4})
+    graph = GraphStructure(builder)
     
     # Create mapping with setup GUI
     mapping = launch_setup_gui(graph, map_image)
-    
-    # Test the mapping
-    tester = MappingTester(graph, mapping, map_image)
-    tester.start_interactive_test()
 """
 
 from .structures import GraphStructure
@@ -44,8 +40,6 @@ from .regions import (
 from .mapping import SpatialMapping, MappingStatistics, OverlapInfo, NodeConflictInfo
 from .storage import MappingStorage
 from .setup_gui_qt import launch_setup_gui, GridConfig
-from .testing import MappingTester, InteractiveValidator
-from .visualization import GraphVisualizer, MappingVisualizer, save_visualization
 from .gui_utils import is_gui_available, print_backend_info
 
 __all__ = [
@@ -78,15 +72,8 @@ __all__ = [
     'MappingStorage',
     
     # Interactive tools
-    'GraphSetupGUI',
-    'GridSetupConfig',
-    'MappingTester',
-    'InteractiveValidator',
-    
-    # Visualization
-    'GraphVisualizer',
-    'MappingVisualizer',
-    'save_visualization',
+    'launch_setup_gui',
+    'GridConfig',
     
     # GUI utilities
     'is_gui_available',

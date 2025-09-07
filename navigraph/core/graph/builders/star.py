@@ -92,7 +92,9 @@ class StarGraphBuilder(GraphBuilder):
             'width': kwargs.get('width', 2.0),
             'with_labels': kwargs.get('with_labels', True),
             'font_size': kwargs.get('font_size', 12),
-            'font_weight': 'bold',
+            'font_weight': 'normal',
+            'font_color': kwargs.get('font_color', 'black'),
+            'font_family': kwargs.get('font_family', 'sans-serif'),
         }
         
         # Create custom positions for star layout
