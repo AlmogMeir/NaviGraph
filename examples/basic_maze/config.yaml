@@ -1,7 +1,6 @@
 log_level: info
 experiment_path: .
 experiment_output_path: "{PROJECT_ROOT}/output"
-system_running_mode: 'analyze'
 
 plugins:
   # Primary pose estimation data (establishes temporal index)
@@ -64,7 +63,7 @@ analyze:
   save_as_pkl: true
   save_raw_data_as_pkl: true
 
-# Visualization configuration (used when system_running_mode includes 'visualize')
+# Visualization configuration (used when running with visualize mode)
 visualizations:
   output:
     enabled: true
