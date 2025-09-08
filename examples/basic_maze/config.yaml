@@ -63,3 +63,59 @@ analyze:
   save_as_csv: true
   save_as_pkl: true
   save_raw_data_as_pkl: true
+
+# Visualization configuration (used when system_running_mode includes 'visualize')
+visualizations:
+  output:
+    enabled: true
+    path: ./output/videos
+    format: mp4
+    fps: 30
+    codec: mp4v
+    
+  pipeline:
+    - name: bodypart_display
+      type: bodyparts
+      config:
+        bodyparts: ['Nose', 'Tail_base']
+        colors:
+          Nose: [0, 255, 0]      # Green
+          Tail_base: [255, 0, 0] # Blue
+        radius: 6
+        show_labels: false
+        likelihood_threshold: 0.3
+        
+    - name: trajectory_trail
+      type: trajectory
+      config:
+        bodypart: 'Nose'
+        coordinate_type: 'pixel'
+        trail_length: 100
+        fade_trail: true
+        current_color: [0, 0, 255]    # Red
+        trail_color: [255, 255, 0]    # Cyan
+        current_radius: 4
+        
+    - name: map_overlay_display
+      type: map_overlay
+      config:
+        position: 'bottom_right'
+        size: 0.25
+        opacity: 0.8
+        highlight_current: true
+        show_visited: true
+        current_tile_color: [0, 0, 255]     # Red
+        visited_tile_color: [0, 255, 0]     # Green
+        visited_opacity: 0.4
+        show_tile_ids: true
+        
+    - name: text_info
+      type: text_display
+      config:
+        columns: ['tile_id', 'graph_node_id']
+        position: 'top_left'
+        font_scale: 0.7
+        color: [255, 255, 255]              # White
+        background: true
+        background_opacity: 0.7
+        decimal_places: 0
