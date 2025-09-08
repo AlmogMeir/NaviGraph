@@ -1,58 +1,12 @@
-# NaviGraph Configuration - Basic Maze Example
-
-# Debug
 verbose: true
-
-# Experiment configuration
-experiment_path: .  # Directory containing session folders
-map_path: ./resources/maze_map.png
-
-# Output
-# Options for experiment_output_path:
-#   - {PROJECT_ROOT}/output - creates output at project root level
-#   - ./output - creates output relative to this config file  
-#   - ~/output - creates output in user home directory
-#   - /absolute/path/output - creates output at absolute path
+experiment_path: .
 experiment_output_path: "{PROJECT_ROOT}/output"
+system_running_mode: 'analyze'
 
-# Running Mode
-system_running_mode: 'analyze'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations like 'calibrate&analyze'
-
-# Calibration parameters
-calibrator_parameters:
-  points_capture_parameters:
-    radius: 9
-    color: (208, 224, 64)  # Turquoise
-    thickness: 3
-
-  map_test_parameters:
-    radius: 9
-    color: (255, 0, 255)  # Pink
-    thickness: 3
-
-  registration_method: 'homography&ransac'  # Options: 'affine', 'homography', 'homography&ransac'
-  save_transform_matrix: true
-  path_to_save_calibration_files: ./resources
-  pre_calculated_transform_matrix_path: ./resources/transform_matrix.npy
-
-# Map settings
-map_settings:
-  segment_length: 86  # pixels
-  origin: (47, 40)  # top-left corner
-  grid_size: (17, 17)
-  pixel_to_meter: 2279.4117647058824
-
-# Location tracking settings
-location_settings:
-  bodypart: 'Nose'  # Which bodypart to track (backward compatibility)
-  likelihood: 0.3  # Confidence threshold
-  bodyparts: 'all'  # Options: 'all', ['Nose', 'Tail'], or single bodypart name
-
-# Data sources configuration - executed in order
-data_sources:
+plugins:
   # Primary pose estimation data (establishes temporal index)
-  - name: deeplabcut
-    type: deeplabcut
+  - name: pose_data
+    type: pose_tracking
     file_pattern: '.*DLC.*\.h5$'  # Match DeepLabCut H5 files
     config:
       bodypart: 'Nose'
@@ -60,70 +14,42 @@ data_sources:
       bodyparts: 'all'
 
   # Camera calibration transformation matrix
-  - name: calibration
+  - name: calibration_matrix
     type: calibration
     shared: true  # Look in resources folder
     file_pattern: 'transform_matrix\.npy$'
     config: {}
 
   # Spatial coordinate transformation and tile detection
-  - name: map_integration
-    type: map_integration
+  - name: map_coords
+    type: map_location
     shared: true  # Map is shared across sessions
     file_pattern: '.*maze_map\.png$'  # Match maze map image
     config:
       bodypart: 'Nose'  # Which bodypart to track for map coordinates
 
   # Graph-based spatial navigation analysis
-  - name: graph_integration
-    type: graph_integration
+  - name: graph_coords
+    type: graph_location
     shared: true  # Graph is shared across sessions
     config:
       reward_tile_id: 273  # Tile ID for reward location
 
-# Graph structure definition
-graph_structure:
-  type: binary_tree  # Options: binary_tree, custom
-  binary_tree_height: 7  # Height for binary tree
-  # custom_graph_function: "my_module.create_custom_graph"  # For custom type
-
-# Graph mapping configuration  
-graph_mapping:
-  mapping_file: ./resources/graph_mapping.pkl  # Where the mapping is saved/loaded
-
-# Graph visualization
 graph:
-  height: 7  # Binary tree height (kept for backward compatibility)
-  draw:
-    with_labels: true
-    font_weight: 'bold'
-    node_size: 1000
-    font_size: 15
-  options:
-    static_node_color: '#C9D6E8'
-    static_edge_color: 'k'
-    dynamic_node_color: '#FF0000'
-    dynamic_edge_color: '#FF0000'
-    history_node_color: '#8b0000'
-    history_edge_color: '#8b0000'
-    dynamic_reward_node_color: '#7CFC00'
-    dynamic_reward_edge_color: '#7CFC00'
-    history_reward_node_color: '#228B22'
-    history_reward_edge_color: '#228B22'
-    edge_width: 10
+  builder:
+    type: binary_tree
+    config:
+      height: 7
+  mapping_file: ./resources/graph_mapping.pkl
+  conflict_strategy: node_priority
 
-# Important tile IDs
-reward_tile_id: 273  # Tile ID for reward location
-learning_start_tile_id: 145  # Starting tile for learning sessions
-
-# Analysis metrics
 analyze:
   metrics:
     time_to_reward: 
       func_name: 'time_a_to_b'
       args: 
-        a: 145  # learning_start_tile_id
-        b: 273  # reward_tile_id
+        a: 145
+        b: 273
     
     velocity_to_reward:
       func_name: 'velocity_a_to_b'
@@ -133,92 +59,7 @@ analyze:
     
     exploration_percentage:
       func_name: 'exploration_percentage'
-    
-    topological_distance_to_reward:
-      func_name: 'num_nodes_in_path'
-      args:
-        a: 145
-        b: 273
-        min_frame_rep: 5
-    
-    exploration_to_reward:
-      func_name: 'num_nodes_in_path'
-      args:
-        a: 145
-        b: 273
-        mode: 'exploration'
-    
-    eureka_path_length:
-      func_name: 'shortest_path_from_a_to_b'
-      args:
-        a: 145
-        b: 273
-        levels: [5, 6]
-        strikes: 2
 
   save_as_csv: true
   save_as_pkl: true
   save_raw_data_as_pkl: true
-
-# Visualization settings (legacy)
-visualization:
-  show_visualization: true
-  record_visualization: false
-  fps: null  # Use original video FPS
-  resize: [800, 450]
-  
-  draw_map:
-    show: true
-    method: 'on_top'
-    frame_location: 'bottom_right'
-  
-  draw_tree:
-    show: false  # Tree visualization is computationally expensive
-    resize_factor: 1.0
-    method: 'side_by_side'
-    show_tree_only: false
-
-# Plugin-based visualizations
-visualizations:
-  pipeline:
-    output_name: keypoints_map_combined
-    stages:
-      - plugin: keypoint_visualizer
-        config:
-          bodyparts: 'all'
-          point_size: 5
-          point_thickness: -1
-          point_colors:
-            Nose: [0, 255, 0]  # Green
-            Midline_top: [255, 0, 0]  # Red
-            Midline_middle: [0, 0, 255]  # Blue
-            Tail_base: [255, 255, 0]  # Yellow
-          default_color: [0, 255, 0]
-          likelihood_threshold: 0.3
-          show_labels: false
-          file_requirements:
-            video_file: '.*\.(mp4|avi|mov)$'
-      - plugin: map_visualizer
-        config:
-          overlay_position: bottom_right
-          overlay_size: 0.3
-          overlay_opacity: 0.7
-          current_tile_color: [255, 0, 0]  # Red
-          visited_tile_color: [0, 255, 0]  # Green
-          visited_tile_opacity: 0.3
-          show_visited_tiles: true  # Set to false to disable green trail of visited tiles
-          show_tile_id: true
-          tile_id_font_scale: 1.0
-          tile_id_color: [0, 0, 255]  # Blue
-          file_requirements:
-            video_file: '.*\.(mp4|avi|mov)$'
-      - plugin: text_visualizer
-        config:
-          columns: ["tile_id"]
-          position: "top_right"
-          text_color: [0, 255, 255]  # Cyan
-          font_scale: 1.0
-          decimal_places: 0
-          background_opacity: 0.3
-          file_requirements:
-            video_file: '.*\.(mp4|avi|mov)$'
