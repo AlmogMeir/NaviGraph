@@ -1,4 +1,4 @@
-verbose: true
+log_level: info
 experiment_path: .
 experiment_output_path: "{PROJECT_ROOT}/output"
 system_running_mode: 'analyze'
