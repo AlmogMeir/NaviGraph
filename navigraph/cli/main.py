@@ -823,10 +823,11 @@ def setup_calibration(config_path: Path):
         config = OmegaConf.load(config_path)
         config = process_config_path(config_path, OmegaConf.to_container(config))
         
-        # Get map path from config
-        map_path = config.get('map_path')
+        # Get map path from config (check setup section first, then root for backward compatibility)
+        setup_config = config.get('setup', {})
+        map_path = setup_config.get('map_path') or config.get('map_path')
         if not map_path:
-            click.echo("Error: map_path not found in config", err=True)
+            click.echo("Error: map_path not found in config. Add it to the setup section or root level.", err=True)
             sys.exit(1)
         
         # Resolve map path relative to config directory
@@ -835,87 +836,57 @@ def setup_calibration(config_path: Path):
         
         click.echo(f"🗺️  Map image: {map_path}")
         
+        # Get spatial image for calibration (from setup section)
+        setup_config = config.get('setup', {})
+        spatial_image_path = setup_config.get('spatial_image_for_calibration')
+        
+        if not spatial_image_path:
+            click.echo("Error: spatial_image_for_calibration not found in setup section.", err=True)
+            click.echo("Add it to config: setup.spatial_image_for_calibration: /path/to/video/or/image", err=True)
+            sys.exit(1)
+        
+        # Resolve spatial image path relative to config directory
+        if not Path(spatial_image_path).is_absolute():
+            spatial_image_path = Path(config['_config_dir']) / spatial_image_path
+        
+        click.echo(f"📹 Spatial source: {spatial_image_path}")
+        
         # Get calibration settings
         calib_params = config.get('calibrator_parameters', {})
-        calibration_type = calib_params.get('registration_method', 'homography&ransac')
+        method = calib_params.get('registration_method', 'homography_ransac')
         
-        click.echo(f"🎯 Method: {calibration_type}")
-        click.echo(f"🎥 Setting up camera calibration")
+        # Convert legacy method name
+        if method == 'homography&ransac':
+            method = 'homography_ransac'
         
-        # Import calibration modules
-        import cv2
-        import numpy as np
-        import pickle
+        min_points = calib_params.get('num_calibration_points', 4)
         
-        # Load map image
-        map_array = cv2.imread(str(map_path))
-        if map_array is None:
-            click.echo(f"❌ Failed to load map image: {map_path}", err=True)
-            sys.exit(1)
+        click.echo(f"🎯 Method: {method}")
+        click.echo(f"🎯 Minimum points: {min_points}")
         
-        # Camera index from config (if available)
-        camera_index = calib_params.get('camera_index', 0)
+        # Import and run interactive calibration
+        from ..core.calibration import InteractiveCalibrator
         
-        # Open camera
-        cap = cv2.VideoCapture(camera_index)
-        if not cap.isOpened():
-            click.echo(f"❌ Failed to open camera {camera_index}", err=True)
-            sys.exit(1)
+        calibrator = InteractiveCalibrator()
         
-        click.echo("📹 Camera opened successfully")
+        # Run calibration
+        calibration_result = calibrator.calibrate_camera_to_map(
+            camera_source=spatial_image_path,
+            map_image_path=map_path,
+            method=method,
+            min_points=min_points,
+            show_preview=True
+        )
         
-        # Calibration points
-        num_points = calib_params.get('num_calibration_points', 4)
-        
-        click.echo(f"🎯 Corner-based calibration with {num_points} points")
-        click.echo("📝 Instructions:")
-        click.echo("   1. Click corresponding points on camera view and map")
-        click.echo("   2. Select easily identifiable landmarks")
-        click.echo("   3. Press 'q' when done")
-        
-        # Collect calibration points
-        camera_points = []
-        map_points = []
-        
-        # Simple calibration interface (placeholder)
-        click.echo("⚠️  Full calibration GUI not yet fully implemented")
-        click.echo("💡 Using placeholder calibration for now")
-        
-        # Create calibration data
-        calibration_data = {
-            'type': calibration_type,
-            'camera_index': camera_index,
-            'camera_points': camera_points,
-            'map_points': map_points,
-            'transform_matrix': np.eye(3),  # Identity for now
-            'timestamp': __import__('datetime').datetime.now().isoformat()
-        }
-        
-        # Release camera
-        cap.release()
-        
-        # Get output path from config
-        output_dir = calib_params.get('path_to_save_calibration_files', './resources')
-        if not Path(output_dir).is_absolute():
-            output_dir = Path(config['_config_dir']) / output_dir
-        
-        output_dir = Path(output_dir)
+        # Determine output directory (save to resources by default)
+        output_dir = Path(config['_config_dir']) / 'resources'
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        output_path = output_dir / 'calibration.pkl'
+        # Save transformation matrix
+        matrix_path = output_dir / 'transform_matrix.npy'
+        calibration_result.save(matrix_path)
         
-        # Save calibration
-        with open(output_path, 'wb') as f:
-            pickle.dump(calibration_data, f)
-        click.echo(f"💾 Calibration saved to: {output_path}")
-        
-        # Also save transform matrix separately if configured
-        if calib_params.get('save_transform_matrix', True):
-            matrix_path = output_dir / 'transform_matrix.npy'
-            np.save(matrix_path, calibration_data['transform_matrix'])
-            click.echo(f"💾 Transform matrix saved to: {matrix_path}")
-        
-        click.echo("✅ Calibration setup complete")
+        click.echo("✅ Interactive calibration completed successfully!")
         
     except Exception as e:
         click.echo(f"❌ Calibration failed: {str(e)}", err=True)
