@@ -5,11 +5,13 @@ between camera view and map coordinates through point-based calibration.
 """
 
 from .interactive_calibrator import InteractiveCalibrator
+from .calibration_tester import CalibrationTester
 from .point_selector import PointSelector, Point
 from .transform_calculator import TransformCalculator, TransformMethod, CalibrationResult
 
 __all__ = [
     "InteractiveCalibrator",
+    "CalibrationTester",
     "PointSelector", 
     "Point",
     "TransformCalculator",

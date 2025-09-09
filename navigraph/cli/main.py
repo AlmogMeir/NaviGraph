@@ -798,7 +798,8 @@ def setup_graph(config_path: Path):
 
 @setup.command('calibration')
 @click.argument('config_path', type=click.Path(exists=True, path_type=Path))
-def setup_calibration(config_path: Path):
+@click.option("--test", is_flag=True, help="Test existing calibration instead of creating new one")
+def setup_calibration(config_path: Path, test: bool):
     """Setup camera calibration for spatial coordinate transformation.
     
     Launch interactive calibration tool to establish correspondence between
@@ -861,32 +862,70 @@ def setup_calibration(config_path: Path):
         
         min_points = calib_params.get('num_calibration_points', 4)
         
-        click.echo(f"🎯 Method: {method}")
-        click.echo(f"🎯 Minimum points: {min_points}")
-        
-        # Import and run interactive calibration
-        from ..core.calibration import InteractiveCalibrator
-        
-        calibrator = InteractiveCalibrator()
-        
-        # Run calibration
-        calibration_result = calibrator.calibrate_camera_to_map(
-            camera_source=spatial_image_path,
-            map_image_path=map_path,
-            method=method,
-            min_points=min_points,
-            show_preview=True
-        )
-        
-        # Determine output directory (save to resources by default)
-        output_dir = Path(config['_config_dir']) / 'resources'
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save transformation matrix
-        matrix_path = output_dir / 'transform_matrix.npy'
-        calibration_result.save(matrix_path)
-        
-        click.echo("✅ Interactive calibration completed successfully!")
+        if test:
+            # Test mode - validate existing calibration
+            click.echo("🧪 Testing existing calibration matrix")
+            
+            # Get calibration matrix path from config
+            setup_config = config.get('setup', {})
+            calibration_matrix_path = setup_config.get('calibration_matrix')
+            
+            if not calibration_matrix_path:
+                # Default to resources directory
+                calibration_matrix_path = './resources/transform_matrix.npy'
+            
+            # Resolve relative to config directory
+            if not Path(calibration_matrix_path).is_absolute():
+                calibration_matrix_path = Path(config['_config_dir']) / calibration_matrix_path
+            
+            # Check if calibration matrix exists
+            if not Path(calibration_matrix_path).exists():
+                click.echo(f"❌ Calibration matrix not found: {calibration_matrix_path}", err=True)
+                click.echo("💡 Run calibration without --test to create one first", err=True)
+                sys.exit(1)
+            
+            click.echo(f"📊 Testing calibration: {calibration_matrix_path}")
+            
+            # Import and run calibration tester
+            from ..core.calibration import CalibrationTester
+            
+            tester = CalibrationTester()
+            tester.test_calibration(
+                spatial_image_path=spatial_image_path,
+                map_image_path=map_path,
+                calibration_matrix_path=calibration_matrix_path
+            )
+            
+            click.echo("✅ Calibration test completed")
+            
+        else:
+            # Create mode - interactive calibration
+            click.echo(f"🎯 Method: {method}")
+            click.echo(f"🎯 Minimum points: {min_points}")
+            
+            # Import and run interactive calibration
+            from ..core.calibration import InteractiveCalibrator
+            
+            calibrator = InteractiveCalibrator()
+            
+            # Run calibration
+            calibration_result = calibrator.calibrate_camera_to_map(
+                camera_source=spatial_image_path,
+                map_image_path=map_path,
+                method=method,
+                min_points=min_points,
+                show_preview=True
+            )
+            
+            # Determine output directory (save to resources by default)
+            output_dir = Path(config['_config_dir']) / 'resources'
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save transformation matrix
+            matrix_path = output_dir / 'transform_matrix.npy'
+            calibration_result.save(matrix_path)
+            
+            click.echo("✅ Interactive calibration completed successfully!")
         
     except Exception as e:
         click.echo(f"❌ Calibration failed: {str(e)}", err=True)

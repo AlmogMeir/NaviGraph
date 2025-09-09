@@ -1,20 +1,20 @@
 """Map overlay visualizer for NaviGraph.
 
-Overlays maze map on video frames with current position and visited tiles.
+General-purpose visualizer that displays bodypart positions and trajectories on a map image.
 """
 
 import numpy as np
 import cv2
 import pandas as pd
-from typing import Dict, Any, List, Tuple, Optional, Set
-from pathlib import Path
+from typing import Dict, Any, List, Tuple, Optional
+from collections import deque
 
 from ..core.registry import register_visualizer
 
 
 @register_visualizer("map_overlay")
 def visualize_map_overlay(frame: np.ndarray, frame_data: pd.Series, shared_resources: Dict[str, Any], **config) -> np.ndarray:
-    """Overlay map image on video frame with position indicators.
+    """Overlay map image on video frame with bodypart positions and trajectories.
     
     Args:
         frame: Input video frame (H, W, 3)
@@ -23,17 +23,26 @@ def visualize_map_overlay(frame: np.ndarray, frame_data: pd.Series, shared_resou
         **config: Visualization configuration
         
     Config:
+        # Map display
         position: 'bottom_right', 'bottom_left', 'top_right', 'top_left', 'side_by_side'
         size: Scale factor for overlay (0.1 to 1.0) when not side_by_side
-        opacity: Map transparency (0.0 to 1.0, default: 0.7)
-        highlight_current: Show current tile position (default: True)
-        show_visited: Show trail of visited tiles (default: True)
-        current_tile_color: Color for current tile [B,G,R] (default: [0, 0, 255] red)
-        visited_tile_color: Color for visited tiles [B,G,R] (default: [0, 255, 0] green)  
-        visited_opacity: Opacity for visited tiles (default: 0.3)
-        show_tile_ids: Show tile ID numbers (default: False)
-        tile_id_font_scale: Font size for tile IDs (default: 0.5)
-        tile_id_color: Color for tile ID text [B,G,R] (default: [255, 255, 255] white)
+        opacity: Map transparency (0.0 to 1.0, default: 0.8)
+        
+        # Bodyparts to show on map  
+        bodyparts: List of bodypart names or 'all' (default: ['Nose'])
+        colors: Dict mapping bodypart names to [B,G,R] colors
+        default_color: Default color for bodyparts not in colors dict [B,G,R]
+        radius: Circle radius for bodypart positions (default: 5)
+        thickness: Circle thickness, -1 for filled (default: -1)
+        likelihood_threshold: Skip bodyparts below this likelihood (default: None for no filtering)
+        
+        # Trajectory settings
+        show_trajectory: Whether to show movement trails (default: True)
+        trail_length: Maximum number of trail points per bodypart (default: 100)
+        fade_trail: Whether to fade older trail points (default: True)  
+        line_thickness: Thickness for trajectory lines (default: 2)
+        trail_color: Color for trajectory lines [B,G,R] (default: same as bodypart)
+        fade_to_color: Color to fade trail to [B,G,R] (default: [100, 100, 100])
         
     Returns:
         Frame with map overlay applied
@@ -46,69 +55,132 @@ def visualize_map_overlay(frame: np.ndarray, frame_data: pd.Series, shared_resou
     if map_image is None:
         return frame
         
-    # Configuration
+    # Configuration - Basic display
     position = config.get('position', 'bottom_right')
-    size = config.get('size', 0.3)
-    opacity = config.get('opacity', 0.7)
-    highlight_current = config.get('highlight_current', True)
-    show_visited = config.get('show_visited', True)
-    current_tile_color = tuple(config.get('current_tile_color', [0, 0, 255]))  # Red
-    visited_tile_color = tuple(config.get('visited_tile_color', [0, 255, 0]))  # Green
-    visited_opacity = config.get('visited_opacity', 0.3)
-    show_tile_ids = config.get('show_tile_ids', False)
-    tile_id_font_scale = config.get('tile_id_font_scale', 0.5)
-    tile_id_color = tuple(config.get('tile_id_color', [255, 255, 255]))  # White
+    size = config.get('size', 0.25)
+    opacity = config.get('opacity', 0.8)
     
-    # Get current position data
-    current_tile_id = frame_data.get('tile_id')
-    pixel_x = frame_data.get('pixel_x')
-    pixel_y = frame_data.get('pixel_y')
+    # Configuration - Bodyparts
+    bodyparts = config.get('bodyparts', ['Nose'])
+    colors = config.get('colors', {})
+    default_color = config.get('default_color', [255, 255, 255])  # White
+    radius = config.get('radius', 5)
+    thickness = config.get('thickness', -1)
+    likelihood_threshold = config.get('likelihood_threshold', None)
+    
+    # Configuration - Trajectory
+    show_trajectory = config.get('show_trajectory', True)
+    trail_length = config.get('trail_length', 100)
+    fade_trail = config.get('fade_trail', True)
+    line_thickness = config.get('line_thickness', 2)
+    trail_color = config.get('trail_color', None)  # Use bodypart color if None
+    fade_to_color = tuple(config.get('fade_to_color', [100, 100, 100]))
     
     # Make a copy of the map image for drawing
     map_copy = map_image.copy()
     
-    # Get map metadata for tile drawing
-    map_metadata = shared_resources.get('map_metadata', {})
-    segment_length = map_metadata.get('segment_length', 86)
-    origin = map_metadata.get('origin', (47, 40))
-    grid_size = map_metadata.get('grid_size', (17, 17))
+    # Find available bodyparts with map coordinates
+    available_bodyparts = []
+    for col in frame_data.index:
+        if col.endswith('_map_x'):
+            bodypart = col[:-6]  # Remove '_map_x' suffix
+            if f"{bodypart}_map_y" in frame_data.index:
+                available_bodyparts.append(bodypart)
     
-    # Draw visited tiles if enabled (track visited tiles in config state)
-    if show_visited:
-        visited_tiles = config.get('_visited_tiles', set())
-        if not isinstance(visited_tiles, set):
-            visited_tiles = set()
-            
-        # Add current tile to visited
-        if pd.notna(current_tile_id):
-            visited_tiles.add(int(current_tile_id))
-            config['_visited_tiles'] = visited_tiles  # Store back in config
-            
-        # Draw all visited tiles
-        for tile_id in visited_tiles:
-            if tile_id != current_tile_id:  # Don't draw current tile here
-                tile_rect = _get_tile_rectangle(tile_id, segment_length, origin, grid_size)
-                if tile_rect:
-                    overlay = map_copy.copy()
-                    cv2.rectangle(overlay, tile_rect[0], tile_rect[1], visited_tile_color, -1)
-                    cv2.addWeighted(map_copy, 1 - visited_opacity, overlay, visited_opacity, 0, map_copy)
+    # Filter bodyparts based on config
+    if bodyparts == 'all' or bodyparts is None:
+        target_bodyparts = available_bodyparts
+    elif isinstance(bodyparts, list):
+        target_bodyparts = [bp for bp in bodyparts if bp in available_bodyparts]
+    else:
+        target_bodyparts = [bodyparts] if bodyparts in available_bodyparts else []
     
-    # Draw current tile if available
-    if highlight_current and pd.notna(current_tile_id):
-        tile_rect = _get_tile_rectangle(int(current_tile_id), segment_length, origin, grid_size)
-        if tile_rect:
-            cv2.rectangle(map_copy, tile_rect[0], tile_rect[1], current_tile_color, 3)
-            
-            # Draw tile ID if requested
-            if show_tile_ids:
-                text_pos = (tile_rect[0][0] + 5, tile_rect[0][1] + 20)
-                cv2.putText(map_copy, str(int(current_tile_id)), text_pos, 
-                           cv2.FONT_HERSHEY_SIMPLEX, tile_id_font_scale, tile_id_color, 1, cv2.LINE_AA)
+    # Initialize trail storage if not exists
+    if '_trail_data' not in config:
+        config['_trail_data'] = {}
     
-    # Draw current pixel position if available
-    if pd.notna(pixel_x) and pd.notna(pixel_y):
-        pixel_pos = (int(pixel_x), int(pixel_y))
-        cv2.circle(map_copy, pixel_pos, 3, current_tile_color, -1)
+    trail_data = config['_trail_data']
+    
+    # Process each bodypart
+    for bodypart in target_bodyparts:
+        x_col = f"{bodypart}_map_x"
+        y_col = f"{bodypart}_map_y"
+        likelihood_col = f"{bodypart}_likelihood"
+        
+        # Get coordinates and likelihood
+        x = frame_data.get(x_col)
+        y = frame_data.get(y_col)
+        likelihood = frame_data.get(likelihood_col)
+        
+        # Skip if missing data
+        if pd.isna(x) or pd.isna(y):
+            continue
+            
+        # Check likelihood threshold if specified
+        if likelihood_threshold is not None and pd.notna(likelihood):
+            if likelihood < likelihood_threshold:
+                continue
+        
+        # Check if coordinates are within map bounds
+        map_h, map_w = map_copy.shape[:2]
+        is_in_bounds = (0 <= x < map_w and 0 <= y < map_h)
+        
+        if not is_in_bounds:
+            # Skip out-of-bounds points silently
+            continue
+            
+        # Convert to int coordinates
+        current_pos = (int(x), int(y))
+        
+        # Get color for this bodypart
+        bodypart_color = colors.get(bodypart, default_color)
+        if isinstance(bodypart_color, list) and len(bodypart_color) == 3:
+            bodypart_color = tuple(bodypart_color)
+        
+        # Handle trajectory - add point to trail first, then draw
+        if show_trajectory:
+            # Initialize trail for this bodypart if not exists
+            if bodypart not in trail_data:
+                trail_data[bodypart] = deque(maxlen=trail_length)
+            
+            bodypart_trail = trail_data[bodypart]
+            
+            # Add current position to trail
+            bodypart_trail.append(current_pos)
+            
+            # Debug: Log trail info
+            if len(bodypart_trail) > 1:
+                print(f"DEBUG: {bodypart} trail has {len(bodypart_trail)} points, drawing with thickness {line_thickness}")
+            
+            # Draw trail if we have multiple points
+            if len(bodypart_trail) > 1:
+                trail_points = list(bodypart_trail)
+                
+                # Use bodypart color for trail if trail_color not specified
+                current_trail_color = bodypart_color if trail_color is None else tuple(trail_color)
+                
+                if fade_trail:
+                    # Draw trail with fading effect
+                    for i in range(len(trail_points) - 1):
+                        # Calculate fade factor (newer points are more opaque)
+                        fade_factor = (i + 1) / len(trail_points)
+                        
+                        # Interpolate color
+                        color = _interpolate_color(fade_to_color, current_trail_color, fade_factor)
+                        
+                        # Draw line segment
+                        cv2.line(map_copy, trail_points[i], trail_points[i + 1], color, line_thickness)
+                        print(f"DEBUG: Drawing faded line segment {i} with color {color} and thickness {line_thickness}")
+                else:
+                    # Draw trail with uniform color
+                    if len(trail_points) >= 2:
+                        # Draw as connected lines instead of polylines for debugging
+                        for i in range(len(trail_points) - 1):
+                            cv2.line(map_copy, trail_points[i], trail_points[i + 1], current_trail_color, line_thickness)
+                        print(f"DEBUG: Drawing uniform trail with {len(trail_points)} points, color {current_trail_color}, thickness {line_thickness}")
+        
+        # Draw current position
+        cv2.circle(map_copy, current_pos, radius, bodypart_color, thickness)
     
     # Apply overlay based on position
     if position == 'side_by_side':
@@ -168,32 +240,23 @@ def visualize_map_overlay(frame: np.ndarray, frame_data: pd.Series, shared_resou
         return frame
 
 
-def _get_tile_rectangle(tile_id: int, segment_length: int, origin: Tuple[int, int], grid_size: Tuple[int, int]) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
-    """Get rectangle coordinates for a tile ID.
+def _interpolate_color(color1: Tuple[int, int, int], color2: Tuple[int, int, int], factor: float) -> Tuple[int, int, int]:
+    """Interpolate between two colors.
     
     Args:
-        tile_id: Tile identifier
-        segment_length: Pixels per segment
-        origin: Top-left corner of grid
-        grid_size: Grid dimensions (width, height)
+        color1: Start color [B, G, R]
+        color2: End color [B, G, R]
+        factor: Interpolation factor (0.0 to 1.0)
         
     Returns:
-        ((x1, y1), (x2, y2)) rectangle coordinates or None if invalid
+        Interpolated color [B, G, R]
     """
-    grid_w, grid_h = grid_size
+    factor = max(0.0, min(1.0, factor))  # Clamp to [0, 1]
     
-    # Convert tile_id to grid coordinates
-    # Assuming tile_id maps to row-major order
-    row = tile_id // grid_w
-    col = tile_id % grid_w
+    b = int(color1[0] + (color2[0] - color1[0]) * factor)
+    g = int(color1[1] + (color2[1] - color1[1]) * factor)
+    r = int(color1[2] + (color2[2] - color1[2]) * factor)
     
-    if row >= grid_h or col >= grid_w or row < 0 or col < 0:
-        return None
-        
-    # Calculate pixel coordinates
-    x1 = origin[0] + col * segment_length
-    y1 = origin[1] + row * segment_length
-    x2 = x1 + segment_length
-    y2 = y1 + segment_length
-    
-    return ((x1, y1), (x2, y2))
+    return (b, g, r)
+
+

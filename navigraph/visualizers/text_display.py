@@ -7,8 +7,12 @@ import numpy as np
 import cv2
 import pandas as pd
 from typing import Dict, Any, List, Tuple, Union
+from loguru import logger
 
 from ..core.registry import register_visualizer
+
+# Module-level variable to track what's been logged (persists across function calls)
+_logged_missing_columns = set()
 
 
 @register_visualizer("text_display")
@@ -31,10 +35,11 @@ def visualize_text_display(frame: np.ndarray, frame_data: pd.Series, shared_reso
         thickness: Text line thickness (default: 2)
         
         # Formatting
+        show_column_names: Whether to show column names before values (default: True)
         decimal_places: Number of decimal places for float values (default: 2)
         prefix: Text prefix before values (default: "")
         suffix: Text suffix after values (default: "")
-        separator: Separator between multiple columns (default: " | ")
+        separator: Separator between multiple columns when layout='horizontal' (default: " | ")
         
         # Background
         background: Whether to draw background rectangle (default: True)
@@ -66,6 +71,7 @@ def visualize_text_display(frame: np.ndarray, frame_data: pd.Series, shared_reso
     thickness = config.get('thickness', 2)
     
     # Formatting
+    show_column_names = config.get('show_column_names', True)
     decimal_places = config.get('decimal_places', 2)
     prefix = config.get('prefix', "")
     suffix = config.get('suffix', "")
@@ -81,29 +87,72 @@ def visualize_text_display(frame: np.ndarray, frame_data: pd.Series, shared_reso
     layout = config.get('layout', 'horizontal')
     line_spacing = config.get('line_spacing', 5)
     
+    # Check for missing columns and log helpful information (only once per session)
+    missing_columns = [col for col in columns if col not in frame_data.index]
+    
+    # Create a unique key for this set of missing columns
+    missing_key = tuple(sorted(missing_columns))
+    
+    # Log missing columns with suggestions (only once per unique set of missing columns)
+    if missing_columns and missing_key not in _logged_missing_columns:
+        logger.warning(f"[TEXT_DISPLAY] Missing columns: {missing_columns}")
+        
+        # Only show available columns if there are missing ones
+        available_columns = list(frame_data.index)
+        logger.info(f"[TEXT_DISPLAY] Available columns ({len(available_columns)}): {available_columns}")
+        
+        # Show suggestions for similar column names
+        for missing_col in missing_columns:
+            suggestions = []
+            missing_lower = missing_col.lower()
+            
+            # Find columns that contain the missing column name or vice versa
+            for avail_col in available_columns:
+                avail_lower = avail_col.lower()
+                if (missing_lower in avail_lower or avail_lower in missing_lower or 
+                    any(word in avail_lower for word in missing_lower.split('_'))):
+                    suggestions.append(avail_col)
+            
+            if suggestions:
+                logger.info(f"[TEXT_DISPLAY] Suggestions for '{missing_col}': {suggestions[:5]}")  # Show top 5
+        
+        # Mark this set of missing columns as logged
+        _logged_missing_columns.add(missing_key)
+    
     # Collect text values
     text_values = []
     for col in columns:
         if col in frame_data.index:
             value = frame_data[col]
+            
+            # Format the value
             if pd.isna(value):
-                text_values.append("N/A")
+                formatted_value = "N/A"
             elif isinstance(value, (int, np.integer)):
-                text_values.append(str(int(value)))
+                formatted_value = str(int(value))
             elif isinstance(value, (float, np.floating)):
                 if decimal_places == 0:
-                    text_values.append(str(int(value)))
+                    formatted_value = str(int(value))
                 else:
-                    text_values.append(f"{value:.{decimal_places}f}")
+                    formatted_value = f"{value:.{decimal_places}f}"
             else:
-                text_values.append(str(value))
+                formatted_value = str(value)
+            
+            # Add column name if requested
+            if show_column_names:
+                text_values.append(f"{col}: {formatted_value}")
+            else:
+                text_values.append(formatted_value)
         else:
-            text_values.append(f"{col}: N/A")
+            if show_column_names:
+                text_values.append(f"MISSING: {col}")
+            else:
+                text_values.append("MISSING")
     
     if not text_values:
         return frame
         
-    # Format text strings
+    # Format text strings based on layout
     if layout == 'horizontal':
         display_text = prefix + separator.join(text_values) + suffix
         text_lines = [display_text]
