@@ -149,7 +149,7 @@ class SessionVisualizer:
             self.logger.info(f"Output: {output_file} ({width}x{height} @ {fps}fps)")
             
             if show_realtime:
-                self.logger.info("🎬 Real-time visualization enabled - press 'q' to quit, space to pause/resume")
+                self.logger.info("🎬 Real-time visualization enabled - press 'q' to quit, space or 'p' to pause/resume")
                 window_name = f"NaviGraph - {output_name}"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
                 cv2.resizeWindow(window_name, width//2, height//2)  # Display at half size for performance
@@ -195,9 +195,10 @@ class SessionVisualizer:
                     # Handle pause/resume and quit controls
                     while paused:
                         key = cv2.waitKey(30) & 0xFF
-                        if key == ord(' '):  # Space to resume
+                        if key == ord(' ') or key == ord('p') or key == ord('P'):  # Space or P to resume
                             paused = False
-                        elif key == ord('q'):  # Quit
+                            self.logger.info("Resumed")
+                        elif key == ord('q') or key == ord('Q'):  # Quit
                             self.logger.info("User requested quit")
                             break
                     
@@ -207,15 +208,15 @@ class SessionVisualizer:
                         
                         # Handle key presses (non-blocking)
                         key = cv2.waitKey(1) & 0xFF
-                        if key == ord('q'):  # Quit
+                        if key == ord('q') or key == ord('Q'):  # Quit
                             self.logger.info("User requested quit - finalizing video")
                             break
-                        elif key == ord(' '):  # Pause
+                        elif key == ord(' ') or key == ord('p') or key == ord('P'):  # Pause
                             paused = True
-                            self.logger.info("Paused - press space to resume")
+                            self.logger.info("Paused - press space or 'p' to resume")
                 
                 # Check if user quit during pause
-                if show_realtime and paused and 'key' in locals() and key == ord('q'):
+                if show_realtime and paused and 'key' in locals() and (key == ord('q') or key == ord('Q')):
                     break
                 
                 # Write processed frame

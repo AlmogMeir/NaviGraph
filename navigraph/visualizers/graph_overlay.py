@@ -8,8 +8,79 @@ import numpy as np
 import cv2
 import pandas as pd
 from typing import Dict, Any, List, Tuple, Optional, Set, Union
+import hashlib
+from collections import OrderedDict
+from loguru import logger
 
 from ..core.registry import register_visualizer
+
+# Module-level cache for graph visualizations (LRU implementation)
+_graph_cache = OrderedDict()  # Key: cache_key, Value: graph_image
+_cache_max_size = 20  # Keep last 20 unique visualizations
+_cache_stats = {'hits': 0, 'misses': 0}
+
+
+def _get_cache_key(graph_id: int, viz_params: Dict[str, Any]) -> str:
+    """Generate deterministic cache key from graph and parameters."""
+    
+    # Create deterministic string representation of parameters
+    # Sort keys and convert to string to ensure consistency
+    params_str = str(sorted(viz_params.items()))
+    key_str = f"{graph_id}_{params_str}"
+    
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+
+def _get_cached_or_generate(graph, viz_params: Dict[str, Any], cache_size: int = None) -> np.ndarray:
+    """Get visualization from cache or generate new one with LRU management."""
+    
+    global _cache_max_size
+    
+    # Update cache size if specified
+    if cache_size is not None and cache_size != _cache_max_size:
+        _cache_max_size = cache_size
+        # Trim cache if new size is smaller
+        while len(_graph_cache) > _cache_max_size:
+            _graph_cache.popitem(last=False)  # Remove oldest
+    
+    # Create cache key
+    cache_key = _get_cache_key(id(graph), viz_params)
+    
+    # Check cache first
+    if cache_key in _graph_cache:
+        # Cache hit - move to end (most recently used)
+        _graph_cache.move_to_end(cache_key)
+        _cache_stats['hits'] += 1
+        
+        # Log cache stats periodically
+        if (_cache_stats['hits'] + _cache_stats['misses']) % 100 == 0:
+            hit_rate = _cache_stats['hits'] / (_cache_stats['hits'] + _cache_stats['misses']) * 100
+            logger.debug(f"[GRAPH_CACHE] Hit rate: {hit_rate:.1f}% (hits: {_cache_stats['hits']}, misses: {_cache_stats['misses']}, cache_size: {len(_graph_cache)})")
+        
+        return _graph_cache[cache_key]
+    
+    # Cache miss - generate new visualization
+    _cache_stats['misses'] += 1
+    
+    try:
+        graph_image = graph.get_visualization(**viz_params)
+    except Exception as e:
+        # Fall back to default visualization if parameters fail
+        logger.warning(f"[GRAPH_CACHE] Visualization with parameters failed, using defaults: {e}")
+        graph_image = graph.get_visualization()
+    
+    # Add to cache with LRU eviction
+    if len(_graph_cache) >= _cache_max_size:
+        evicted_key, _ = _graph_cache.popitem(last=False)  # Remove oldest
+        logger.debug(f"[GRAPH_CACHE] Evicted visualization (cache full, max_size: {_cache_max_size})")
+    
+    _graph_cache[cache_key] = graph_image
+    
+    # Log first few cache operations
+    if _cache_stats['misses'] <= 5:
+        logger.info(f"[GRAPH_CACHE] Generated new visualization (cache size: {len(_graph_cache)}/{_cache_max_size})")
+    
+    return graph_image
 
 
 @register_visualizer("graph_overlay")
@@ -41,6 +112,13 @@ def visualize_graph_overlay(frame: np.ndarray, frame_data: pd.Series, shared_res
         font_family: Font family - 'sans-serif', 'serif', 'monospace' (default: null)
         figsize: Figure size as [width, height] (default: null)
         
+        # Performance settings
+        cache_size: Maximum number of graph visualizations to cache (default: 20)
+        
+        # Location source settings
+        node_column: Column name to use for current node position (default: auto-detect)
+        edge_column: Column name to use for current edge position (default: auto-detect)
+        
         # Current node/edge highlighting (passed to get_visualization)
         highlight_node_size: Size for current node (default: 500)
         highlight_node_color: Color for current node (default: 'red')
@@ -58,22 +136,32 @@ def visualize_graph_overlay(frame: np.ndarray, frame_data: pd.Series, shared_res
     if graph is None:
         return frame
     
-    # Get current position data - try bodypart-specific columns first
-    current_node_id = frame_data.get('graph_node_id')
-    current_edge_id = frame_data.get('graph_edge_id')
+    # Get current position data from configured columns or auto-detect
+    node_column = config.get('node_column')
+    edge_column = config.get('edge_column')
     
-    # If generic columns don't exist, try bodypart-specific ones (e.g., Nose_graph_node)
-    if pd.isna(current_node_id):
-        for col in frame_data.index:
-            if col.endswith('_graph_node') and pd.notna(frame_data.get(col)):
-                current_node_id = frame_data.get(col)
-                break
+    # Use specific columns if configured
+    if node_column:
+        current_node_id = frame_data.get(node_column)
+    else:
+        # Auto-detect: try generic first, then bodypart-specific
+        current_node_id = frame_data.get('graph_node_id')
+        if pd.isna(current_node_id):
+            for col in frame_data.index:
+                if col.endswith('_graph_node') and pd.notna(frame_data.get(col)):
+                    current_node_id = frame_data.get(col)
+                    break
     
-    if pd.isna(current_edge_id):
-        for col in frame_data.index:
-            if col.endswith('_graph_edge') and pd.notna(frame_data.get(col)):
-                current_edge_id = frame_data.get(col)
-                break
+    if edge_column:
+        current_edge_id = frame_data.get(edge_column)
+    else:
+        # Auto-detect: try generic first, then bodypart-specific
+        current_edge_id = frame_data.get('graph_edge_id')
+        if pd.isna(current_edge_id):
+            for col in frame_data.index:
+                if col.endswith('_graph_edge') and pd.notna(frame_data.get(col)):
+                    current_edge_id = frame_data.get(col)
+                    break
     
     # Apply graph overlay
     return _apply_graph_overlay(frame, graph, current_node_id, current_edge_id, config)
@@ -91,12 +179,11 @@ def _apply_graph_overlay(frame: np.ndarray, graph, current_node_id, current_edge
     # Build visualization parameters
     viz_params = _build_visualization_params(graph, current_node_id, current_edge_id, config)
     
-    # Get graph visualization image
-    try:
-        graph_image = graph.get_visualization(**viz_params)
-    except Exception as e:
-        # Fall back to default visualization if highlighting fails
-        graph_image = graph.get_visualization()
+    # Get cache size configuration
+    cache_size = config.get('cache_size', 20)
+    
+    # Get graph visualization image from cache or generate new one
+    graph_image = _get_cached_or_generate(graph, viz_params, cache_size)
     
     if graph_image is None:
         return frame

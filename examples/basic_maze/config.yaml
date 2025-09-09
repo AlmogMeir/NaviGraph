@@ -83,11 +83,11 @@ visualizations:
       config:
         bodyparts: null  # null = all bodyparts
         colors:
-          Nose: [0, 255, 0]      # Green
+          Nose: [0, 0, 255]      # Red
           Tail_base: [255, 0, 0] # Blue
         radius: 6
         show_labels: false
-        likelihood_threshold: null  # null = plot regardless of likelihood
+        likelihood_threshold: 0.8  # null = plot regardless of likelihood
 
     - name: map_overlay_display
       type: map_overlay
@@ -105,7 +105,7 @@ visualizations:
         thickness: 15
         
         # Likelihood filtering (optional)
-        likelihood_threshold: null  # null = no filtering, 0.5 = only show high confidence
+        likelihood_threshold: 0.8  # null = no filtering, 0.5 = only show high confidence
         
         # Trajectory settings
         show_trajectory: False
@@ -133,6 +133,13 @@ visualizations:
         # font_weight: 'bold'             # Bold labels
         # font_color: 'black'             # Black text
         # figsize: [12, 8]                # Figure size
+        
+        # Performance settings
+        cache_size: 20                  # Cache up to 20 graph visualizations
+        
+        # Location source settings (specify which bodypart to use)
+        node_column: 'Nose_graph_node'  # Use Nose position for node highlighting
+        edge_column: 'Nose_graph_edge'  # Use Nose position for edge highlighting
         
         # Current node/edge highlighting
         highlight_node_size: 1200
