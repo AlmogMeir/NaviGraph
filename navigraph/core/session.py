@@ -11,7 +11,6 @@ Logger = type(logger)
 
 from .exceptions import NavigraphError
 from .navigraph_plugin import NaviGraphPlugin
-from .session_analyzer import SessionAnalyzer
 from .session_visualizer import SessionVisualizer
 
 
@@ -52,7 +51,6 @@ class Session:
         self._integrated_dataframe: Optional[pd.DataFrame] = None
         
         # Initialize orchestrators (auto-discovery happens when registry module is imported)
-        self.analyzer = SessionAnalyzer(session_configuration)
         self.visualizer = SessionVisualizer(session_configuration)
 
         # Initialize session
@@ -295,26 +293,15 @@ class Session:
         self.logger.info(f"Complete: {len(dataframe.columns)} columns, {len(dataframe)} frames")
         return dataframe
     
-    def run_analyses(self) -> Dict[str, Any]:
-        """Run all configured analyses through SessionAnalyzer.
-        
-        Returns:
-            Dict of analysis results
-        """
-        if self._integrated_dataframe is None:
-            self._integrated_dataframe = self._execute_plugins()
-        
-        return self.analyzer.run_analyses(
-            dataframe=self._integrated_dataframe,
-            shared_resources=self.shared_resources
-        )
     
-    def create_visualization(self, video_path: Optional[str] = None, output_name: Optional[str] = None) -> Optional[str]:
+    def create_visualization(self, video_path: Optional[str] = None, output_name: Optional[str] = None, output_dir: Optional[str] = None, show_realtime: bool = False) -> Optional[str]:
         """Create visualization through SessionVisualizer.
         
         Args:
             video_path: Path to input video (auto-detected if None)
             output_name: Name for output file (defaults to session_id)
+            output_dir: Output directory path (uses config if None)
+            show_realtime: Whether to display frames in real-time during processing
             
         Returns:
             Path to created video or None
@@ -336,5 +323,7 @@ class Session:
             video_path=video_path,
             dataframe=self._integrated_dataframe,
             shared_resources=self.shared_resources,
-            output_name=output_name
+            output_name=output_name,
+            output_dir=output_dir,
+            show_realtime=show_realtime
         )

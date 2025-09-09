@@ -9,10 +9,10 @@ import numpy as np
 from typing import Dict, Any, List
 from pathlib import Path
 
-from ...core.navigraph_plugin import NaviGraphPlugin
-from ...core.exceptions import NavigraphError
-from ...core.registry import register_data_source_plugin
-from ...core.conversion_utils import quaternions_to_euler
+from ..core.navigraph_plugin import NaviGraphPlugin
+from ..core.exceptions import NavigraphError
+from ..core.registry import register_data_source_plugin
+from ..core.conversion_utils import quaternions_to_euler
 
 
 @register_data_source_plugin("head_direction")

@@ -6,8 +6,6 @@ from typing import Set
 
 class SystemMode(Enum):
     """System running modes for experiments."""
-    CALIBRATE = "calibrate"
-    TEST = "test"
     ANALYZE = "analyze"
     VISUALIZE = "visualize"
     

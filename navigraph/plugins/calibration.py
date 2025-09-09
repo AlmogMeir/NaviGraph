@@ -8,9 +8,9 @@ from typing import Dict, Any, List
 from pathlib import Path
 import pandas as pd
 
-from ...core.navigraph_plugin import NaviGraphPlugin
-from ...core.exceptions import NavigraphError
-from ...core.registry import register_data_source_plugin
+from ..core.navigraph_plugin import NaviGraphPlugin
+from ..core.exceptions import NavigraphError
+from ..core.registry import register_data_source_plugin
 
 
 @register_data_source_plugin("calibration")

@@ -25,12 +25,18 @@ from .constants import (
 class ExperimentRunner:
     """Orchestrates experiment execution: discovery, integration, analysis, output."""
     
-    def __init__(self, config: DictConfig):
+    def __init__(self, config: DictConfig, system_modes=None):
         """Initialize experiment runner with configuration.
         
         Args:
             config: Experiment configuration (OmegaConf DictConfig)
+            system_modes: List of SystemMode enums to execute (optional, uses config if not provided)
         """
+        # Configure logging based on config
+        log_level = config.get('log_level', 'info')
+        from .. import configure_logging
+        configure_logging(log_level)
+        
         # Validate configuration (optional for backward compatibility)
         try:
             self.validated_config = validate_config(dict(config))
@@ -41,9 +47,13 @@ class ExperimentRunner:
             self.validated_config = None
         
         self.config = config  # Keep original for backward compatibility
-        self.system_modes = SystemMode.from_string(
-            config.get(ConfigKeys.SYSTEM_MODE, Defaults.RUNNING_MODE)
-        )
+        
+        # Use provided system_modes or default to analyze mode
+        if system_modes is not None:
+            self.system_modes = set(system_modes) if isinstance(system_modes, list) else {system_modes}
+        else:
+            # Default to analyze mode when no system modes provided (backward compatibility)
+            self.system_modes = {SystemMode.ANALYZE}
         
         # Resolve relative paths using config directory
         config_dir = getattr(config, '_config_dir', None)
@@ -151,52 +161,26 @@ class ExperimentRunner:
         Returns:
             List of SessionInfo objects
         """
+        from .file_discovery import FileDiscoveryEngine
+        
         logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.DISCOVERY)} Discovering sessions")
         
         try:
-            sessions = []
+            discovery_engine = FileDiscoveryEngine(str(self.experiment_path), logger)
+            session_folder_names = discovery_engine.discover_session_folders()
             
-            # Look for session subdirectories
-            for item in self.experiment_path.iterdir():
-                if (item.is_dir() and 
-                    not item.name.startswith('.') and 
-                    item.name != Directories.RESOURCES):
-                    sessions.append(SessionInfo(name=item.name, path=item))
+            sessions = [
+                SessionInfo(name=name, path=self.experiment_path / name) 
+                for name in session_folder_names
+            ]
             
-            if sessions:
-                logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.DISCOVERY)} {LogFormats.FOUND} {len(sessions)} sessions")
-            else:
-                # Fallback: Check if experiment_path itself is a session
-                if self._is_session_directory(self.experiment_path):
-                    sessions.append(SessionInfo(
-                        name=self.experiment_path.name,
-                        path=self.experiment_path
-                    ))
-                    logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.DISCOVERY)} {LogFormats.FOUND} direct session in root")
-                else:
-                    logger.warning(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.WARNING)} No sessions found in {self.experiment_path}")
-            
+            logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.DISCOVERY)} {LogFormats.FOUND} {len(sessions)} sessions")
             return sessions
             
         except Exception as e:
             logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} Session discovery {LogFormats.FAILED}: {str(e)}")
             return []
     
-    def _is_session_directory(self, path: Path) -> bool:
-        """Check if directory could be a session (has files or data subdirs)."""
-        if not path.exists() or not path.is_dir():
-            return False
-            
-        # Check for any files
-        has_files = any(p.is_file() for p in path.iterdir())
-        
-        # Check for data directories (non-hidden, non-resources)
-        has_data_dirs = any(
-            p.is_dir() and not p.name.startswith('.') and p.name != Directories.RESOURCES
-            for p in path.iterdir()
-        )
-        
-        return has_files or has_data_dirs
     
     
     def create_sessions(self, sessions: List[SessionInfo]) -> None:
@@ -237,9 +221,28 @@ class ExperimentRunner:
             raise
     
     def run_analysis(self) -> None:
-        """Run analysis on all sessions using analyzer plugins."""
-        logger.warning("Analysis system is being migrated to new architecture")
-        return
+        """Run analysis on all sessions using new analyzer system."""
+        from ..analysis.analyzer import Analyzer
+        from ..analysis import metrics  # Import to register metrics
+        
+        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase='ANALYZE')} Starting analysis pipeline")
+        
+        # Create analyzer with experiment configuration
+        analyzer = Analyzer(dict(self.config))
+        
+        # Create output directory
+        output_dir = self._create_output_directory()
+        
+        # Run complete analysis pipeline
+        results = analyzer.run(self.sessions, output_dir)
+        
+        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase='ANALYZE')} Analysis completed")
+    
+    def _create_output_directory(self) -> Path:
+        """Create output directory for analysis results."""
+        output_dir = self.experiment_folder / "analysis"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
     
     def validate_sessions(self, sessions: List[SessionInfo]) -> ValidationReport:
         """Validate sessions using configured data source plugins.
@@ -304,83 +307,6 @@ class ExperimentRunner:
         
         return report
     
-    def run_calibration(self, sessions: List[SessionInfo]) -> None:
-        """Run calibration mode using calibration plugin.
-        
-        Args:
-            sessions: List of session directories
-        """
-        # Load plugins for calibration
-        from .registry import registry
-        
-        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Starting calibration mode")
-        
-        try:
-            if not sessions:
-                raise ValueError("No sessions found for calibration")
-            
-            # Get calibration plugin to find video
-            calibration_provider_class = registry.get_shared_resource_plugin('calibration_provider')
-            calibrator = calibration_provider_class()
-            
-            # Find first session with video file
-            video_path = None
-            
-            # Look for video data source in config
-            video_pattern = None
-            for ds in self.config.get(ConfigKeys.DATA_SOURCES, []):
-                if ds.get('type') == 'deeplab_cut':  # Assuming video comes from DLC
-                    video_pattern = ds.get('video_pattern', r'.*\.mp4$')
-                    break
-            
-            if not video_pattern:
-                video_pattern = r'.*\.(mp4|avi|mov)$'  # Default video pattern
-            
-            # Find video in sessions
-            for session_info in sessions:
-                files = calibrator.discover_files(session_info.path, video_pattern)
-                if files:
-                    video_path = files[0]
-                    break
-            
-            if not video_path:
-                raise ValueError("No video file found in any session for calibration")
-            
-            # Initialize with basic config for calibration mode
-            basic_config = {
-                'pre_calculated_transform_matrix_path': None,  # We're creating new calibration
-                'transform_matrix': None
-            }
-            calibrator.initialize_resource(basic_config, logger)
-            
-            # Run calibration using plugin
-            transform_matrix = calibrator.find_transform_matrix(
-                str(video_path), 
-                str(self.config.get(ConfigKeys.MAP_PATH, '')),
-                dict(self.config)  # Pass full config for calibrator_parameters
-            )
-            
-            # Update configuration with calibration results
-            matrix_path = calibrator.get_transform_matrix_path()
-            if matrix_path:
-                self.config.calibrator_parameters.pre_calculated_transform_matrix_path = matrix_path
-            
-            logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Calibration {LogFormats.SUCCESS}")
-            
-            # Test calibration if requested
-            if SystemMode.TEST in self.system_modes:
-                logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Testing calibration")
-                calibrator.test_calibration(
-                    str(video_path),
-                    str(self.config.get(ConfigKeys.MAP_PATH, '')),
-                    transform_matrix,
-                    dict(self.config)  # Pass full config for test parameters
-                )
-                logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Calibration test {LogFormats.SUCCESS}")
-            
-        except Exception as e:
-            logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} Calibration {LogFormats.FAILED}: {str(e)}")
-            raise
     
     def run_experiment(self) -> None:
         """Run complete experiment pipeline."""
@@ -399,19 +325,20 @@ class ExperimentRunner:
             validation_report = self.validate_sessions(discovered_sessions)
             if validation_report.invalid_sessions > 0:
                 logger.warning(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.WARNING)} {validation_report.invalid_sessions} invalid sessions")
-                logger.info(validation_report.print_report())
-            
-            # Handle calibration mode
-            if SystemMode.CALIBRATE in self.system_modes:
-                self.run_calibration(discovered_sessions)
-            
-            # Handle test-only mode
-            if SystemMode.TEST in self.system_modes and SystemMode.CALIBRATE not in self.system_modes:
-                self._test_saved_calibration(discovered_sessions)
+                logger.info(validation_report.format_report())
             
             # Create sessions for analysis/visualization
             if SystemMode.ANALYZE in self.system_modes or SystemMode.VISUALIZE in self.system_modes:
                 self.create_sessions(discovered_sessions)
+                
+                # Check if all sessions failed to create
+                if len(self.sessions) == 0 and len(discovered_sessions) > 0:
+                    logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} All {len(discovered_sessions)} sessions failed to initialize")
+                    logger.error("Common causes:")
+                    logger.error("  • Missing graph mapping file - run 'navigraph setup graph config.yaml' to create one")
+                    logger.error("  • Missing data files - ensure session directories contain required data files")  
+                    logger.error("  • Configuration issues - check plugin configurations and file patterns")
+                    return
             
             # Run analysis
             if SystemMode.ANALYZE in self.system_modes:
@@ -487,63 +414,42 @@ class ExperimentRunner:
         except Exception as e:
             logger.warning(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.WARNING)} Failed to save some results: {str(e)}")
     
-    def _test_saved_calibration(self, sessions: List[SessionInfo]) -> None:
-        """Test saved calibration using calibration plugin."""
-        # Load plugins for calibration testing
-        from .registry import registry
-        
-        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Testing saved calibration")
-        
-        try:
-            # Create calibration provider plugin
-            calibration_provider_class = registry.get_shared_resource_plugin('calibration_provider')
-            calibrator = calibration_provider_class()
-            
-            # Find first session with video file
-            video_path = None
-            
-            # Look for video data source in config
-            video_pattern = None
-            for ds in self.config.get(ConfigKeys.DATA_SOURCES, []):
-                if ds.get('type') == 'deeplab_cut':  # Assuming video comes from DLC
-                    video_pattern = ds.get('video_pattern', r'.*\.mp4$')
-                    break
-            
-            if not video_pattern:
-                video_pattern = r'.*\.(mp4|avi|mov)$'  # Default video pattern
-            
-            # Find video in sessions
-            for session_info in sessions:
-                files = calibrator.discover_files(session_info.path, video_pattern)
-                if files:
-                    video_path = files[0]
-                    break
-            
-            if not video_path:
-                raise ValueError("No video file found in any session for calibration test")
-            
-            # Initialize with saved calibration matrix
-            calibration_config = {
-                'pre_calculated_transform_matrix_path': str(self.config.calibrator_parameters.pre_calculated_transform_matrix_path),
-                'transform_matrix': None
-            }
-            calibrator.initialize_resource(calibration_config, logger)
-            
-            # Test calibration using plugin
-            calibrator.test_calibration(
-                str(video_path),
-                str(self.config.get(ConfigKeys.MAP_PATH, '')),
-                str(self.config.calibrator_parameters.pre_calculated_transform_matrix_path),
-                dict(self.config)  # Pass full config for test parameters
-            )
-            
-            logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.INIT)} Calibration test {LogFormats.SUCCESS}")
-            
-        except Exception as e:
-            logger.error(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.ERROR)} Calibration test {LogFormats.FAILED}: {str(e)}")
-            raise
     
     def _run_visualization(self) -> None:
-        """Run visualization mode using plugin system."""
-        logger.warning("Visualization pipeline is being migrated to new architecture")
-        return
+        """Run visualization mode using unified visualizer functions."""
+        from .. import visualizers  # Import to register visualizers
+        
+        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase='VISUALIZE')} Starting visualization pipeline")
+        
+        if not self.sessions:
+            logger.error("No sessions loaded for visualization")
+            return
+            
+        # Process each session
+        for session in self.sessions:
+            try:
+                logger.info(f"Creating visualization for session: {session.session_id}")
+                
+                # Create session-specific video output directory
+                session_video_dir = self.experiment_folder / session.session_id / "videos"
+                session_video_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Create session visualization with proper output path
+                show_realtime = self.config.get('show_visualization', False)
+                output_video = session.create_visualization(
+                    video_path=None,  # Auto-detect video
+                    output_name=f"{session.session_id}_visualization",
+                    output_dir=str(session_video_dir),
+                    show_realtime=show_realtime
+                )
+                
+                if output_video:
+                    logger.info(f"✓ Visualization created: {output_video}")
+                else:
+                    logger.warning(f"✗ Failed to create visualization for {session.session_id}")
+                    
+            except Exception as e:
+                logger.error(f"Visualization failed for {session.session_id}: {e}")
+                continue
+        
+        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase='VISUALIZE')} Visualization pipeline completed")

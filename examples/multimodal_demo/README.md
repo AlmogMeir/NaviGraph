@@ -43,14 +43,14 @@ cd examples/multimodal_demo
 navigraph run config.yaml
 
 # Or run with specific mode
-navigraph run config.yaml --system_running_mode=analyze
+navigraph run analyze config.yaml
 ```
 
-### Available Running Modes
-- `analyze`: Extract behavioral and neural metrics
-- `visualize`: Create visualization outputs
-- `calibrate`: Recalibrate camera-maze transformation
-- `test`: Validate calibration quality
+### Available CLI Commands
+- `navigraph run config.yaml`: Run both analysis and visualization
+- `navigraph run analyze config.yaml`: Extract behavioral and neural metrics only
+- `navigraph run visualize config.yaml`: Create visualization outputs only
+- `navigraph setup calibration config.yaml`: Recalibrate camera-maze transformation
 
 ## Output Data Structure
 

@@ -25,26 +25,37 @@ class SessionVisualizer:
         Args:
             config: Dict with structure:
                 {
-                    'visualizations': {
-                        'pipeline': ['trajectory', 'map_overlay', 'metrics'],
-                        'output': {
-                            'enabled': True,
-                            'path': './output',
-                            'format': 'mp4',
-                            'fps': 30,
-                            'codec': 'mp4v'
+                    'visualizations': [
+                        {
+                            'name': 'bodypart_display',
+                            'type': 'bodyparts',
+                            'config': {'bodyparts': ['Nose'], 'radius': 5}
                         },
-                        'visualizer_configs': {
-                            'trajectory': {'color': [0, 255, 0]},
-                            'map_overlay': {'opacity': 0.7}
+                        {
+                            'name': 'trajectory_trail',
+                            'type': 'trajectory',
+                            'config': {'trail_length': 50}
                         }
+                    ],
+                    'output': {
+                        'enabled': True,
+                        'path': './output/videos',
+                        'format': 'mp4',
+                        'fps': 30,
+                        'codec': 'mp4v'
                     }
                 }
         """
         viz_config = config.get('visualizations', {})
-        self.pipeline = viz_config.get('pipeline', [])
-        self.output_config = viz_config.get('output', {})
-        self.visualizer_configs = viz_config.get('visualizer_configs', {})
+        
+        # Handle both list format (pipeline) and dict format with output + pipeline
+        if isinstance(viz_config, list):
+            self.visualizer_specs = viz_config
+            self.output_config = {}
+        else:
+            self.visualizer_specs = viz_config.get('pipeline', [])
+            self.output_config = viz_config.get('output', {})
+            
         self.logger = logger
     
     def process_video(
@@ -52,7 +63,9 @@ class SessionVisualizer:
         video_path: str,
         dataframe: pd.DataFrame, 
         shared_resources: Dict[str, Any],
-        output_name: str = "output"
+        output_name: str = "output",
+        output_dir: Optional[str] = None,
+        show_realtime: bool = False
     ) -> Optional[str]:
         """Process video through visualization pipeline.
         
@@ -61,6 +74,8 @@ class SessionVisualizer:
             dataframe: Session dataframe with frame-aligned data
             shared_resources: Shared resources (graph, mapping, etc.)
             output_name: Name for output file (without extension)
+            output_dir: Directory for output video
+            show_realtime: Whether to display frames in real-time during processing
             
         Returns:
             Path to output video if created, None otherwise
@@ -70,21 +85,29 @@ class SessionVisualizer:
             self.logger.info("Video output disabled in config")
             return None
         
-        # Check if we have a pipeline
-        if not self.pipeline:
-            self.logger.warning("No visualizers in pipeline")
+        # Check if we have visualizer specs
+        if not self.visualizer_specs:
+            self.logger.warning("No visualizers configured")
             return None
         
         # Validate and load visualizer functions
         visualizers = []
-        for viz_name in self.pipeline:
+        for spec in self.visualizer_specs:
+            viz_name = spec.get('name', 'unnamed')
+            viz_type = spec.get('type')
+            viz_config = spec.get('config', {})
+            
+            if not viz_type:
+                self.logger.error(f"Visualizer '{viz_name}' missing type")
+                continue
+                
             try:
-                viz_func = registry.get_visualizer(viz_name)
-                visualizers.append((viz_name, viz_func))
-                self.logger.info(f"Loaded visualizer: {viz_name}")
+                viz_func = registry.get_visualizer(viz_type)
+                visualizers.append((viz_name, viz_func, viz_config))
+                self.logger.info(f"Loaded visualizer: {viz_name} ({viz_type})")
             except NavigraphError as e:
-                self.logger.error(f"Visualizer '{viz_name}' not found: {e}")
-                if self.visualizer_configs.get(viz_name, {}).get('required', False):
+                self.logger.error(f"Visualizer type '{viz_type}' not found: {e}")
+                if spec.get('required', False):
                     raise
         
         if not visualizers:
@@ -103,8 +126,11 @@ class SessionVisualizer:
             height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
-            # Setup output
-            output_path = Path(self.output_config.get('path', './output'))
+            # Setup output - use provided output_dir or fall back to config
+            if output_dir:
+                output_path = Path(output_dir)
+            else:
+                output_path = Path(self.output_config.get('path', './output'))
             output_path.mkdir(parents=True, exist_ok=True)
             
             output_format = self.output_config.get('format', 'mp4')
@@ -121,6 +147,13 @@ class SessionVisualizer:
             
             self.logger.info(f"Processing {total_frames} frames through {len(visualizers)} visualizers")
             self.logger.info(f"Output: {output_file} ({width}x{height} @ {fps}fps)")
+            
+            if show_realtime:
+                self.logger.info("🎬 Real-time visualization enabled - press 'q' to quit, space to pause/resume")
+                window_name = f"NaviGraph - {output_name}"
+                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                cv2.resizeWindow(window_name, width//2, height//2)  # Display at half size for performance
+                paused = False
             
             # Process frames
             frame_idx = 0
@@ -139,8 +172,7 @@ class SessionVisualizer:
                     frame_data = pd.Series()
                 
                 # Apply visualizer pipeline (each modifies the frame)
-                for viz_name, viz_func in visualizers:
-                    viz_config = self.visualizer_configs.get(viz_name, {})
+                for viz_name, viz_func, viz_config in visualizers:
                     try:
                         frame = viz_func(
                             frame=frame,
@@ -157,6 +189,34 @@ class SessionVisualizer:
                         self.logger.error(f"Visualizer '{viz_name}' failed on frame {frame_idx}: {e}")
                         if viz_config.get('required', False):
                             raise
+                
+                # Show real-time display if enabled
+                if show_realtime:
+                    # Handle pause/resume and quit controls
+                    while paused:
+                        key = cv2.waitKey(30) & 0xFF
+                        if key == ord(' '):  # Space to resume
+                            paused = False
+                        elif key == ord('q'):  # Quit
+                            self.logger.info("User requested quit")
+                            break
+                    
+                    if not paused:
+                        # Display the frame
+                        cv2.imshow(window_name, frame)
+                        
+                        # Handle key presses (non-blocking)
+                        key = cv2.waitKey(1) & 0xFF
+                        if key == ord('q'):  # Quit
+                            self.logger.info("User requested quit - finalizing video")
+                            break
+                        elif key == ord(' '):  # Pause
+                            paused = True
+                            self.logger.info("Paused - press space to resume")
+                
+                # Check if user quit during pause
+                if show_realtime and paused and 'key' in locals() and key == ord('q'):
+                    break
                 
                 # Write processed frame
                 writer.write(frame)
@@ -207,16 +267,18 @@ class SessionVisualizer:
         return None
     
     def validate_pipeline(self) -> List[str]:
-        """Validate that all visualizers in pipeline are registered.
+        """Validate that all visualizers in specs are registered.
         
         Returns:
-            List of missing visualizer names
+            List of missing visualizer type names
         """
         missing = []
-        for viz_name in self.pipeline:
-            try:
-                registry.get_visualizer(viz_name)
-            except NavigraphError:
-                missing.append(viz_name)
+        for spec in self.visualizer_specs:
+            viz_type = spec.get('type')
+            if viz_type:
+                try:
+                    registry.get_visualizer(viz_type)
+                except NavigraphError:
+                    missing.append(viz_type)
         
         return missing

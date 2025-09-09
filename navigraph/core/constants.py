@@ -5,7 +5,6 @@ class ConfigKeys:
     """Configuration key constants."""
     EXPERIMENT_PATH = 'experiment_path'
     OUTPUT_PATH = 'experiment_output_path'
-    SYSTEM_MODE = 'system_running_mode'
     DATA_SOURCES = 'data_sources'
     ANALYZE = 'analyze'
     VISUALIZATIONS = 'visualizations'

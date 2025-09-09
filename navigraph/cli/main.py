@@ -49,8 +49,9 @@ from pathlib import Path
 import click
 from omegaconf import OmegaConf
 
-# Import experiment runner
+# Import experiment runner and enums
 from ..core.experiment_runner import ExperimentRunner
+from ..core.enums import SystemMode
 
 
 def resolve_project_root(config_path: Path) -> Path:
@@ -114,6 +115,15 @@ def process_config_path(config_path: Path, config: Dict[str, Any]) -> Dict[str, 
             
             config['experiment_output_path'] = str(output_path.resolve())
     
+    # Process experiment_path - should be relative to config file location
+    if 'experiment_path' in config:
+        exp_path = config['experiment_path']
+        if isinstance(exp_path, str):
+            exp_path = Path(exp_path)
+            if not exp_path.is_absolute():
+                exp_path = config_dir / exp_path
+            config['experiment_path'] = str(exp_path.resolve())
+    
     return config
 
 
@@ -127,34 +137,49 @@ def cli():
     
     \b
     Common Commands:
-      navigraph run config.yaml          - Run experiment with config
-      navigraph setup graph config.yaml  - Setup graph mapping
-      navigraph test graph config.yaml   - Test graph mapping
-      navigraph validate config.yaml     - Validate configuration
+      navigraph run config.yaml              - Run analysis and visualization
+      navigraph run analyze config.yaml      - Run analysis only  
+      navigraph run visualize config.yaml    - Run visualization only
+      navigraph setup graph config.yaml      - Setup graph mapping
+      navigraph setup calibration config.yaml - Setup camera calibration
+      navigraph validate config.yaml         - Validate configuration
     
     Use 'navigraph COMMAND --help' for more information on each command.
     """
     pass
 
 
-@cli.command()
-@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
+@cli.group(invoke_without_command=True)
+@click.argument('config_path', type=click.Path(exists=True, path_type=Path), required=False)
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
-def run(config_path: Path, verbose: bool):
-    """Run NaviGraph experiment with configuration file.
+@click.option('--show', is_flag=True, help='Show visualization results after creation')
+@click.pass_context
+def run(ctx, config_path: Path, verbose: bool, show: bool):
+    """Run NaviGraph experiments with different execution modes.
     
-    CONFIG_PATH: Path to YAML configuration file
+    CONFIG_PATH: Path to YAML configuration file (runs both analysis and visualization)
     
     \b
     Examples:
-      navigraph run config.yaml
-      navigraph run experiments/mouse/config.yaml --verbose
-    
-    The configuration file should specify all experiment parameters including
-    data sources, analysis metrics, and output settings.
+      navigraph run config.yaml              - Run both analysis and visualization
+      navigraph run config.yaml --show       - Run and show visualization results
+      navigraph run analyze config.yaml      - Run analysis only
+      navigraph run visualize config.yaml    - Run visualization only
     """
+    # If no subcommand and config_path provided, run default behavior
+    if ctx.invoked_subcommand is None:
+        if config_path is None:
+            click.echo("Error: Missing config file path")
+            click.echo("Usage: navigraph run CONFIG_PATH")
+            ctx.exit(1)
+        _run_experiment_with_modes(config_path, verbose, [SystemMode.ANALYZE, SystemMode.VISUALIZE], show)
+
+
+def _run_experiment_with_modes(config_path: Path, verbose: bool, modes: List[SystemMode], show: bool = False):
+    """Helper function to run experiment with specified modes."""
     try:
-        click.echo(f"🚀 Starting NaviGraph experiment")
+        modes_str = ', '.join(mode.value for mode in modes)
+        click.echo(f"🚀 Starting NaviGraph experiment ({modes_str})")
         click.echo(f"📋 Configuration: {config_path}")
         
         # Load and process configuration
@@ -165,12 +190,14 @@ def run(config_path: Path, verbose: bool):
         if verbose:
             config['verbose'] = True
         
-        # Create and run experiment
-        runner = ExperimentRunner(config)
+        # Add show flag to config for visualization system
+        if show:
+            config['show_visualization'] = True
+            
+        # Create and run experiment with specified modes
+        runner = ExperimentRunner(config, system_modes=modes)
         
-        with click.progressbar(length=1, label='Running experiment') as bar:
-            results = runner.run_experiment()
-            bar.update(1)
+        results = runner.run_experiment()
         
         if results is not None:
             click.echo(f"✅ Experiment completed successfully!")
@@ -187,6 +214,46 @@ def run(config_path: Path, verbose: bool):
             import traceback
             click.echo(traceback.format_exc(), err=True)
         sys.exit(1)
+
+
+@run.command('analyze')
+@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
+@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
+def run_analyze(config_path: Path, verbose: bool):
+    """Run analysis only.
+    
+    CONFIG_PATH: Path to YAML configuration file
+    
+    \b
+    Examples:
+      navigraph run analyze config.yaml
+      navigraph run analyze experiments/mouse/config.yaml --verbose
+    
+    Runs data processing and analysis pipeline without visualization.
+    """
+    _run_experiment_with_modes(config_path, verbose, [SystemMode.ANALYZE])
+
+
+@run.command('visualize')
+@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
+@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
+@click.option('--show', is_flag=True, help='Show visualization results after creation')
+def run_visualize(config_path: Path, verbose: bool, show: bool):
+    """Run visualization only.
+    
+    CONFIG_PATH: Path to YAML configuration file
+    
+    \b
+    Examples:
+      navigraph run visualize config.yaml
+      navigraph run visualize config.yaml --show
+      navigraph run visualize experiments/mouse/config.yaml --verbose
+    
+    Runs visualization pipeline using existing analysis results.
+    """
+    _run_experiment_with_modes(config_path, verbose, [SystemMode.VISUALIZE], show)
+
+
 
 
 @cli.command()
@@ -223,7 +290,7 @@ def discover(data_path: Path, config: Optional[Path], format: str):
       • Lists directories that could contain session data
     """
     # Load plugins for session discovery
-    from ..plugins import data_sources, shared_resources, analyzers  # noqa: F401
+    from .. import plugins  # noqa: F401
     
     try:
         click.echo(f"🔍 Discovering sessions in: {data_path}")
@@ -234,7 +301,7 @@ def discover(data_path: Path, config: Optional[Path], format: str):
             
             # Load configuration
             config_data = OmegaConf.load(config)
-            config_data._config_dir = str(config.parent)
+            config_data = process_config_path(config, OmegaConf.to_container(config_data))
             
             # Override experiment path to discovery location
             config_data.experiment_path = str(data_path)
@@ -402,7 +469,7 @@ def list_graph_builders_cmd():
 
 @cli.command('list-plugins')
 @click.option('--category', '-c',
-              type=click.Choice(['data_sources', 'shared_resources', 'analyzers', 'all']),
+              type=click.Choice(['plugins', 'session_metrics', 'cross_session_metrics', 'visualizers', 'all']),
               default='all',
               help='Plugin category to list')
 @click.option('--format', '-f',
@@ -423,16 +490,16 @@ def list_plugins(category: str, format: str):
     
     \b
     Plugin categories:
-      data_sources      - DeepLabCut, map integration, graph integration
-      shared_resources  - Map provider, graph provider, calibration
-      analyzers        - Spatial metrics, navigation analysis, exploration
-      visualizers      - Keypoint, map, trajectory visualizations
+      plugins           - All unified NaviGraph plugins (pose tracking, calibration, etc.)
+      session_metrics   - Session-level analysis functions
+      cross_session_metrics - Cross-session analysis functions
+      visualizers       - Visualization functions
     """
     try:
         click.echo("🔌 NaviGraph Plugin Registry")
         
         # Load plugins to populate the registry
-        from ..plugins import data_sources, shared_resources, analyzers
+        from .. import plugins
         from ..core.registry import registry
         
         # Get all plugins
@@ -465,9 +532,10 @@ def list_plugins(category: str, format: str):
             click.echo()
             
             category_descriptions = {
-                'data_sources': '📊 Data Sources - Integrate data from various sources',
-                'shared_resources': '🔗 Shared Resources - Provide cross-session resources',
-                'analyzers': '🧮 Analyzers - Compute behavioral and navigation metrics'
+                'plugins': '📊 Plugins - Unified NaviGraph plugins for data integration',
+                'session_metrics': '🧮 Session Metrics - Session-level analysis functions',
+                'cross_session_metrics': '📈 Cross-Session Metrics - Cross-session analysis functions',
+                'visualizers': '🎨 Visualizers - Visualization functions'
             }
             
             for cat, plugins in all_plugins.items():
@@ -515,10 +583,11 @@ def validate(config_path: Path):
         click.echo(f"🔍 Validating configuration: {config_path}")
         
         # Load plugins for validation
-        from ..plugins import data_sources, shared_resources, analyzers
+        from .. import plugins
         
         # Load configuration
         config = OmegaConf.load(config_path)
+        config = process_config_path(config_path, OmegaConf.to_container(config))
         issues = []
         warnings = []
         
@@ -618,16 +687,16 @@ def setup_graph(config_path: Path):
     
     \b
     Required config sections:
-      graph_structure: Defines graph type (binary_tree or custom)
-      map_path: Path to the map image
-      graph_mapping.mapping_file: Where to save the mapping
+      setup.map_path: Path to the map image
+      graph.builder: Defines graph type (binary_tree or custom)
+      graph.mapping_file: Where to save the mapping
     """
     try:
         click.echo(f"Loading configuration: {config_path}")
         
         # Load configuration
         config = OmegaConf.load(config_path)
-        config._config_dir = str(config_path.parent)
+        config = process_config_path(config_path, OmegaConf.to_container(config))
         
         # Import graph modules
         from ..core.graph.structures import GraphStructure
@@ -637,15 +706,17 @@ def setup_graph(config_path: Path):
         import numpy as np
         import cv2
         
-        # Get map path from config
-        map_path = config.get('map_path')
+        # Get map path from setup section
+        setup_config = config.get('setup', {})
+        map_path = setup_config.get('map_path')
         if not map_path:
-            click.echo("Error: map_path not found in config", err=True)
+            click.echo("Error: map_path not found in setup config section", err=True)
+            click.echo("Please add 'map_path: path/to/map.png' under the 'setup:' section", err=True)
             sys.exit(1)
         
         # Resolve map path relative to config directory
         if not Path(map_path).is_absolute():
-            map_path = Path(config._config_dir) / map_path
+            map_path = Path(config['_config_dir']) / map_path
         
         # Load map image
         map_array = cv2.imread(str(map_path))
@@ -750,7 +821,7 @@ def setup_calibration(config_path: Path):
         
         # Load configuration
         config = OmegaConf.load(config_path)
-        config._config_dir = str(config_path.parent)
+        config = process_config_path(config_path, OmegaConf.to_container(config))
         
         # Get map path from config
         map_path = config.get('map_path')
@@ -760,7 +831,7 @@ def setup_calibration(config_path: Path):
         
         # Resolve map path relative to config directory
         if not Path(map_path).is_absolute():
-            map_path = Path(config._config_dir) / map_path
+            map_path = Path(config['_config_dir']) / map_path
         
         click.echo(f"🗺️  Map image: {map_path}")
         
@@ -826,7 +897,7 @@ def setup_calibration(config_path: Path):
         # Get output path from config
         output_dir = calib_params.get('path_to_save_calibration_files', './resources')
         if not Path(output_dir).is_absolute():
-            output_dir = Path(config._config_dir) / output_dir
+            output_dir = Path(config['_config_dir']) / output_dir
         
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -854,18 +925,6 @@ def setup_calibration(config_path: Path):
         sys.exit(1)
 
 
-@cli.group()
-def test():
-    """Testing and validation tools for NaviGraph components.
-    
-    Interactive tools for testing calibration accuracy and validating 
-    system configurations.
-    
-    \b
-    Examples:
-      navigraph test calibration config.yaml
-    """
-    pass
 
 
 @cli.command('list-conflict-resolvers')

@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 from typing import Dict, Any, List, Optional, Union, Tuple
 
-from ...core.navigraph_plugin import NaviGraphPlugin
-from ...core.exceptions import NavigraphError
-from ...core.coordinate_transform import apply_coordinate_transform_to_bodyparts
-from ...core.registry import register_data_source_plugin
+from ..core.navigraph_plugin import NaviGraphPlugin
+from ..core.exceptions import NavigraphError
+from ..core.coordinate_transform import apply_coordinate_transform_to_bodyparts
+from ..core.registry import register_data_source_plugin
 
 
 @register_data_source_plugin("graph_location")

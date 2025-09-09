@@ -13,13 +13,13 @@ verbose: true
 
 # Experiment configuration
 experiment_path: .  # Directory containing session folders
-map_path: ../basic_maze/resources/maze_map.png  # Reference to existing maze map
 
 # Output configuration
 experiment_output_path: "{PROJECT_ROOT}/output"
 
-# System running mode
-system_running_mode: 'analyze'  # Options: 'calibrate', 'test', 'visualize', 'analyze', or combinations
+# Setup configuration (used by setup commands)
+setup:
+  map_path: ../basic_maze/resources/maze_map.png  # Reference to existing maze map
 
 # Calibration parameters
 calibrator_parameters:

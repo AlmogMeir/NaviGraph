@@ -88,10 +88,6 @@ class ExperimentConfig(BaseModel):
         "{PROJECT_ROOT}/output", 
         description="Output path for results"
     )
-    system_running_mode: str = Field(
-        "analyze",
-        description="System mode: calibrate, test, analyze, visualize"
-    )
     
     # Component configurations
     data_sources: List[DataSourceSpec] = Field(
@@ -116,7 +112,7 @@ class ExperimentConfig(BaseModel):
     map_path: Optional[Path] = Field(None, description="Path to map file")
     
     # Logging
-    verbose: bool = Field(False, description="Enable verbose logging")
+    log_level: str = Field("info", description="Logging level: debug, info, warning, error")
     
     @validator('experiment_path')
     def validate_experiment_path(cls, v, values):
@@ -127,15 +123,14 @@ class ExperimentConfig(BaseModel):
             raise ValueError(f"Experiment path must be a directory: {v}")
         return v
     
-    @validator('system_running_mode')
-    def validate_running_mode(cls, v):
-        """Validate running mode string."""
-        valid_modes = {'calibrate', 'test', 'analyze', 'visualize'}
-        modes = set(mode.strip() for mode in v.lower().split('&'))
-        invalid_modes = modes - valid_modes
-        if invalid_modes:
-            raise ValueError(f"Invalid running modes: {invalid_modes}")
-        return v
+    
+    @validator('log_level')
+    def validate_log_level(cls, v):
+        """Validate log level string."""
+        valid_levels = {'debug', 'info', 'warning', 'error'}
+        if v.lower() not in valid_levels:
+            raise ValueError(f"Invalid log level: {v}. Must be one of: {', '.join(valid_levels)}")
+        return v.lower()
     
     class Config:
         """Pydantic configuration."""

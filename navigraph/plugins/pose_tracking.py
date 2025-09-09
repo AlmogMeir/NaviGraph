@@ -8,9 +8,9 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-from ...core.navigraph_plugin import NaviGraphPlugin
-from ...core.exceptions import NavigraphError
-from ...core.registry import register_data_source_plugin
+from ..core.navigraph_plugin import NaviGraphPlugin
+from ..core.exceptions import NavigraphError
+from ..core.registry import register_data_source_plugin
 
 
 @register_data_source_plugin("pose_tracking")
