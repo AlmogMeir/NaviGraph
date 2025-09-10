@@ -65,8 +65,9 @@ class NeuralActivityPlugin(NaviGraphPlugin):
             
             neuron_count = len(neural_data)
             derived_info = ""
-            if self.config.get('derived_metrics'):
-                derived_info = f" (with {len(self.config['derived_metrics'])} derived metrics)"
+            plugin_config = self.config.get('config', {})
+            if plugin_config.get('derived_metrics'):
+                derived_info = f" (with {len(plugin_config['derived_metrics'])} derived metrics)"
             
             self.logger.info(
                 f"✓ Neural activity loaded: {neuron_count} neurons, "
@@ -160,7 +161,8 @@ class NeuralActivityPlugin(NaviGraphPlugin):
         target_length = len(dataframe)
         result_df = dataframe.copy()
         
-        unit_prefix = self.config.get('unit_prefix', 'neuron_')
+        plugin_config = self.config.get('config', {})
+        unit_prefix = plugin_config.get('unit_prefix', 'neuron_')
         
         for neuron_id, activity in neural_data.items():
             column_name = f"{unit_prefix}{neuron_id}"
@@ -206,11 +208,12 @@ class NeuralActivityPlugin(NaviGraphPlugin):
         Returns:
             DataFrame with derived neural metrics added
         """
-        derived_metrics = self.config.get('derived_metrics', {})
+        plugin_config = self.config.get('config', {})
+        derived_metrics = plugin_config.get('derived_metrics', {})
         if not derived_metrics:
             return dataframe
         
-        unit_prefix = self.config.get('unit_prefix', 'neuron_')
+        unit_prefix = plugin_config.get('unit_prefix', 'neuron_')
         neuron_columns = [col for col in dataframe.columns if col.startswith(unit_prefix)]
         
         if not neuron_columns:
@@ -263,7 +266,8 @@ class NeuralActivityPlugin(NaviGraphPlugin):
         columns = []
         
         # Add derived metrics columns if specified
-        derived_metrics = self.config.get('derived_metrics', {})
+        plugin_config = self.config.get('config', {})
+        derived_metrics = plugin_config.get('derived_metrics', {})
         if derived_metrics:
             columns.extend(list(derived_metrics.keys()))
         

@@ -149,30 +149,37 @@ def cli():
     pass
 
 
-@cli.group(invoke_without_command=True)
-@click.argument('config_path', type=click.Path(exists=True, path_type=Path), required=False)
+@cli.command()
+@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
 @click.option('--show', is_flag=True, help='Show visualization results after creation')
-@click.pass_context
-def run(ctx, config_path: Path, verbose: bool, show: bool):
+@click.option('--analyze', is_flag=True, help='Run analysis only')
+@click.option('--visualize', is_flag=True, help='Run visualization only')
+def run(config_path: Path, verbose: bool, show: bool, analyze: bool, visualize: bool):
     """Run NaviGraph experiments with different execution modes.
     
-    CONFIG_PATH: Path to YAML configuration file (runs both analysis and visualization)
+    CONFIG_PATH: Path to YAML configuration file
     
     \b
     Examples:
       navigraph run config.yaml              - Run both analysis and visualization
       navigraph run config.yaml --show       - Run and show visualization results
-      navigraph run analyze config.yaml      - Run analysis only
-      navigraph run visualize config.yaml    - Run visualization only
+      navigraph run config.yaml --analyze    - Run analysis only
+      navigraph run config.yaml --visualize  - Run visualization only
+      navigraph run config.yaml --analyze --visualize  - Run both explicitly
     """
-    # If no subcommand and config_path provided, run default behavior
-    if ctx.invoked_subcommand is None:
-        if config_path is None:
-            click.echo("Error: Missing config file path")
-            click.echo("Usage: navigraph run CONFIG_PATH")
-            ctx.exit(1)
-        _run_experiment_with_modes(config_path, verbose, [SystemMode.ANALYZE, SystemMode.VISUALIZE], show)
+    # Determine modes based on flags
+    if analyze and visualize:
+        modes = [SystemMode.ANALYZE, SystemMode.VISUALIZE]
+    elif analyze:
+        modes = [SystemMode.ANALYZE]
+    elif visualize:
+        modes = [SystemMode.VISUALIZE]
+    else:
+        # Default: run both analysis and visualization
+        modes = [SystemMode.ANALYZE, SystemMode.VISUALIZE]
+    
+    _run_experiment_with_modes(config_path, verbose, modes, show)
 
 
 def _run_experiment_with_modes(config_path: Path, verbose: bool, modes: List[SystemMode], show: bool = False):
@@ -216,42 +223,6 @@ def _run_experiment_with_modes(config_path: Path, verbose: bool, modes: List[Sys
         sys.exit(1)
 
 
-@run.command('analyze')
-@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
-@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
-def run_analyze(config_path: Path, verbose: bool):
-    """Run analysis only.
-    
-    CONFIG_PATH: Path to YAML configuration file
-    
-    \b
-    Examples:
-      navigraph run analyze config.yaml
-      navigraph run analyze experiments/mouse/config.yaml --verbose
-    
-    Runs data processing and analysis pipeline without visualization.
-    """
-    _run_experiment_with_modes(config_path, verbose, [SystemMode.ANALYZE])
-
-
-@run.command('visualize')
-@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
-@click.option('--verbose', '-v', is_flag=True, help='Enable verbose output')
-@click.option('--show', is_flag=True, help='Show visualization results after creation')
-def run_visualize(config_path: Path, verbose: bool, show: bool):
-    """Run visualization only.
-    
-    CONFIG_PATH: Path to YAML configuration file
-    
-    \b
-    Examples:
-      navigraph run visualize config.yaml
-      navigraph run visualize config.yaml --show
-      navigraph run visualize experiments/mouse/config.yaml --verbose
-    
-    Runs visualization pipeline using existing analysis results.
-    """
-    _run_experiment_with_modes(config_path, verbose, [SystemMode.VISUALIZE], show)
 
 
 
