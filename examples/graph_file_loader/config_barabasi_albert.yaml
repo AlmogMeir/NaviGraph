@@ -1,13 +1,19 @@
 # Configuration for testing Barabási-Albert graph from file
 
-experiment_path: ./
-map_path: resources/test_map.png
+experiment_path: .
+experiment_output_path: "{PROJECT_ROOT}/output"
 
-graph_structure:
-  type: file_loader
-  parameters:
-    filepath: /home/elior/PycharmProjects/NaviGraph/examples/graph_file_loader/graphs/random_barabasi_albert.graphml
-    format: graphml
+# Setup configuration (used by setup commands)
+setup:
+  map_path: ./resources/test_map.png
+  # spatial_image_for_calibration: ./demo_session/memory5-11022023_withrewardafter8min.avi
+  # calibration_matrix: ./resources/transform_matrix.npy
 
-graph_mapping:
-  mapping_file: resources/graph_mapping_barabasi.pkl
+graph:
+  builder:
+    type: file_loader
+    config:
+      filepath: ./graphs/random_barabasi_albert.graphml
+      format: graphml
+  mapping_file: ./resources/graph_mapping_barabasi.pkl
+  conflict_strategy: node_priority

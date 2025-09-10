@@ -163,7 +163,7 @@ visualizations:
     - name: multimodal_info
       type: text_display
       config:
-        columns: ['Nose_graph_node']  
+        columns: ['Nose_graph_node', 'yaw']  
         position: 'top_left'
         font_scale: 0.7
         color: [255, 255, 255]           
@@ -180,7 +180,7 @@ visualizations:
       type: time_series
       config:
         # Data to plot
-        columns: ['neuron_mean_activity']  # Neural activity only for now
+        columns: ['neuron_1']  # Neural activity only for now
         
         # Display settings
         mode: 'overlay'  # Show plot overlaid on video

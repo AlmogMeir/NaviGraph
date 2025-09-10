@@ -696,22 +696,27 @@ def setup_graph(config_path: Path):
             sys.exit(1)
         
         # Create graph from config using new builder system
+        # Support both old 'graph_structure' and new 'graph.builder' formats
         graph_config = config.get('graph_structure', {})
-        graph_type = graph_config.get('type', 'binary_tree')
+        if not graph_config:
+            # Try new format: graph.builder
+            graph_section = config.get('graph', {})
+            builder_config = graph_section.get('builder', {})
+            if builder_config:
+                graph_config = {
+                    'type': builder_config.get('type'),
+                    'parameters': builder_config.get('config', {})
+                }
         
-        # Handle backward compatibility
-        if graph_type == 'binary_tree':
-            # Get parameters - support old config format
-            params = graph_config.get('parameters', {})
-            if not params:
-                # Try old format with binary_tree_height or graph.height
-                height = graph_config.get('binary_tree_height')
-                if height is None:
-                    height = config.get('graph', {}).get('height', 7)
-                params = {'height': height}
-        else:
-            # Get parameters for other builder types
-            params = graph_config.get('parameters', {})
+        graph_type = graph_config.get('type')
+        if not graph_type:
+            click.echo("Error: No graph builder type specified in configuration", err=True)
+            click.echo("Add 'graph.builder.type' to your config file", err=True)
+            click.echo(f"Available builders: {', '.join(list_graph_builders())}", err=True)
+            sys.exit(1)
+        
+        # Get parameters for the builder
+        params = graph_config.get('parameters', {})
         
         try:
             # Get builder class and create instance

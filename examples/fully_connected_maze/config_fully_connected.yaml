@@ -1,15 +1,20 @@
 # Configuration for Fully Connected Maze
 # Tests the new FullyConnectedGraphBuilder with complete graph topology
 
-experiment_path: ./
-map_path: resources/fully_connected_maze_map.png
+experiment_path: .
+experiment_output_path: "{PROJECT_ROOT}/output"
+
+# Setup configuration (used by setup commands)
+setup:
+  map_path: ./resources/fully_connected_maze_map.png
+  # spatial_image_for_calibration: ./demo_session/memory5-11022023_withrewardafter8min.avi
+  # calibration_matrix: ./resources/transform_matrix.npy
 
 # Graph structure using the new fully connected builder
-graph_structure:
-  type: fully_connected
-  parameters:
-    n_nodes: 18
-
-# Where to save the spatial mapping
-graph_mapping:
-  mapping_file: resources/graph_mapping_fully_connected.pkl
+graph:
+  builder:
+    type: fully_connected
+    config:
+      n_nodes: 18
+  mapping_file: ./resources/graph_mapping_fully_connected.pkl
+  conflict_strategy: node_priority

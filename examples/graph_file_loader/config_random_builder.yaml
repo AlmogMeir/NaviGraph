@@ -1,17 +1,23 @@
 # Configuration for testing RandomGraphBuilder (programmatic generation)
 # This tests the new RandomGraphBuilder vs FileGraphBuilder
 
-experiment_path: ./
-map_path: resources/test_map.png
+experiment_path: .
+experiment_output_path: "{PROJECT_ROOT}/output"
+
+# Setup configuration (used by setup commands)
+setup:
+  map_path: ./resources/test_map.png
+  # spatial_image_for_calibration: ./demo_session/memory5-11022023_withrewardafter8min.avi
+  # calibration_matrix: ./resources/transform_matrix.npy
 
 # Graph structure using random builder (generates on-demand)
-graph_structure:
-  type: random
-  parameters:
-    graph_type: erdos_renyi
-    n_nodes: 18
-    edge_probability: 0.2
-    seed: 42
-
-graph_mapping:
-  mapping_file: resources/graph_mapping_random_gen.pkl
+graph:
+  builder:
+    type: random
+    config:
+      graph_type: erdos_renyi
+      n_nodes: 18
+      edge_probability: 0.2
+      seed: 42
+  mapping_file: ./resources/graph_mapping_random_gen.pkl
+  conflict_strategy: node_priority
