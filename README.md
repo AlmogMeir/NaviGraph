@@ -1,22 +1,18 @@
 <p align="left">
-  <img src="docs/images/NaviGraph_logo_white_noback.png" alt="NaviGraph Logo" width="400"/>
+  <img src="docs/images/NaviGraph_logo_light.png" alt="NaviGraph Logo" width="400"/>
 </p>
 
+<!-- Theme-aware logo using HTML picture element -->
 <style>
 @media (prefers-color-scheme: light) {
   img[alt="NaviGraph Logo"] {
-    background-color: #e6e6e6 !important;
-    padding: 25px !important;
-    border-radius: 10px !important;
-    border: 2px solid #d0d7de !important;
+    content: url("docs/images/NaviGraph_logo_light.png");
   }
 }
 
 @media (prefers-color-scheme: dark) {
   img[alt="NaviGraph Logo"] {
-    background-color: transparent !important;
-    padding: 0 !important;
-    border: none !important;
+    content: url("docs/images/NaviGraph_logo_dark.png");
   }
 }
 </style>
