@@ -1,21 +1,8 @@
-<p align="left">
-  <img src="docs/images/NaviGraph_logo_light.png" alt="NaviGraph Logo" width="400"/>
-</p>
-
-<!-- Theme-aware logo using HTML picture element -->
-<style>
-@media (prefers-color-scheme: light) {
-  img[alt="NaviGraph Logo"] {
-    content: url("docs/images/NaviGraph_logo_light.png");
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  img[alt="NaviGraph Logo"] {
-    content: url("docs/images/NaviGraph_logo_dark.png");
-  }
-}
-</style>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/NaviGraph_logo_dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/NaviGraph_logo_light.png">
+  <img src="docs/images/NaviGraph_logo_light.png" alt="NaviGraph Logo" width="400">
+</picture>
 
 A flexible framework for multi-session behavioral experiments that enables researchers to integrate, synchronize, and analyze diverse data sources within unified spatial and temporal domains. NaviGraph provides the freedom to combine any data streams, implement custom metrics, and visualize results across time and graph-based spatial representations - all within a single, coherent analysis environment.
 
