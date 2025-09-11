@@ -5,7 +5,7 @@ integrating multiple data sources (keypoints, neural activity, behavioral events
 into unified graph-based analysis workflows.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 __author__ = "NaviGraph Team"
 
 from loguru import logger

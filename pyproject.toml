@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "navigraph"
-version = "0.1.0"
+version = "1.0.0"
 description = "Flexible graph-based analysis framework for behavioral research"
 authors = [{name = "PBLab", email = "pb@tauex.tau.ac.il"}]
 readme = "README.md"
