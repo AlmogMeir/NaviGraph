@@ -180,7 +180,7 @@ visualizations:
       type: time_series
       config:
         # Data to plot
-        columns: ['neuron_1']  # Neural activity only for now
+        columns: ['neuron_1','neuron_mean_activity']  # Neural activity only for now
         
         # Display settings
         mode: 'overlay'  # Show plot overlaid on video
