@@ -699,8 +699,8 @@ We welcome community involvement in NaviGraph development:
 
 If you use NaviGraph in your research, please cite:
 
-> Iton, A. K., Iton, E., Michaelson, D. M., & Blinder, P. (2024). NaviGraph: A graph-based framework for multimodal analysis of spatial decision-making. *Journal of Neuroscience Methods*, Volume(Issue), Pages. [DOI]
-
+> Koren Iton, A., Iton, E., Michaelson, D. M., & Blinder, P. (2025). NaviGraph: A graph-based framework for multimodal analysis of spatial decision-making. bioRxiv 2025.05.18.654725; doi: https://doi.org/10.1101/2025.05.18.654725
+> 
 ## License
 
 NaviGraph is licensed under the MIT License. See [LICENSE](LICENSE) for details.
