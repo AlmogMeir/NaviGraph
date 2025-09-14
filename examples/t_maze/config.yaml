@@ -1,0 +1,50 @@
+log_level: info
+experiment_path: .
+experiment_output_path: "{PROJECT_ROOT}/output"
+
+# Setup configuration (used by setup commands)
+setup:
+  map_path: ./resources/t_maze.png
+  spatial_image_for_calibration: ./demo_session/female_8_memory_270225-02262025120302-02272025094330.avi
+  calibration_matrix: ./resources/transform_matrix.npy
+
+graph:
+  builder:
+    type: binary_tree
+    config:
+      height: 2
+  mapping_file: ./resources/t_maze_mapping.pkl
+  conflict_strategy: node_priority
+
+# plugins:
+#   # Primary pose estimation data (establishes temporal index)
+#   - name: pose_data
+#     type: pose_tracking
+#     file_pattern: '.*DLC.*\.h5$'  # Match DeepLabCut H5 files
+#     config:
+#       bodypart: 'Nose'
+#       likelihood_threshold: 0.3
+#       bodyparts: 'all'
+
+#   # Camera calibration transformation matrix
+#   - name: calibration_matrix
+#     type: calibration
+#     shared: true  # Look in resources folder
+#     file_pattern: 'transform_matrix\.npy$'
+#     config: {}
+
+#   # Spatial coordinate transformation and tile detection
+#   - name: map_coords
+#     type: map_location
+#     shared: true  # Map is shared across sessions
+#     file_pattern: '.*maze_map\.png$'  # Match maze map image
+#     config:
+#       bodyparts: ['Nose']  # Which bodyparts to track for map coordinates
+
+#   # Graph-based spatial navigation analysis
+#   - name: graph_coords
+#     type: graph_location
+#     shared: true  # Graph is shared across sessions
+#     config:
+#       reward_tile_id: 273  # Tile ID for reward location
+

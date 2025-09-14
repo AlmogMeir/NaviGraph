@@ -8,62 +8,62 @@ setup:
   spatial_image_for_calibration: ./demo_session/female_8_memory_270225-02262025120302-02272025094330.avi
   calibration_matrix: ./resources/transform_matrix.npy
 
+graph:
+  builder:
+    type: binary_tree
+    config:
+      height: 7
+  mapping_file: ./resources/complex_maze_graph_mapping.pkl
+  conflict_strategy: node_priority
+
 plugins:
   # Primary pose estimation data (establishes temporal index)
   - name: pose_data
     type: pose_tracking
-    file_pattern: '.*DLC.*\.h5$'  # Match DeepLabCut H5 files
+    file_pattern: '.*DLC.*\.h5$' # Match DeepLabCut H5 files
     config:
-      bodypart: 'Nose'
+      bodypart: "Nose"
       likelihood_threshold: 0.3
-      bodyparts: 'all'
+      bodyparts: "all"
 
   # Camera calibration transformation matrix
   - name: calibration_matrix
     type: calibration
-    shared: true  # Look in resources folder
+    shared: true # Look in resources folder
     file_pattern: 'transform_matrix\.npy$'
     config: {}
 
   # Spatial coordinate transformation and tile detection
   - name: map_coords
     type: map_location
-    shared: true  # Map is shared across sessions
-    file_pattern: '.*maze_map\.png$'  # Match maze map image
+    shared: true # Map is shared across sessions
+    file_pattern: '.*maze_map\.png$' # Match maze map image
     config:
-      bodyparts: ['Nose']  # Which bodyparts to track for map coordinates
+      bodyparts: ["Nose"] # Which bodyparts to track for map coordinates
 
   # Graph-based spatial navigation analysis
   - name: graph_coords
     type: graph_location
-    shared: true  # Graph is shared across sessions
+    shared: true # Graph is shared across sessions
     config:
-      reward_tile_id: 273  # Tile ID for reward location
-
-graph:
-  builder:
-    type: binary_tree
-    config:
-      height: 7
-  mapping_file: ./resources/graph_mapping.pkl
-  conflict_strategy: node_priority
+      reward_tile_id: 273 # Tile ID for reward location
 
 analyze:
   metrics:
-    time_to_reward: 
-      func_name: 'time_a_to_b'
-      args: 
-        a: 145
-        b: 273
-    
-    velocity_to_reward:
-      func_name: 'velocity_a_to_b'
+    time_to_reward:
+      func_name: "time_a_to_b"
       args:
         a: 145
         b: 273
-    
+
+    velocity_to_reward:
+      func_name: "velocity_a_to_b"
+      args:
+        a: 145
+        b: 273
+
     exploration_percentage:
-      func_name: 'exploration_percentage'
+      func_name: "exploration_percentage"
 
   save_as_csv: true
   save_as_pkl: true
@@ -76,55 +76,55 @@ visualizations:
     format: mp4
     fps: 30
     codec: mp4v
-    
+
   pipeline:
     - name: bodypart_display
       type: bodyparts
       config:
-        bodyparts: null  # null = all bodyparts
+        bodyparts: null # null = all bodyparts
         colors:
-          Nose: [0, 0, 255]      # Red
+          Nose: [0, 0, 255] # Red
           Tail_base: [255, 0, 0] # Blue
         radius: 6
         show_labels: false
-        likelihood_threshold: 0.8  # null = plot regardless of likelihood
+        likelihood_threshold: 0.8 # null = plot regardless of likelihood
 
     - name: map_overlay_display
       type: map_overlay
       config:
-        position: 'bottom_right'
+        position: "bottom_right"
         size: 0.25
         opacity: 0.8
-        
+
         # Bodyparts to show on map
-        bodyparts: ['Nose']
+        bodyparts: ["Nose"]
         colors:
-          Nose: [0, 0, 255]      # Red
-        default_color: [255, 255, 255]  # White
+          Nose: [0, 0, 255] # Red
+        default_color: [255, 255, 255] # White
         radius: 30
         thickness: 15
-        
+
         # Likelihood filtering (optional)
-        likelihood_threshold: 0.8  # null = no filtering, 0.5 = only show high confidence
-        
+        likelihood_threshold: 0.8 # null = no filtering, 0.5 = only show high confidence
+
         # Trajectory settings
         show_trajectory: False
         trail_length: 100
         fade_trail: False
         line_thickness: 100
         fade_to_color: [0, 0, 255]
-        
+
     - name: graph_structure_overlay
       type: graph_overlay
       config:
         # Graph display settings
-        mode: 'side_by_side'
+        mode: "side_by_side"
         size: 0.3
         opacity: 0.6
-        position: 'top_right'
-        
+        position: "top_right"
+
         # # Default visualization settings (null = use builder defaults)
-        default_node_size: 800          # Smaller default nodes
+        default_node_size: 800 # Smaller default nodes
         # default_node_color: 'lightgray' # Gray default nodes
         # default_edge_width: 1.5         # Slightly thicker default edges
         # default_edge_color: 'darkgray'  # Darker gray edges
@@ -133,34 +133,32 @@ visualizations:
         # font_weight: 'bold'             # Bold labels
         # font_color: 'black'             # Black text
         # figsize: [12, 8]                # Figure size
-        
+
         # Performance settings
-        cache_size: 20                  # Cache up to 20 graph visualizations
-        
+        cache_size: 20 # Cache up to 20 graph visualizations
+
         # Location source settings (specify which bodypart to use)
-        node_column: 'Nose_graph_node'  # Use Nose position for node highlighting
-        edge_column: 'Nose_graph_edge'  # Use Nose position for edge highlighting
-        
+        node_column: "Nose_graph_node" # Use Nose position for node highlighting
+        edge_column: "Nose_graph_edge" # Use Nose position for edge highlighting
+
         # Current node/edge highlighting
         highlight_node_size: 1200
-        highlight_node_color: 'red'
+        highlight_node_color: "red"
         highlight_edge_width: 3.0
-        highlight_edge_color: 'blue'
-        
+        highlight_edge_color: "blue"
 
-        
     - name: text_info
       type: text_display
       config:
-        columns: ['Nose_graph_node', 'Nose_graph_edge']  
-        position: 'top_left'
+        columns: ["Nose_graph_node", "Nose_graph_edge"]
+        position: "top_left"
         font_scale: 0.7
-        color: [255, 255, 255]           
+        color: [255, 255, 255]
         background: true
         background_opacity: 0.7
         decimal_places: 0
-        
+
         # Display formatting options
-        show_column_names: true        # Show values only without column names
-        layout: 'horizontal'            # 'horizontal' or 'vertical'
-        separator: ' | '
+        show_column_names: true # Show values only without column names
+        layout: "horizontal" # 'horizontal' or 'vertical'
+        separator: " | "

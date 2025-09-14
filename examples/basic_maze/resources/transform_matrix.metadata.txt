@@ -1,4 +1,0 @@
-Calibration Method: homography_ransac
-Reprojection Error: 31.913 pixels
-Number of Points: 12
-Transform Matrix Shape: (3, 3)
