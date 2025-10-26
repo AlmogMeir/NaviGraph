@@ -255,9 +255,11 @@ class GraphStructure:
             target_node: Optional target node. Walk terminates when reached (if terminate_on_target=True)
             terminate_on_target: If True, stop immediately upon reaching target.
                                If False, continue until max_steps even after reaching target
-            backtrack_prob: Probability (0.0-1.0) of moving back to previous node.
-                          0.0 = no backtracking (default), 1.0 = always backtrack if possible.
-                          Remaining probability is distributed among other neighbors
+            backtrack_prob: Probability of moving back to previous node.
+                          -1 = uniform distribution (treat previous node like any other neighbor)
+                          0.0 = no backtracking (default - previous node excluded)
+                          0.0-1.0 = explicit backtrack probability (remaining distributed to others)
+                          1.0 = always backtrack if possible
             use_edge_weights: If True, use edge weights for transition probabilities.
                             If False, use uniform probability among neighbors
             seed: Random seed for reproducibility
@@ -270,11 +272,18 @@ class GraphStructure:
             ValueError: If backtrack_prob not in [0, 1]
 
         Examples:
-            >>> # Fixed-length walk from root
+            >>> # Fixed-length walk from root (no backtracking)
             >>> graph = GraphStructure.from_config('binary_tree', {'height': 7})
             >>> path = graph.random_walk(start_node=0, max_steps=10)
             >>> len(path)
             11  # 10 steps = 11 nodes (including start)
+
+            >>> # Uniform random walk (backtracking allowed, equal probability to all neighbors)
+            >>> path = graph.random_walk(
+            ...     start_node=0,
+            ...     max_steps=20,
+            ...     backtrack_prob=-1  # Treat previous node like any other neighbor
+            ... )
 
             >>> # Walk to target without backtracking
             >>> path = graph.random_walk(
@@ -306,8 +315,8 @@ class GraphStructure:
         if max_steps is None and target_node is None:
             raise ValueError("Must provide either max_steps or target_node")
 
-        if not (0.0 <= backtrack_prob <= 1.0):
-            raise ValueError(f"backtrack_prob must be in [0, 1], got {backtrack_prob}")
+        if backtrack_prob != -1 and not (0.0 <= backtrack_prob <= 1.0):
+            raise ValueError(f"backtrack_prob must be -1 or in [0, 1], got {backtrack_prob}")
 
         if target_node is not None and not self.has_node(target_node):
             raise ValueError(f"Target node {target_node} not in graph")
@@ -321,7 +330,38 @@ class GraphStructure:
         previous_node = None
         steps = 0
 
-        # Fast path: Simple uniform random walk without backtracking or weights
+        # Fast path 1: Uniform distribution with backtracking allowed
+        # This is the simplest case - treat all neighbors equally
+        if backtrack_prob == -1 and not use_edge_weights:
+            import random
+            if seed is not None:
+                random.seed(seed)
+
+            while True:
+                # Check termination conditions
+                if target_node is not None and current_node == target_node and terminate_on_target:
+                    break
+                if max_steps is not None and steps >= max_steps:
+                    break
+
+                # Get all neighbors (including where we came from)
+                neighbors = list(self.graph.neighbors(current_node))
+
+                if len(neighbors) == 0:
+                    break
+
+                # Simple uniform random choice among ALL neighbors (FAST PATH)
+                next_node = random.choice(neighbors)
+
+                # Update path
+                previous_node = current_node
+                current_node = next_node
+                path.append(current_node)
+                steps += 1
+
+            return path
+
+        # Fast path 2: Simple uniform random walk without backtracking or weights
         # This optimization provides 15-20x speedup for the most common case
         if backtrack_prob == 0.0 and not use_edge_weights:
             # Use Python's random.choice directly (much faster than numpy for small lists)
