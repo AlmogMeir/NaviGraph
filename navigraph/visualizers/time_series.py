@@ -60,8 +60,11 @@ def visualize_time_series(frame: np.ndarray, frame_data: pd.Series, shared_resou
         
         # Axes and labels
         show_axes: Whether to show x/y axes and ticks (default: True)
+        show_y_ticks: Whether to show y-axis ticks specifically (default: True)
+        label_position: 'left' or 'right' for y-axis labels (default: 'left')
         show_labels: Whether to show column names as y-labels (default: True)
         show_values: Whether to show current values as text (default: True)
+        value_position: Position for current values 'top_left', 'top_right', etc. (default: 'top_left')
         font_size: Font size for labels and values (default: 10)
         
         # Y-axis range settings
@@ -163,6 +166,8 @@ def _generate_time_series_plot(columns: List[str], config: Dict[str, Any]) -> Op
     subplot_spacing = config.get('subplot_spacing', 0.1)
     
     show_axes = config.get('show_axes', True)
+    show_y_ticks = config.get('show_y_ticks', True)
+    label_position = config.get('label_position', 'left')
     show_labels = config.get('show_labels', True)
     show_values = config.get('show_values', True)
     font_size = config.get('font_size', 10)
@@ -256,17 +261,24 @@ def _generate_time_series_plot(columns: List[str], config: Dict[str, Any]) -> Op
             # Handle axes display
             if show_axes:
                 ax.tick_params(colors='white', labelsize=font_size-2)
-                
+
+                # Y-axis ticks handling
+                if not show_y_ticks:
+                    ax.set_yticks([])
+
                 # Remove x-axis for all but bottom subplot
                 if i < len(columns) - 1:
                     ax.set_xticks([])
                 else:
                     ax.set_xlabel('Time (frames)', color='white', fontsize=font_size)
-                
-                # Y-label
+
+                # Y-label positioning
                 if show_labels:
+                    if label_position == 'right':
+                        ax.yaxis.set_label_position('right')
+                        ax.yaxis.tick_right()
                     ax.set_ylabel(column, color=colors[i], fontsize=font_size, fontweight='bold')
-                
+
                 # Style spines
                 for spine in ax.spines.values():
                     spine.set_color('#333333')
@@ -275,11 +287,13 @@ def _generate_time_series_plot(columns: List[str], config: Dict[str, Any]) -> Op
                 # Hide all axes elements for cleaner ECG-like look
                 ax.set_xticks([])
                 ax.set_yticks([])
-                
+
                 # Minimal or no labels
                 if show_labels:
+                    if label_position == 'right':
+                        ax.yaxis.set_label_position('right')
                     ax.set_ylabel(column, color=colors[i], fontsize=font_size, fontweight='bold')
-                
+
                 # Hide spines
                 for spine in ax.spines.values():
                     spine.set_visible(False)

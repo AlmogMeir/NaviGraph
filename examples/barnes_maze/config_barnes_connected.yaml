@@ -1,0 +1,21 @@
+# Configuration for Star Maze with peripheral connections
+# Tests the star builder with connect_periphery=true
+
+experiment_path: .
+experiment_output_path: "{PROJECT_ROOT}/output"
+
+# Setup configuration (used by setup commands)
+setup:
+  map_path: ./resources/barnes_maze_map.png
+  # spatial_image_for_calibration: ./demo_session/memory5-11022023_withrewardafter8min.avi
+  # calibration_matrix: ./resources/transform_matrix.npy
+
+# Graph structure using star builder with peripheral connections
+graph:
+  builder:
+    type: star
+    config:
+      n_peripheral_nodes: 18
+      connect_periphery: true
+  mapping_file: ./resources/mapping_barnes.pkl
+  conflict_strategy: node_priority

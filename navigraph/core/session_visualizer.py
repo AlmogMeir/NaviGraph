@@ -11,6 +11,8 @@ import numpy as np
 import cv2
 from pathlib import Path
 from loguru import logger
+import signal
+import sys
 
 from .registry import registry
 from .exceptions import NavigraphError
@@ -18,7 +20,7 @@ from .exceptions import NavigraphError
 
 class SessionVisualizer:
     """Orchestrates visualization pipeline for a session."""
-    
+
     def __init__(self, config: Dict[str, Any]):
         """Initialize with visualization configuration.
         
@@ -57,6 +59,12 @@ class SessionVisualizer:
             self.output_config = viz_config.get('output', {})
             
         self.logger = logger
+
+        # Initialize video writer references for signal handling
+        self._video_writer = None
+        self._video_cap = None
+        self._video_writer_params = None
+        self._setup_signal_handlers()
     
     def process_video(
         self, 
@@ -115,38 +123,40 @@ class SessionVisualizer:
             return None
         
         # Open video
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
+        self._video_cap = cv2.VideoCapture(video_path)
+        if not self._video_cap.isOpened():
             raise NavigraphError(f"Failed to open video: {video_path}")
-        
+
         try:
             # Get video properties
-            fps = self.output_config.get('fps', cap.get(cv2.CAP_PROP_FPS))
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            
-            # Setup output - use provided output_dir or fall back to config
+            fps = self.output_config.get('fps', self._video_cap.get(cv2.CAP_PROP_FPS))
+            original_width = int(self._video_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            original_height = int(self._video_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            total_frames = int(self._video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+            # Setup output path (lazy video writer initialization)
             if output_dir:
                 output_path = Path(output_dir)
             else:
                 output_path = Path(self.output_config.get('path', './output'))
             output_path.mkdir(parents=True, exist_ok=True)
-            
+
             output_format = self.output_config.get('format', 'mp4')
             output_file = output_path / f"{output_name}.{output_format}"
-            
-            # Get codec
+
+            # Store parameters for lazy video writer initialization
             codec_str = self.output_config.get('codec', 'mp4v')
             fourcc = cv2.VideoWriter_fourcc(*codec_str)
-            
-            # Create video writer
-            writer = cv2.VideoWriter(str(output_file), fourcc, fps, (width, height))
-            if not writer.isOpened():
-                raise NavigraphError(f"Failed to create video writer for: {output_file}")
-            
+            self._video_writer_params = {
+                'output_file': str(output_file),
+                'fourcc': fourcc,
+                'fps': fps,
+                'codec_str': codec_str
+            }
+
             self.logger.info(f"Processing {total_frames} frames through {len(visualizers)} visualizers")
-            self.logger.info(f"Output: {output_file} ({width}x{height} @ {fps}fps)")
+            self.logger.info(f"Output will be saved to: {output_file}")
+            self.logger.info(f"Video writer will be lazily initialized after first frame")
             
             if show_realtime:
                 self.logger.info("🎬 Real-time visualization enabled - press 'q' to quit, space or 'p' to pause/resume")
@@ -159,8 +169,8 @@ class SessionVisualizer:
             frame_idx = 0
             last_progress = 0
             
-            while cap.isOpened():
-                ret, frame = cap.read()
+            while self._video_cap.isOpened():
+                ret, frame = self._video_cap.read()
                 if not ret or frame is None:
                     break
                 
@@ -219,8 +229,22 @@ class SessionVisualizer:
                 if show_realtime and paused and 'key' in locals() and (key == ord('q') or key == ord('Q')):
                     break
                 
+                # Lazy video writer initialization on first frame
+                if self._video_writer is None:
+                    frame_height, frame_width = frame.shape[:2]
+                    self._video_writer = cv2.VideoWriter(
+                        self._video_writer_params['output_file'],
+                        self._video_writer_params['fourcc'],
+                        self._video_writer_params['fps'],
+                        (frame_width, frame_height)
+                    )
+                    if not self._video_writer.isOpened():
+                        raise NavigraphError(f"Failed to create lazy video writer for: {self._video_writer_params['output_file']}")
+
+                    self.logger.info(f"✓ Video writer initialized: {frame_width}x{frame_height} @ {self._video_writer_params['fps']}fps")
+
                 # Write processed frame
-                writer.write(frame)
+                self._video_writer.write(frame)
                 
                 # Progress logging (every 10%)
                 progress = int((frame_idx / total_frames) * 100)
@@ -233,10 +257,8 @@ class SessionVisualizer:
             self.logger.info(f"✓ Processed {frame_idx} frames")
             
         finally:
-            # Cleanup
-            cap.release()
-            if 'writer' in locals():
-                writer.release()
+            # Cleanup video resources
+            self._cleanup_video_resources()
             cv2.destroyAllWindows()
         
         self.logger.info(f"✓ Video saved to: {output_file}")
@@ -283,3 +305,37 @@ class SessionVisualizer:
                     missing.append(viz_type)
         
         return missing
+
+
+    def _setup_signal_handlers(self):
+        """Setup signal handlers for graceful video saving on interruption."""
+        def signal_handler(signum, frame):
+            if self._video_writer is not None:
+                self.logger.warning(f"Received signal {signum}, saving video before exit...")
+                self._cleanup_video_resources()
+            else:
+                self.logger.warning(f"Received signal {signum}, no video to save (writer not initialized)")
+            cv2.destroyAllWindows()
+            sys.exit(0)
+
+        # Handle Ctrl+C (SIGINT) and termination (SIGTERM)
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+    def _cleanup_video_resources(self):
+        """Clean up video capture and writer resources."""
+        try:
+            if self._video_cap is not None:
+                self._video_cap.release()
+                self._video_cap = None
+                self.logger.debug("Video capture released")
+        except Exception as e:
+            self.logger.warning(f"Error releasing video capture: {e}")
+
+        try:
+            if self._video_writer is not None:
+                self._video_writer.release()
+                self._video_writer = None
+                self.logger.info("✓ Video writer saved and released")
+        except Exception as e:
+            self.logger.warning(f"Error releasing video writer: {e}")

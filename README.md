@@ -451,6 +451,334 @@ graph:
       format: "graphml"
 ```
 
+## Random Walks on Graphs
+
+NaviGraph supports flexible random walk generation on any graph structure. Random walks are useful for analyzing graph exploration patterns, path characteristics, navigation strategies, and agent-based simulations.
+
+### Overview
+
+The `random_walks()` method generates multiple random walks with configurable parameters:
+
+- **Target-directed or fixed-length walks**: Walk to a specific target or for a fixed number of steps
+- **Backtracking control**: Configure the probability of returning to previous nodes
+- **Weighted transitions**: Use edge weights for transition probabilities (optional)
+- **Parallel processing**: Leverage multiple CPU cores for large-scale simulations
+- **Statistical analysis**: Optional summary statistics and success rate reporting
+- **Reproducibility**: Seed-based reproducible walks
+
+### Basic Usage
+
+```python
+from navigraph.core.graph import GraphStructure
+
+# Create a binary tree graph
+graph = GraphStructure.from_config('binary_tree', {'height': 7})
+
+# Generate 100 random walks of length 20 from root node
+paths = graph.random_walks(
+    start_node=0,  # Root of binary tree
+    n_walks=100,
+    max_steps=20
+)
+
+print(f"Generated {len(paths)} walks")
+print(f"First walk: {paths[0]}")
+```
+
+### Target-Directed Walks with Statistics
+
+```python
+# Walk from root to a leaf node with statistics
+paths, stats = graph.random_walks(
+    start_node=0,
+    target_node=127,  # Target leaf node
+    n_walks=1000,
+    max_steps=50,
+    backtrack_prob=0.0,  # No backtracking
+    return_stats=True
+)
+
+print(f"Success rate: {stats['success_rate']:.1%}")
+print(f"Average path length: {stats['mean_length']:.2f} steps")
+print(f"Median path length: {stats['median_length']:.1f} steps")
+print(f"Standard deviation: {stats['std_length']:.2f} steps")
+
+# Compare to shortest path
+shortest = graph.get_shortest_path(0, 127)
+print(f"Shortest path: {len(shortest)-1} steps")
+print(f"Efficiency: {(len(shortest)-1) / stats['mean_length']:.1%}")
+```
+
+### Backtracking Modes
+
+NaviGraph supports four backtracking modes to model different navigation behaviors:
+
+```python
+# Mode 1: No backtracking (default - goal-directed navigation)
+paths = graph.random_walks(
+    start_node=0,
+    max_steps=20,
+    n_walks=1000,
+    backtrack_prob=0.0  # Never return to previous node
+)
+
+# Mode 2: Uniform distribution (unbiased exploration)
+# Treats previous node like any other neighbor - SIMPLEST MODE
+paths = graph.random_walks(
+    start_node=0,
+    max_steps=20,
+    n_walks=1000,
+    backtrack_prob=-1  # Equal probability to ALL neighbors
+)
+
+# Mode 3: Probabilistic backtracking (modeling uncertainty)
+paths = graph.random_walks(
+    start_node=0,
+    max_steps=20,
+    n_walks=1000,
+    backtrack_prob=0.3  # 30% chance to backtrack, 70% to other neighbors
+)
+
+# Mode 4: Always backtrack (testing/debugging)
+paths = graph.random_walks(
+    start_node=0,
+    max_steps=20,
+    n_walks=1000,
+    backtrack_prob=1.0  # Always return if possible
+)
+```
+
+**Which mode should you use?**
+
+| Mode | `backtrack_prob` | When to Use |
+|------|-----------------|-------------|
+| No Backtracking | `0.0` | Goal-directed navigation, preventing immediate returns |
+| **Uniform** | **`-1`** | **Unbiased exploration without manually calculating probabilities** |
+| Probabilistic | `0.0-1.0` | Modeling hesitation, uncertainty, or specific behaviors |
+| Always Backtrack | `1.0` | Testing, debugging, or validating graph structure |
+
+**Example: Comparing backtracking modes**
+
+```python
+# Compare different backtracking strategies
+modes = [
+    ("No Backtrack", 0.0),
+    ("Uniform", -1),
+    ("30% Backtrack", 0.3),
+    ("50% Backtrack", 0.5),
+]
+
+for name, prob in modes:
+    paths, stats = graph.random_walks(
+        start_node=0,
+        target_node=127,
+        n_walks=1000,
+        max_steps=50,
+        backtrack_prob=prob,
+        return_stats=True,
+        seed=42
+    )
+    print(f"{name:15} | Success: {stats['success_rate']:.1%} | Avg: {stats['mean_length']:.1f} steps")
+```
+
+### Parallel Processing
+
+```python
+# Use multiprocessing for large-scale simulations
+paths = graph.random_walks(
+    start_node=0,
+    n_walks=100000,  # Many walks
+    max_steps=30,
+    n_jobs=-1,  # Use all CPU cores
+    seed=42     # Still reproducible with parallel execution
+)
+
+# Or specify exact number of processes
+paths = graph.random_walks(
+    start_node=0,
+    n_walks=10000,
+    max_steps=20,
+    n_jobs=4  # Use 4 processes
+)
+```
+
+**Performance Guidelines:**
+- Use `n_jobs=1` (default) for small numbers of walks (< 100)
+- Use `n_jobs=-1` for large simulations (> 1000 walks)
+- Multiprocessing overhead means it's not always faster for small tasks
+- Typical speedup: 4-8x on modern multi-core systems
+
+### Weighted Random Walks
+
+```python
+# If your graph has edge weights, use them for transition probabilities
+# (weights represent preference/cost for taking that edge)
+paths = graph.random_walks(
+    start_node=0,
+    n_walks=500,
+    max_steps=25,
+    use_edge_weights=True  # Use edge weights if present
+)
+
+# Otherwise, uniform probability among neighbors (default)
+paths = graph.random_walks(
+    start_node=0,
+    n_walks=500,
+    max_steps=25,
+    use_edge_weights=False  # Equal probability (default)
+)
+```
+
+### Reproducible Walks
+
+```python
+# Same seed produces identical walks
+paths1 = graph.random_walks(
+    start_node=0, n_walks=10, max_steps=5, seed=123
+)
+paths2 = graph.random_walks(
+    start_node=0, n_walks=10, max_steps=5, seed=123
+)
+
+assert paths1 == paths2  # True - identical walks
+
+# Works with parallel execution too
+paths_parallel = graph.random_walks(
+    start_node=0, n_walks=10000, max_steps=5,
+    n_jobs=-1, seed=123
+)
+# Produces same results as serial execution with seed=123
+```
+
+### Complete Example
+
+See [`examples/multimodal_demo/random_walk_example.py`](examples/multimodal_demo/random_walk_example.py) for a comprehensive example including:
+
+1. **Basic fixed-length walks** from root node
+2. **Target-directed walks** with success rate analysis
+3. **Backtracking comparison** across different probabilities
+4. **Performance benchmarks** comparing serial vs parallel execution
+5. **Path length distribution** analysis and visualization
+6. **Reproducibility demonstration** with seed management
+
+Run the example:
+```bash
+# Activate virtual environment first
+uv run python examples/multimodal_demo/random_walk_example.py
+```
+
+Expected output includes:
+- Statistical summaries for each scenario
+- Performance comparisons (serial vs parallel)
+- Distribution plots (if matplotlib available)
+- Efficiency metrics comparing random walks to shortest paths
+
+### CLI Usage
+
+You can also run random walks directly from the command line:
+
+```bash
+# Get help and see all options
+uv run navigraph walk --help
+
+# Basic: 100 walks of 20 steps from node 0 (no backtracking)
+uv run navigraph walk config.yaml --start 0 --max-steps 20
+
+# Uniform random walk: backtracking allowed with equal probability
+uv run navigraph walk config.yaml -s 0 -m 20 -b -1 -n 1000
+
+# Target-directed: walk from node 0 to node 127
+uv run navigraph walk config.yaml -s 0 -t 127 -m 50 -n 1000
+
+# With backtracking: 30% chance to return to previous node
+uv run navigraph walk config.yaml -s 0 -m 15 -b 0.3 -n 500
+
+# Parallel execution on all CPU cores (major speedup!)
+uv run navigraph walk config.yaml -s 0 -t 127 -m 50 -n 10000 -j -1
+
+# Save paths to JSON file for later analysis
+uv run navigraph walk config.yaml -s 0 -m 20 -n 100 --save-paths walks.json
+
+# With seed for reproducibility
+uv run navigraph walk config.yaml -s 0 -t 127 -m 50 -n 1000 --seed 42
+
+# Verbose output with path details and statistics
+uv run navigraph walk config.yaml -s 0 -t 127 -m 50 -n 100 -v
+```
+
+**Key CLI Options:**
+- `-s, --start`: Starting node (required)
+- `-t, --target`: Target node (optional)
+- `-n, --n-walks`: Number of walks [default: 100]
+- `-m, --max-steps`: Maximum steps per walk
+- `-b, --backtrack-prob`: Backtracking behavior [default: 0.0]
+  - `-1`: Uniform distribution (treat previous node like any other neighbor)
+  - `0.0`: No backtracking (previous node excluded)
+  - `0.0-1.0`: Explicit backtrack probability (e.g., 0.3 = 30% chance)
+  - `1.0`: Always backtrack if possible
+- `-j, --n-jobs`: Parallel processes (1=serial, -1=all cores) [default: 1]
+- `--seed`: Random seed for reproducibility
+- `--save-paths`: Save paths to JSON file
+- `-v, --verbose`: Detailed output
+- `--help`: Show complete help message with all options
+
+**Understanding Backtracking Modes:**
+
+| Mode | `backtrack_prob` | Behavior | Use Case |
+|------|-----------------|----------|----------|
+| **No Backtracking** | `0.0` (default) | Never return to previous node | Goal-directed navigation |
+| **Uniform** | `-1` | Equal probability to all neighbors | Unbiased exploration |
+| **Probabilistic** | `0.0-1.0` | Explicit backtrack chance | Modeling uncertainty |
+| **Always Backtrack** | `1.0` | Always return if possible | Testing/debugging |
+
+**Example CLI output:**
+```
+🚶 Running random walks...
+   Start node: 0, Target node: 127, Walks: 1000, Max steps: 50, Backtrack prob: 0.00, Seed: 42
+✅ Completed in 0.45s
+
+📊 Summary Statistics:
+   Mean path length: 15.23 steps
+   Median path length: 14.0 steps
+   Std deviation: 8.45 steps
+   Min-Max: 6-50 steps
+   Success rate: 68.5%
+   Successful walks: 685/1000
+   Shortest path: 6 steps
+   Efficiency: 39.4%
+```
+
+### API Reference
+
+**Main Method:**
+```python
+GraphStructure.random_walks(
+    start_node,                    # Required: starting node
+    n_walks=1,                     # Number of walks to generate
+    max_steps=None,                # Max steps per walk (or None if target provided)
+    target_node=None,              # Optional target node
+    terminate_on_target=True,      # Stop when target reached?
+    backtrack_prob=0.0,            # Probability (0-1) of backtracking
+    use_edge_weights=False,        # Use edge weights for transitions?
+    return_stats=False,            # Return statistics dictionary?
+    seed=None,                     # Random seed for reproducibility
+    n_jobs=1                       # Number of processes (1=serial, -1=all cores)
+)
+```
+
+**Returns:**
+- `List[List[Any]]`: List of walks (each walk is a list of nodes)
+- OR `Tuple[List[List[Any]], Dict]`: Walks + statistics if `return_stats=True`
+
+**Statistics Dictionary:**
+- `'mean_length'`: Mean path length across all walks
+- `'median_length'`: Median path length
+- `'std_length'`: Standard deviation
+- `'min_length'`: Minimum path length
+- `'max_length'`: Maximum path length
+- `'success_rate'`: Fraction reaching target (if target provided)
+- `'successful_walks'`: List of successful walk indices (if target provided)
+
 ## Spatial Calibration
 
 NaviGraph provides interactive tools for spatial calibration:

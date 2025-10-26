@@ -30,10 +30,10 @@ plugins:
     type: neural_activity
     file_pattern: '^minian$'  # Match minian folder exactly
     config:
-      merge_mode: "left"  # Merge strategy with session DataFrame
-      unit_prefix: "neuron_"  # Prefix for neuron column names
+      components: null  # Extract all components (C, S, A). Set to ['C', 'S'] to exclude contours
+      neurons: null     # Extract all neurons. Set to [3, 4, 5] to select specific neurons
       derived_metrics:
-        neuron_mean_activity: 'mean'  # Calculate mean activity across all neurons
+        neuron_mean_activity: 'mean'  # Calculate mean activity across all C traces
     
 
   # Head direction from IMU sensor
@@ -66,7 +66,7 @@ graph:
     type: binary_tree
     config:
       height: 7
-  mapping_file: ./resources/graph_mapping.pkl
+  mapping_file: ./resources/complex_maze_graph_mapping.pkl
   conflict_strategy: node_priority
 
 analyze:
@@ -99,123 +99,111 @@ visualizations:
     codec: mp4v
     
   pipeline:
+    # First panel (left): Spatial navigation video with pose tracking
     - name: bodypart_display
       type: bodyparts
       config:
-        bodyparts: null  # null = all bodyparts
+        bodyparts: ['Nose']  # Focus on nose for cleaner view
         colors:
           Nose: [0, 0, 255]      # Red
-          Tail_base: [255, 0, 0] # Blue
         radius: 6
         show_labels: false
-        likelihood_threshold: 0.8  # null = plot regardless of likelihood
+        likelihood_threshold: 0.8
 
-    - name: map_overlay_display
-      type: map_overlay
+    # Second panel (middle): Neural activity video with contour segmentation
+    - name: neural_segmentation_display
+      type: neural_segmentation
       config:
-        position: 'bottom_right'
-        size: 0.25
-        opacity: 0.8
-        
-        # Bodyparts to show on map
-        bodyparts: ['Nose']
-        colors:
-          Nose: [0, 0, 255]      # Red
-        default_color: [255, 255, 255]  # White
-        radius: 30
-        thickness: 15
-        
-        # Likelihood filtering (optional)
-        likelihood_threshold: 0.8  # null = no filtering, 0.5 = only show high confidence
-        
-        # Trajectory settings
-        show_trajectory: False
-        trail_length: 100
-        fade_trail: False
-        line_thickness: 100
-        fade_to_color: [0, 0, 255]
-        
-    # - name: graph_structure_overlay
-    #   type: graph_overlay
-    #   config:
-    #     # Graph display settings
-    #     mode: 'side_by_side'
-    #     size: 0.3
-    #     opacity: 0.6
-    #     position: 'top_right'
-        
-    #     # Default visualization settings
-    #     default_node_size: 800
-        
-    #     # Performance settings
-    #     cache_size: 20
-        
-    #     # Location source settings (specify which bodypart to use)
-    #     node_column: 'Nose_graph_node'  # Use Nose position for node highlighting
-    #     edge_column: 'Nose_graph_edge'  # Use Nose position for edge highlighting
-        
-    #     # Current node/edge highlighting
-    #     highlight_node_size: 1200
-    #     highlight_node_color: 'red'
-    #     highlight_edge_width: 3.0
-    #     highlight_edge_color: 'blue'
-        
-    - name: multimodal_info
-      type: text_display
-      config:
-        columns: ['Nose_graph_node', 'yaw']  
-        position: 'top_left'
-        font_scale: 0.7
-        color: [255, 255, 255]           
-        background: true
-        background_opacity: 0.7
-        decimal_places: 0
-        
-        # Display formatting options
-        show_column_names: true
-        layout: 'vertical'
-        separator: ' | '
-        
+        mode: 'side_by_side'      # Add neural video to the right of spatial video
+        panel_width: 'auto'       # Auto-calculate width to match height
+        columns: null             # Show all neuron contours
+
+        # Activity-based filtering for dynamic visualization
+        # activity_threshold: 0.1   # Only show neurons with activity > 0.1
+        # normalize_activity: False  # Normalize activity values for visualization
+        # modulate_opacity: true    # Vary contour brightness based on activity
+        # modulate_color: false     # Keep consistent colors
+        # max_neurons_per_frame: 15 # Limit for performance (top 15 most active)
+
+        # Contour visualization - optimized for performance
+        contour_thickness: 2
+        contour_fill: false       # PERFORMANCE: Use hollow contours (faster)
+        fill_opacity: 0.3         # Lower opacity for better performance
+
+        # Contour optimization settings
+        # simplify_contours: true   # Use Douglas-Peucker simplification
+        # simplification_epsilon: 1.5  # Balance between accuracy and performance
+        # downsample_contours: true # Skip every nth contour point
+        # downsample_factor: 2      # Use every 2nd point
+
+        # Label settings - optimized
+        show_labels: true
+        show_activity_values: false  # Keep false for performance
+        label_font_scale: 0.5
+        label_position: 'centroid'
+        label_offset: [3, -3]     # Slightly smaller offset
+        label_background: false   # Remove background for performance
+
+        # Color scheme
+        color_scheme: 'auto'      # Auto-generate distinct colors
+
+    # Third panel (right): Time series of neural activity
     - name: neural_time_series
       type: time_series
       config:
-        # Data to plot
-        columns: ['neuron_1','neuron_mean_activity']  # Neural activity only for now
-        
-        # Display settings
-        mode: 'overlay'  # Show plot overlaid on video
-        position: 'top_right'  # Position for overlay mode
-        size: 0.4  # Size factor for overlay
-        opacity: 0.85  # Overlay transparency
-        
+        # Data to plot - examples showing different neural data types
+        columns: ['unit_id_94_C', 'unit_id_76_C', 'neuron_mean_activity']  # C (calcium), S (spikes), and mean
+
+        # Display settings for side-by-side layout
+        mode: 'side_by_side'      # Add time series to the right
+        panel_width: 400          # Fixed width for time series panel
+
         # Time series behavior
-        plot_mode: 'fixed_window'  # 'fixed_window' or 'continuous'
-        window_size: 200  # Show last 200 frames (~6.7 seconds at 30fps)
-        
+        plot_mode: 'fixed_window'
+        window_size: 200          # Show last 200 frames (~6.7 seconds at 30fps)
+
         # Y-axis range control
-        y_range_mode: 'fixed'  # 'dynamic' auto-scales, 'fixed' uses y_range
-        y_range: [0, 5]  # Fixed range when y_range_mode='fixed'
-        # y_margin: 0.15  # 15% margin for dynamic scaling
-        
-        # Visual styling - ECG-style
-        figure_size: [6, 3]
+        y_range_mode: 'fixed'
+        y_range: [0, 5]
+
+        # Visual styling
+        figure_size: [6, 4]       # Adjusted for side panel
         dpi: 100
         background_color: 'black'
         grid_color: '#004400'
         grid_alpha: 0.3
-        
-        # Line styling
-        colors: ['#00ff00']  # Bright green for neural activity
-        line_width: 2.5
-        
-        # Axes and labels
-        show_axes: false  # Clean ECG look without axes
-        show_labels: false  # No y-axis labels for cleaner look
-        show_values: true  # Show current value as text
-        font_size: 12
-        
+
+        # Line styling - different colors for each trace
+        colors: ['#00ff00', '#ff00ff', '#00ffff']  # Green (C), Magenta (S), Cyan (mean)
+        line_width: 2.0
+
+        # Axes and labels - optimized for side-by-side concatenation
+        show_axes: false           # Show axes for side panel
+        show_y_ticks: false       # Remove y-axis ticks for cleaner look
+        label_position: 'right'   # Move labels to right side for concatenation
+        show_labels: true         # Show labels for clarity
+        show_values: true
+        font_size: 7
+
         # Performance
-        update_interval: 1  # Update every frame
+        update_interval: 1
+
+    # Additional info overlay on the combined view
+    - name: multimodal_info
+      type: text_display
+      config:
+        columns: ['Nose_graph_node', 'yaw']
+        position: 'top_left'      # Overlay on the combined three-panel view
+        font_scale: 0.7
+        color: [255, 255, 255]
+        background: true
+        background_opacity: 0.7
+        decimal_places: 0
+
+        # Display formatting options
+        show_column_names: true
+        layout: 'vertical'
+        separator: ' | '
 
 # Expected file structure:
 # demo_session/
@@ -229,8 +217,20 @@ visualizations:
 #     └── ... (other Minian outputs)
 
 # Notes:
-# 1. This configuration demonstrates full multimodal integration
-# 2. Neural activity data will be available as columns: neuron_0, neuron_1, ..., neuron_N, neuron_mean_activity
+# 1. This configuration creates a three-panel side-by-side visualization:
+#    - Left panel: Spatial navigation video with pose tracking (red nose marker)
+#    - Middle panel: Neural activity video with DYNAMIC neuron contour overlays
+#    - Right panel: Real-time time series plots of neural activity
+# 2. Neural activity data will be available as columns:
+#    - unit_id_3_C, unit_id_4_C, ... (calcium traces for each neuron)
+#    - unit_id_3_S, unit_id_4_S, ... (spike activity for each neuron)
+#    - unit_id_3_A_contour, ... (activity-modulated contours for each neuron)
+#    - neuron_mean_activity (mean of all calcium traces)
 # 3. Head direction data will be available as columns: yaw, pitch, roll
 # 4. All data is synchronized by frame index for temporal alignment
 # 5. The session DataFrame will contain all modalities for comprehensive analysis
+# 6. Neural video (if found) is provided as 'neural_video' in shared resources
+# 7. DYNAMIC VISUALIZATION: Contours appear/disappear based on neural activity
+# 8. Only active neurons (activity > threshold) are shown per frame
+# 9. Contour brightness varies with activity level for biological accuracy
+# 10. Performance optimized: single overlay rendering, activity-based filtering

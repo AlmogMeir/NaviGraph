@@ -621,6 +621,247 @@ def validate(config_path: Path):
         sys.exit(1)
 
 
+@cli.command()
+@click.argument('config_path', type=click.Path(exists=True, path_type=Path))
+@click.option('--start', '-s', required=True, type=int, help='Starting node ID')
+@click.option('--target', '-t', type=int, help='Target node ID (optional)')
+@click.option('--n-walks', '-n', default=100, type=int, help='Number of random walks [default: 100]')
+@click.option('--max-steps', '-m', type=int, help='Maximum steps per walk (required if no target)')
+@click.option('--backtrack-prob', '-b', default=0.0, type=float,
+              help='Backtracking probability (-1=uniform, 0.0=none, 1.0=always) [default: 0.0]')
+@click.option('--terminate-on-target/--no-terminate-on-target', default=True,
+              help='Stop immediately when reaching target [default: True]')
+@click.option('--use-weights/--no-weights', default=False,
+              help='Use edge weights for transitions [default: False]')
+@click.option('--n-jobs', '-j', default=1, type=int,
+              help='Number of processes (1=serial, -1=all cores) [default: 1]')
+@click.option('--seed', type=int, help='Random seed for reproducibility')
+@click.option('--stats/--no-stats', default=True,
+              help='Show summary statistics [default: True]')
+@click.option('--save-paths', type=click.Path(path_type=Path),
+              help='Save paths to JSON file')
+@click.option('--verbose', '-v', is_flag=True, help='Show detailed output')
+def walk(config_path: Path, start: int, target: Optional[int], n_walks: int,
+         max_steps: Optional[int], backtrack_prob: float, terminate_on_target: bool,
+         use_weights: bool, n_jobs: int, seed: Optional[int], stats: bool,
+         save_paths: Optional[Path], verbose: bool):
+    """Generate random walks on the graph structure from config.
+
+    Performs random walks on a graph defined in the configuration file,
+    with flexible control over walk behavior, backtracking, and parallelization.
+
+    CONFIG_PATH: Path to YAML configuration file containing graph definition
+
+    \b
+    Examples:
+      # Basic: 100 walks of 20 steps from node 0 (no backtracking)
+      navigraph walk config.yaml --start 0 --max-steps 20
+
+      # Uniform random walk: backtracking allowed (equal probability)
+      navigraph walk config.yaml -s 0 -m 20 -b -1 -n 1000
+
+      # Target-directed: walk from node 0 to node 127
+      navigraph walk config.yaml -s 0 -t 127 -m 50 -n 1000
+
+      # With backtracking: 30% chance to return to previous node
+      navigraph walk config.yaml -s 0 -m 15 -b 0.3 -n 500
+
+      # Parallel execution on all CPU cores
+      navigraph walk config.yaml -s 0 -t 127 -m 50 -n 10000 -j -1
+
+      # Save paths to file
+      navigraph walk config.yaml -s 0 -m 20 -n 100 --save-paths walks.json
+
+    \b
+    Options explained:
+      --start, -s          Starting node for all walks (required)
+      --target, -t         Target node (walk ends when reached)
+      --n-walks, -n        Number of walks to generate
+      --max-steps, -m      Maximum steps per walk
+      --backtrack-prob, -b Probability of backtracking (-1=uniform, 0=none, 0-1=explicit)
+      --n-jobs, -j         Parallel processes (1=serial, -1=all cores)
+      --seed               Random seed for reproducible results
+    """
+    try:
+        # Validate parameters
+        if max_steps is None and target is None:
+            click.echo("❌ Error: Must provide either --max-steps or --target", err=True)
+            sys.exit(1)
+
+        if backtrack_prob != -1 and not (0.0 <= backtrack_prob <= 1.0):
+            click.echo(f"❌ Error: backtrack-prob must be -1 or between 0.0 and 1.0, got {backtrack_prob}", err=True)
+            sys.exit(1)
+
+        # Load configuration
+        if verbose:
+            click.echo(f"📋 Loading configuration: {config_path}")
+
+        config = OmegaConf.load(config_path)
+        config = process_config_path(config_path, OmegaConf.to_container(config))
+
+        # Import graph modules
+        from ..core.graph.structures import GraphStructure
+        from ..core.graph.builders import get_graph_builder, list_graph_builders
+
+        # Create graph from config
+        graph_section = config.get('graph', {})
+        builder_config = graph_section.get('builder', {})
+
+        if not builder_config:
+            click.echo("❌ Error: No graph builder configuration found in config file", err=True)
+            click.echo("Add 'graph.builder' section to your config file", err=True)
+            sys.exit(1)
+
+        graph_type = builder_config.get('type')
+        if not graph_type:
+            click.echo("❌ Error: No graph builder type specified", err=True)
+            click.echo(f"Available builders: {', '.join(list_graph_builders())}", err=True)
+            sys.exit(1)
+
+        # Get parameters for the builder
+        params = builder_config.get('config', {})
+
+        try:
+            # Create graph structure
+            graph = GraphStructure.from_config(graph_type, params)
+
+            if verbose:
+                click.echo(f"📊 Graph: {graph.num_nodes} nodes, {graph.num_edges} edges")
+                click.echo(f"   Type: {graph_type}")
+                param_str = ', '.join(f"{k}={v}" for k, v in params.items())
+                if param_str:
+                    click.echo(f"   Parameters: {param_str}")
+
+        except Exception as e:
+            click.echo(f"❌ Error creating graph: {str(e)}", err=True)
+            sys.exit(1)
+
+        # Validate nodes exist
+        if not graph.has_node(start):
+            click.echo(f"❌ Error: Start node {start} not in graph", err=True)
+            click.echo(f"Available nodes: {sorted(graph.nodes)[:10]}{'...' if graph.num_nodes > 10 else ''}", err=True)
+            sys.exit(1)
+
+        if target is not None and not graph.has_node(target):
+            click.echo(f"❌ Error: Target node {target} not in graph", err=True)
+            click.echo(f"Available nodes: {sorted(graph.nodes)[:10]}{'...' if graph.num_nodes > 10 else ''}", err=True)
+            sys.exit(1)
+
+        # Build parameters display
+        params_display = []
+        params_display.append(f"Start node: {start}")
+        if target is not None:
+            params_display.append(f"Target node: {target}")
+        params_display.append(f"Walks: {n_walks}")
+        if max_steps is not None:
+            params_display.append(f"Max steps: {max_steps}")
+        params_display.append(f"Backtrack prob: {backtrack_prob:.2f}")
+        if n_jobs != 1:
+            params_display.append(f"Parallel: {n_jobs if n_jobs > 0 else 'all cores'}")
+        if seed is not None:
+            params_display.append(f"Seed: {seed}")
+
+        click.echo(f"🚶 Running random walks...")
+        click.echo(f"   {', '.join(params_display)}")
+
+        # Measure execution time
+        import time
+        start_time = time.time()
+
+        # Run random walks
+        result = graph.random_walks(
+            start_node=start,
+            target_node=target,
+            n_walks=n_walks,
+            max_steps=max_steps,
+            terminate_on_target=terminate_on_target,
+            backtrack_prob=backtrack_prob,
+            use_edge_weights=use_weights,
+            return_stats=stats,
+            seed=seed,
+            n_jobs=n_jobs
+        )
+
+        execution_time = time.time() - start_time
+
+        # Extract paths and stats
+        if stats:
+            paths, walk_stats = result
+        else:
+            paths = result
+            walk_stats = None
+
+        # Display results
+        click.echo(f"✅ Completed in {execution_time:.2f}s")
+        click.echo()
+
+        if walk_stats:
+            click.echo("📊 Summary Statistics:")
+            click.echo(f"   Mean path length: {walk_stats['mean_length']:.2f} steps")
+            click.echo(f"   Median path length: {walk_stats['median_length']:.1f} steps")
+            click.echo(f"   Std deviation: {walk_stats['std_length']:.2f} steps")
+            click.echo(f"   Min-Max: {walk_stats['min_length']}-{walk_stats['max_length']} steps")
+
+            if target is not None:
+                click.echo(f"   Success rate: {walk_stats['success_rate']:.1%}")
+                click.echo(f"   Successful walks: {len(walk_stats['successful_walks'])}/{n_walks}")
+
+                # Calculate efficiency vs shortest path
+                try:
+                    shortest = graph.get_shortest_path(start, target)
+                    if shortest:
+                        shortest_len = len(shortest) - 1
+                        efficiency = shortest_len / walk_stats['mean_length'] if walk_stats['mean_length'] > 0 else 0
+                        click.echo(f"   Shortest path: {shortest_len} steps")
+                        click.echo(f"   Efficiency: {efficiency:.1%}")
+                except:
+                    pass
+
+        if verbose and paths:
+            click.echo()
+            click.echo("📝 First 3 walks:")
+            for i, path in enumerate(paths[:3]):
+                path_str = ' → '.join(str(n) for n in path[:10])
+                if len(path) > 10:
+                    path_str += ' → ...'
+                click.echo(f"   Walk {i+1}: {path_str} ({len(path)-1} steps)")
+
+        # Save paths if requested
+        if save_paths:
+            try:
+                import json
+                output_data = {
+                    'parameters': {
+                        'start_node': start,
+                        'target_node': target,
+                        'n_walks': n_walks,
+                        'max_steps': max_steps,
+                        'backtrack_prob': backtrack_prob,
+                        'terminate_on_target': terminate_on_target,
+                        'use_weights': use_weights,
+                        'seed': seed
+                    },
+                    'paths': paths,
+                    'statistics': walk_stats if walk_stats else {}
+                }
+
+                with open(save_paths, 'w') as f:
+                    json.dump(output_data, f, indent=2)
+
+                click.echo()
+                click.echo(f"💾 Paths saved to: {save_paths}")
+
+            except Exception as e:
+                click.echo(f"⚠️  Warning: Failed to save paths: {str(e)}", err=True)
+
+    except Exception as e:
+        click.echo(f"❌ Random walk failed: {str(e)}", err=True)
+        if verbose:
+            import traceback
+            click.echo(traceback.format_exc(), err=True)
+        sys.exit(1)
+
+
 # Graph setup and testing commands
 @cli.group()
 def setup():

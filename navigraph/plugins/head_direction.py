@@ -63,43 +63,38 @@ class HeadDirectionPlugin(NaviGraphPlugin):
                 raise NavigraphError(f"Missing required quaternion columns: {missing_cols}")
             
             # Convert quaternions to Euler angles
-            yaw_offset = self.config.get('yaw_offset', -167)
-            positive_direction = self.config.get('positive_direction', -1)
-            
+            config_params = self.config.get('config', {})
+            yaw_offset = config_params.get('yaw_offset', -167)
+            positive_direction = config_params.get('positive_direction', -1)
+
             euler_angles = quaternions_to_euler(
-                raw_data, 
+                raw_data,
                 yaw_offset=yaw_offset,
                 positive_direction=positive_direction
             )
             
-            self.logger.info(
-                f"Converted {len(euler_angles)} quaternions to Euler angles "
-                f"(yaw_offset={yaw_offset}, positive_direction={positive_direction})"
-            )
-            
-            # Apply sampling adjustment (manual sync option) if specified
-            skip_index = self.config.get('skip_index', None)
-            if skip_index is not None and skip_index > 1:
-                adjusted_angles = euler_angles[::skip_index]
-                self.logger.info(
-                    f"Applied sampling adjustment (skip_index={skip_index}): "
-                    f"{len(adjusted_angles)} samples"
-                )
-            else:
-                adjusted_angles = euler_angles
-            
             # Add head direction columns to dataframe
             result_df = dataframe.copy()
             yaw_list, pitch_list, roll_list = [], [], []
-            
-            for frame_idx in result_df.index:
-                if frame_idx < len(adjusted_angles):
-                    angles = adjusted_angles[frame_idx]
+
+            # Get skip_index for frame-to-IMU mapping (like frame_idx += 2)
+            skip_index = config_params.get('skip_index', 1)
+
+            # Use relative frame position instead of absolute DataFrame index
+            frame_indices = list(result_df.index)
+
+            for i, _ in enumerate(frame_indices):
+                # Map relative frame position to IMU sample (like your frame_idx += 2)
+                # i=0 → IMU[0], i=1 → IMU[2], i=2 → IMU[4], etc.
+                imu_idx = i * skip_index
+
+                if imu_idx < len(euler_angles):
+                    angles = euler_angles[imu_idx]
                     yaw_list.append(float(angles[0]))
                     pitch_list.append(float(angles[1]))
                     roll_list.append(float(angles[2]))
                 else:
-                    # No corresponding data - use NaN
+                    # No corresponding IMU data - use NaN
                     yaw_list.append(np.nan)
                     pitch_list.append(np.nan)
                     roll_list.append(np.nan)
@@ -112,16 +107,11 @@ class HeadDirectionPlugin(NaviGraphPlugin):
             valid_yaw = np.sum(~np.isnan(yaw_list))
             total_frames = len(yaw_list)
             coverage_pct = (valid_yaw / total_frames) * 100 if total_frames > 0 else 0
-            
-            self.logger.info(
-                f"✓ Head direction loaded: {valid_yaw}/{total_frames} frames ({coverage_pct:.1f}% coverage)"
-            )
-            
+
+            self.logger.info(f"✓ Head direction loaded: {valid_yaw}/{total_frames} frames ({coverage_pct:.1f}% coverage)")
+
             if coverage_pct < 50:
-                self.logger.warning(
-                    f"Low head direction coverage ({coverage_pct:.1f}%). "
-                    f"Check skip_index parameter or data alignment."
-                )
+                self.logger.warning(f"Low head direction coverage ({coverage_pct:.1f}%). Check data alignment.")
             
             return result_df
             

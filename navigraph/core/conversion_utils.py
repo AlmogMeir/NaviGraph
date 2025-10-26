@@ -34,26 +34,30 @@ def quaternions_to_euler(
     positive_direction: float = -1
 ) -> np.ndarray:
     """Convert quaternion values in a DataFrame to Euler angles.
-    
+
     Converts quaternion data to Euler angles using ZYX convention (yaw, pitch, roll).
-    Applies calibration offset and direction correction to yaw values.
-    
+    Applies Cartesian normalization to ensure angle continuity, then applies
+    calibration offset and direction correction to yaw values.
+
+    The Cartesian normalization step converts angles through unit circle coordinates
+    (cos/sin/arctan2) to prevent discontinuities from angle wrapping.
+
     Args:
         data: DataFrame containing quaternion columns ['qw', 'qx', 'qy', 'qz']
         yaw_offset: Offset to subtract from yaw in degrees (default: -167)
         positive_direction: Multiplier for yaw direction correction (default: -1)
-        
+
     Returns:
         Array of shape (N, 3) with Euler angles [yaw, pitch, roll] in degrees
-        
+
     Raises:
         KeyError: If required quaternion columns are missing
         ValueError: If no valid quaternion data is found
-        
+
     Examples:
         >>> df = pd.DataFrame({
         ...     'qw': [1.0, 0.707],
-        ...     'qx': [0.0, 0.0], 
+        ...     'qx': [0.0, 0.0],
         ...     'qy': [0.0, 0.0],
         ...     'qz': [0.0, 0.707]
         ... })
@@ -77,11 +81,29 @@ def quaternions_to_euler(
     
     # Convert to Euler angles using ZYX convention (yaw, pitch, roll)
     euler_angles = Rotation.from_quat(quats_reordered).as_euler('zyx', degrees=True)
-    
-    # Apply yaw calibration: offset, wrap, and direction correction
-    euler_angles[:, 0] = wrap_angle(euler_angles[:, 0] - yaw_offset)
+
+    # Apply Cartesian normalization for angle continuity (critical for smooth tracking)
+    # This prevents discontinuities by converting through unit circle coordinates
+
+    # Yaw normalization
+    yaw_x = np.cos(np.radians(euler_angles[:, 0]))
+    yaw_y = np.sin(np.radians(euler_angles[:, 0]))
+    euler_angles[:, 0] = np.degrees(np.arctan2(yaw_y, yaw_x))
+
+    # Pitch normalization
+    pitch_x = np.cos(np.radians(euler_angles[:, 1]))
+    pitch_y = np.sin(np.radians(euler_angles[:, 1]))
+    euler_angles[:, 1] = np.degrees(np.arctan2(pitch_y, pitch_x))
+
+    # Roll normalization
+    roll_x = np.cos(np.radians(euler_angles[:, 2]))
+    roll_y = np.sin(np.radians(euler_angles[:, 2]))
+    euler_angles[:, 2] = np.degrees(np.arctan2(roll_y, roll_x))
+
+    # Apply calibration ONLY to yaw (like working code)
+    euler_angles[:, 0] = (euler_angles[:, 0] - yaw_offset + 180) % 360 - 180
     euler_angles[:, 0] *= positive_direction
-    
+
     return euler_angles
 
 
