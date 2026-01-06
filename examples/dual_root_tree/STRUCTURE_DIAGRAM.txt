@@ -1,0 +1,119 @@
+"""
+Dual-Rooted Binary Tree Structure Diagram
+==========================================
+
+Example: Symmetric tree with height 3 on each side
+
+
+        L0 ←→ R0          (Level 0: Roots connected)
+        /  \  /  \
+      L10  L11 R10 R11     (Level 1: 4 nodes total)
+      / \  / \ / \ / \
+    L20 L21 L22 L23 R20 R21 R22 R23  (Level 2: 8 nodes total)
+
+
+Key Properties:
+--------------
+- Root Connection: L0 ←→ R0 (bidirectional edge)
+- Left Tree: L0 → L10, L11 → L20, L21, L22, L23
+- Right Tree: R0 → R10, R11 → R20, R21, R22, R23
+- Total Nodes: 14 (2 roots + 6 left + 6 right)
+- Total Edges: 13
+
+
+Example: Asymmetric tree (height 4 left, height 2 right)
+
+
+               L0 ←→ R0          (Level 0: Roots)
+              /  \  /  \
+           L10   L11  R10 R11    (Level 1)
+           / \   / \
+         L20 L21 L22 L23         (Level 2: Left only)
+         /\ /\ /\ /\
+        ... (8 nodes)             (Level 3: Left only)
+
+
+Key Properties:
+--------------
+- Asymmetric depth
+- Left tree has 14 nodes (1+2+4+8-1)
+- Right tree has 1 node
+- Total: 17 nodes, 16 edges
+- Useful for biased/unbalanced exploration studies
+
+
+Node Naming Convention:
+----------------------
+Format: [Tree][Level][Position]
+
+Tree:
+  L = Left tree
+  R = Right tree
+
+Level:
+  0 = Root
+  1 = First level below root
+  2 = Second level below root
+  ...
+
+Position:
+  Position within that level (0-indexed)
+
+Examples:
+  L0   = Left root
+  R0   = Right root
+  L10  = Left tree, level 1, position 0 (leftmost)
+  L11  = Left tree, level 1, position 1 (rightmost)
+  R22  = Right tree, level 2, position 2
+
+
+Use Cases:
+----------
+1. T-Maze with branches:
+   - Start at one root
+   - Make choice to enter left or right tree
+   - Explore branches within chosen side
+
+2. Choice paradigm:
+   - Each tree represents a choice option
+   - Depth represents commitment to choice
+   - Root crossing = changing decision
+
+3. Bidirectional navigation:
+   - Animal can freely move between trees
+   - Track preference and exploration depth
+   - Measure switching behavior
+
+4. Learning paradigm:
+   - Reward in one tree
+   - Track how depth of exploration changes
+   - Measure learning through tree preference
+
+
+Configuration Examples:
+----------------------
+
+Symmetric (balanced):
+graph:
+  builder:
+    type: dual_root_binary_tree
+    params:
+      left_height: 3
+      right_height: 3
+
+Asymmetric (biased):
+graph:
+  builder:
+    type: dual_root_binary_tree
+    params:
+      left_height: 4  # Deeper left side
+      right_height: 2  # Shallower right side
+
+Minimal (just roots):
+graph:
+  builder:
+    type: dual_root_binary_tree
+    params:
+      left_height: 1
+      right_height: 1
+"""

@@ -1,0 +1,97 @@
+# Dual-Rooted Binary Tree Configuration Example
+# This configuration demonstrates the new dual_root_binary_tree graph builder
+
+# Logging and paths
+log_level: info
+experiment_path: .
+experiment_output_path: "{PROJECT_ROOT}/output"
+
+# Setup configuration for GUI tools
+setup:
+  map_path: ./resources/maze_map.png  # Your experimental arena image
+  graph_mapping_output: ./resources/graph_mapping.pkl
+  calibration_matrix: ./resources/transform_matrix.npy
+
+# Plugin configuration - customize based on your data sources
+plugins:
+  - name: pose_data
+    plugin_type: pose_tracking
+    pose_file_pattern: "*.h5"  # DeepLabCut or similar pose tracking files
+    tracked_bodyparts: 
+      - centroid
+    likelihood_threshold: 0.9
+
+  - name: graph_position
+    plugin_type: graph_location
+    graph_mapping_file: ./resources/graph_mapping.pkl
+    conflict_strategy: node_priority
+
+# Dual-rooted binary tree graph structure
+graph:
+  builder:
+    type: dual_root_binary_tree
+    params:
+      left_height: 3   # Height of left tree (number of levels)
+      right_height: 3  # Height of right tree (can be different from left)
+  
+  mapping_file: ./resources/graph_mapping.pkl
+  conflict_strategy: node_priority
+
+# Analysis metrics
+analyze:
+  metrics:
+    # Track visits to each node
+    - name: node_visits
+      type: node_visit_count
+      
+    # Measure time spent in each tree
+    - name: tree_preference
+      type: custom
+      
+    # Track transitions between trees
+    - name: root_crossings
+      type: edge_transitions
+      filter_edges: 
+        edge_type: root_connection
+  
+  save_as_pkl: true
+
+# Visualization pipeline
+visualizations:
+  output:
+    directory: "{PROJECT_ROOT}/output/visualizations"
+    format: mp4
+    fps: 30
+    
+  layers:
+    # Show the maze map
+    - type: map_overlay
+      params:
+        map_path: ./resources/maze_map.png
+        alpha: 0.7
+    
+    # Overlay the dual-rooted tree structure
+    - type: graph_overlay
+      params:
+        show_nodes: true
+        show_edges: true
+        node_color_by: visits
+        edge_width: 2
+        highlight_active_node: true
+    
+    # Show tracked position
+    - type: bodyparts
+      params:
+        bodyparts:
+          - centroid
+        trail_length: 50
+        marker_size: 5
+    
+    # Display metrics
+    - type: text_display
+      params:
+        metrics:
+          - node_visits
+          - current_node
+          - tree_preference
+        position: top_left
