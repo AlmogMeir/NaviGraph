@@ -9,6 +9,7 @@ experiment_output_path: "{PROJECT_ROOT}/output"
 # Setup configuration for GUI tools
 setup:
   map_path: ./resources/maze_map.png  # Your experimental arena image
+  spatial_image_for_calibration: NPC2_2025_11_27_12_56_15_blackout.png
   graph_mapping_output: ./resources/graph_mapping.pkl
   calibration_matrix: ./resources/transform_matrix.npy
 
@@ -19,7 +20,7 @@ plugins:
     pose_file_pattern: "*.h5"  # DeepLabCut or similar pose tracking files
     tracked_bodyparts: 
       - centroid
-    likelihood_threshold: 0.9
+    likelihood_threshold: 0.5
 
   - name: graph_position
     plugin_type: graph_location
@@ -30,9 +31,9 @@ plugins:
 graph:
   builder:
     type: dual_root_binary_tree
-    params:
-      left_height: 3   # Height of left tree (number of levels)
-      right_height: 3  # Height of right tree (can be different from left)
+    config:
+      left_height: 5   # Height of left tree (number of levels)
+      right_height: 5  # Height of right tree (can be different from left)
   
   mapping_file: ./resources/graph_mapping.pkl
   conflict_strategy: node_priority
@@ -61,7 +62,7 @@ visualizations:
   output:
     directory: "{PROJECT_ROOT}/output/visualizations"
     format: mp4
-    fps: 30
+    fps: 40
     
   layers:
     # Show the maze map

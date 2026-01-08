@@ -216,6 +216,11 @@ class DualRootBinaryTreeBuilder(GraphBuilder):
         """
         graph = self.build_graph()
         return {
+            'builder_type': 'dual_root_binary_tree',
+            'parameters': {
+                'left_height': self.left_height,
+                'right_height': self.right_height
+            },
             'type': 'dual_root_binary_tree',
             'left_height': self.left_height,
             'right_height': self.right_height,
