@@ -65,11 +65,9 @@ class DualRootBinaryTreeBuilder(GraphBuilder):
         left_root = 'L0'
         right_root = 'R0'
         
-        # Position roots at top center with small separation
-        g.add_node(left_root, pos=(2**(max_height) * 0.45, max_height + 1), 
-                   level=0, tree='left')
-        g.add_node(right_root, pos=(2**(max_height) * 0.55, max_height + 1), 
-                   level=0, tree='right')
+        # Add root nodes without positions (will use hierarchical layout)
+        g.add_node(left_root, level=0, tree='left', subset=0)
+        g.add_node(right_root, level=0, tree='right', subset=0)
         
         # Connect the two roots
         edge_weight = weight(left_root, right_root)
@@ -78,20 +76,64 @@ class DualRootBinaryTreeBuilder(GraphBuilder):
         # Build left tree
         if self.left_height > 1:
             self._build_tree_side(g, left_root, self.left_height, 'L', 
-                                 x_offset=0, x_scale=2**(max_height) * 0.5, 
-                                 weight_func=weight, max_height=max_height)
+                                 weight_func=weight, tree_side='left')
         
         # Build right tree
         if self.right_height > 1:
             self._build_tree_side(g, right_root, self.right_height, 'R', 
-                                 x_offset=2**(max_height) * 0.5, x_scale=2**(max_height) * 0.5, 
-                                 weight_func=weight, max_height=max_height)
+                                 weight_func=weight, tree_side='right')
+        
+        # Use graphviz hierarchical layout for proper tree visualization
+        # This prevents overlaps and creates a clean tree structure
+        try:
+            pos = nx.nx_agraph.graphviz_layout(g, prog='dot')
+        except:
+            # Fallback to custom tree layout if graphviz not available
+            pos = self._custom_tree_layout(g, max_height)
+        
+        # Set positions as node attributes
+        nx.set_node_attributes(g, pos, 'pos')
         
         return g
     
+    def _custom_tree_layout(self, graph: nx.Graph, max_height: int) -> Dict[str, Tuple[float, float]]:
+        """Custom tree layout that prevents overlaps.
+        
+        Args:
+            graph: The graph to layout
+            max_height: Maximum tree height
+            
+        Returns:
+            Dictionary mapping node IDs to (x, y) positions
+        """
+        pos = {}
+        
+        # Organize nodes by level
+        levels = {}
+        for node, data in graph.nodes(data=True):
+            level = data.get('level', 0)
+            if level not in levels:
+                levels[level] = []
+            levels[level].append(node)
+        
+        # Position nodes level by level
+        for level, nodes in sorted(levels.items()):
+            num_nodes = len(nodes)
+            # Use exponential spacing to handle large numbers of leaf nodes
+            width = max(num_nodes * 2.0, 10.0)
+            
+            # Sort nodes to keep tree structure organized
+            sorted_nodes = sorted(nodes)
+            
+            for i, node in enumerate(sorted_nodes):
+                x = (i - num_nodes / 2) * (width / num_nodes)
+                y = (max_height - level) * 3.0  # Vertical spacing
+                pos[node] = (x, y)
+        
+        return pos
+    
     def _build_tree_side(self, graph: nx.Graph, root_id: str, height: int, 
-                        side_prefix: str, x_offset: float, x_scale: float,
-                        weight_func, max_height: int) -> None:
+                        side_prefix: str, weight_func, tree_side: str) -> None:
         """Build one side of the dual tree.
         
         Args:
@@ -99,50 +141,20 @@ class DualRootBinaryTreeBuilder(GraphBuilder):
             root_id: ID of the root node for this side
             height: Height of this side of the tree
             side_prefix: Prefix for node IDs ('L' or 'R')
-            x_offset: X-axis offset for positioning
-            x_scale: X-axis scale for positioning
             weight_func: Function to calculate edge weights
-            max_height: Maximum height of either tree (for consistent positioning)
+            tree_side: 'left' or 'right' for positioning
         """
-        # Calculate positions from bottom up
-        x_positions = {}
-        
-        for level in range(1, height):
-            num_nodes_at_level = 2 ** level
-            
-            # Calculate x positions for this level
-            if level == height - 1:
-                # Leaf level: evenly spaced
-                x_positions[level] = x_offset + np.linspace(0, x_scale, num_nodes_at_level + 2)[1:-1]
-            else:
-                # Non-leaf levels: positioned based on children
-                if level not in x_positions:
-                    # Calculate from leaves upward
-                    leaf_positions = x_offset + np.linspace(0, x_scale, 2**level + 2)[1:-1]
-                    
-                    # Average positions for internal nodes
-                    x_positions[level] = leaf_positions
-        
         # Build tree from root downward
         for level in range(1, height):
             num_nodes_at_level = 2 ** level
             
-            # Get x positions for this level
-            if level in x_positions:
-                level_x_pos = x_positions[level]
-            else:
-                # Fallback: evenly spaced
-                level_x_pos = x_offset + np.linspace(0, x_scale, num_nodes_at_level + 2)[1:-1]
-            
             for node_idx in range(num_nodes_at_level):
                 current_node = f"{side_prefix}{level}{node_idx}"
                 
-                # Position nodes with consistent y-coordinate based on max_height
-                y_pos = max_height + 1 - level
-                x_pos = level_x_pos[node_idx] if node_idx < len(level_x_pos) else x_offset + x_scale/2
-                
-                graph.add_node(current_node, pos=(x_pos, y_pos), 
-                             level=level, tree=side_prefix.lower())
+                # Add node with subset attribute for multipartite layout
+                # Subset determines vertical position (level)
+                graph.add_node(current_node, level=level, tree=side_prefix.lower(), 
+                             subset=level)
                 
                 # Connect to parent
                 if level == 1:
@@ -173,16 +185,16 @@ class DualRootBinaryTreeBuilder(GraphBuilder):
         if positions is None:
             positions = nx.get_node_attributes(graph, 'pos')
         
-        # Customize visualization for dual tree
+        # Customize visualization for dual tree with much smaller nodes and text
         viz_kwargs = {
-            'figsize': (14, 10),
-            'node_size': 400,
+            'figsize': (30, 20),
+            'node_size': 80,
             'node_color': self._get_node_colors(graph),
             'edge_color': 'gray',
-            'width': 2.0,
+            'width': 0.1,
             'with_labels': True,
-            'font_size': 10,
-            'font_weight': 'bold'
+            'font_size': 4,
+            'font_weight': 'normal'
         }
         viz_kwargs.update(kwargs)
         

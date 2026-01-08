@@ -32,8 +32,8 @@ graph:
   builder:
     type: dual_root_binary_tree
     config:
-      left_height: 5   # Height of left tree (number of levels)
-      right_height: 5  # Height of right tree (can be different from left)
+      left_height: 6   # Height of left tree (number of levels)
+      right_height: 6  # Height of right tree (can be different from left)
   
   mapping_file: ./resources/graph_mapping.pkl
   conflict_strategy: node_priority
