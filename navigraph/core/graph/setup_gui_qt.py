@@ -129,10 +129,16 @@ class MapWidget(QWidget):
         # Adjustment mode state
         self.adjustment_mode = False
         self.selected_contour_region_id = None  # Currently selected contour for dragging
+        self.selected_contours = set()  # Set of selected contour region_ids for multi-select
         self.dragging_contour = False
+        self.dragging_contours = False  # For multi-contour dragging
+        self.resizing_contour = False  # For contour resizing
+        self.resize_handle = None  # Which handle is being dragged: 'corner', 'edge', index
         self.drag_start_point = None
         self.contour_offsets = {}  # region_id -> (offset_x, offset_y)
         self.base_contours = {}  # region_id -> original contour points (before adjustment)
+        self.original_contours = {}  # Backup for collision detection during drag
+        self.resize_handle_size = 8  # Size of resize handles in pixels
         
         # Contour highlighting state
         self.highlighted_contour_id = None
@@ -256,6 +262,7 @@ class MapWidget(QWidget):
             
             # Check for intersection
             if new_rect.intersects(other_rect):
+                print(f"DEBUG: Collision detected between {cell_id} and {other_id}")
                 return True
         return False
     
@@ -350,6 +357,10 @@ class MapWidget(QWidget):
             font.setPointSize(font_size)
             painter.setFont(font)
             
+            # DEBUG: Print selected cells once per paint
+            if self.selected_cells:
+                print(f"DEBUG paintEvent: Drawing {len(self.grid_cells)} cells, {len(self.selected_cells)} selected: {self.selected_cells}")
+            
             for cell_id, rect in self.grid_cells.items():
                 scaled_rect = QRectF(
                     self.offset_x + rect.x() * self.scale_factor,
@@ -414,32 +425,44 @@ class MapWidget(QWidget):
                     
                     for region in regions:
                         region_id = region.region_id
-                        # Extract points based on region type
-                        if isinstance(region, RectangleRegion):
-                            points = [
-                                (region.x, region.y),
-                                (region.x + region.width, region.y),
-                                (region.x + region.width, region.y + region.height),
-                                (region.x, region.y + region.height)
-                            ]
-                        elif isinstance(region, ContourRegion):
-                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                        
+                        # In adjustment mode, use base_contours if available (for resized/moved contours)
+                        if self.adjustment_mode and region_id in self.base_contours:
+                            points = self.base_contours[region_id]
                         else:
-                            continue
+                            # Extract points based on region type
+                            if isinstance(region, RectangleRegion):
+                                points = [
+                                    (region.x, region.y),
+                                    (region.x + region.width, region.y),
+                                    (region.x + region.width, region.y + region.height),
+                                    (region.x, region.y + region.height)
+                                ]
+                            elif isinstance(region, ContourRegion):
+                                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                            else:
+                                continue
                         
                         # Apply offset if in adjustment mode
                         offset = self.contour_offsets.get(region_id, (0, 0))
                         has_offset = offset != (0, 0)
                         adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
                         
-                        # Determine which color to use
-                        is_selected = (self.selected_contour_region_id == region_id)
-                        if self.adjustment_mode and has_offset:
-                            color = adjusted_color
-                            border_width = 3 if is_selected else 2
-                        elif self.adjustment_mode and is_selected:
-                            color = QColor(255, 255, 100, 140)  # Yellow highlight for selected
+                        # Determine which color to use - check if in multi-select
+                        is_selected = (region_id in self.selected_contours) or (self.selected_contour_region_id == region_id)
+                        is_being_dragged = is_selected and self.dragging_contours
+                        
+                        if is_being_dragged:
+                            # Being dragged - bright yellow/orange
+                            color = QColor(255, 200, 0, 160)
+                            border_width = 4
+                        elif is_selected:
+                            # Selected for dragging - bright green
+                            color = QColor(0, 255, 0, 140)
                             border_width = 3
+                        elif self.adjustment_mode and has_offset:
+                            color = adjusted_color
+                            border_width = 2
                         else:
                             color = base_color
                             border_width = 2
@@ -544,32 +567,44 @@ class MapWidget(QWidget):
                     
                     for region in regions:
                         region_id = region.region_id
-                        # Extract points based on region type
-                        if isinstance(region, RectangleRegion):
-                            points = [
-                                (region.x, region.y),
-                                (region.x + region.width, region.y),
-                                (region.x + region.width, region.y + region.height),
-                                (region.x, region.y + region.height)
-                            ]
-                        elif isinstance(region, ContourRegion):
-                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                        
+                        # In adjustment mode, use base_contours if available (for resized/moved contours)
+                        if self.adjustment_mode and region_id in self.base_contours:
+                            points = self.base_contours[region_id]
                         else:
-                            continue
+                            # Extract points based on region type
+                            if isinstance(region, RectangleRegion):
+                                points = [
+                                    (region.x, region.y),
+                                    (region.x + region.width, region.y),
+                                    (region.x + region.width, region.y + region.height),
+                                    (region.x, region.y + region.height)
+                                ]
+                            elif isinstance(region, ContourRegion):
+                                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                            else:
+                                continue
                         
                         # Apply offset if in adjustment mode
                         offset = self.contour_offsets.get(region_id, (0, 0))
                         has_offset = offset != (0, 0)
                         adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
                         
-                        # Determine which color to use
-                        is_selected = (self.selected_contour_region_id == region_id)
-                        if self.adjustment_mode and has_offset:
-                            color = adjusted_color
-                            border_width = 3 if is_selected else 2
-                        elif self.adjustment_mode and is_selected:
-                            color = QColor(255, 255, 100, 140)  # Yellow highlight for selected
+                        # Determine which color to use - check if in multi-select
+                        is_selected = (region_id in self.selected_contours) or (self.selected_contour_region_id == region_id)
+                        is_being_dragged = is_selected and self.dragging_contours
+                        
+                        if is_being_dragged:
+                            # Being dragged - bright yellow/orange
+                            color = QColor(255, 200, 0, 160)
+                            border_width = 4
+                        elif is_selected:
+                            # Selected for dragging - bright green
+                            color = QColor(0, 255, 0, 140)
                             border_width = 3
+                        elif self.adjustment_mode and has_offset:
+                            color = adjusted_color
+                            border_width = 2
                         else:
                             color = base_color
                             border_width = 2
@@ -800,6 +835,30 @@ class MapWidget(QWidget):
         if self.show_cell_labels and not self.show_all_mappings:
             self._draw_node_labels(painter)
             self._draw_edge_labels(painter)
+        
+        # Draw resize handles for selected contours in adjustment mode
+        if self.adjustment_mode and len(self.selected_contours) == 1:
+            region_id = list(self.selected_contours)[0]
+            if region_id in self.base_contours:
+                points = self.base_contours[region_id]
+                offset = self.contour_offsets.get(region_id, (0, 0))
+                adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+                
+                # Draw handles at each corner/point
+                painter.setPen(QPen(QColor(0, 120, 255), 2))  # Blue handles
+                painter.setBrush(QBrush(QColor(255, 255, 255, 200)))  # White fill
+                
+                for px, py in adjusted_points:
+                    screen_x = self.offset_x + px * self.scale_factor
+                    screen_y = self.offset_y + py * self.scale_factor
+                    # Draw square handle
+                    handle_rect = QRectF(
+                        screen_x - self.resize_handle_size / 2,
+                        screen_y - self.resize_handle_size / 2,
+                        self.resize_handle_size,
+                        self.resize_handle_size
+                    )
+                    painter.drawRect(handle_rect)
                 
     def mousePressEvent(self, event):
         """Handle mouse press events."""
@@ -817,14 +876,77 @@ class MapWidget(QWidget):
             
             # Handle adjustment mode - select and drag contours
             if self.adjustment_mode and self.interaction_mode == 'adjust_contours':
+                # Check for modifiers
+                modifiers = QApplication.keyboardModifiers()
+                ctrl_held = bool(modifiers & Qt.ControlModifier)
+                
+                print(f"DEBUG: Adjust mode click at ({x:.1f}, {y:.1f}), Ctrl: {ctrl_held}")
+                print(f"DEBUG: num base_contours={len(self.base_contours)}, num selected={len(self.selected_contours)}")
+                
+                # First check if clicking on a resize handle (only for single selected contour and NOT holding Ctrl)
+                # Check this BEFORE checking if clicking inside contour
+                if not ctrl_held and len(self.selected_contours) == 1:
+                    region_id = list(self.selected_contours)[0]
+                    handle = self._get_resize_handle_at_point(region_id, x, y)
+                    if handle:
+                        self.resizing_contour = True
+                        self.resize_handle = handle
+                        self.selected_contour_region_id = region_id
+                        self.drag_start_point = (x, y)
+                        self.setCursor(Qt.SizeFDiagCursor)
+                        print(f"DEBUG: Started resizing contour {region_id}, handle: {handle}")
+                        self.update()
+                        return
+                
                 # Check if clicking on an existing contour
-                clicked_region_id = self._find_contour_at_point(x, y)
-                if clicked_region_id:
-                    self.selected_contour_region_id = clicked_region_id
-                    self.dragging_contour = True
-                    self.drag_start_point = (x, y)
-                    self.setCursor(Qt.ClosedHandCursor)
-                    self.update()
+                clicked_contours = self._find_all_contours_at_point(x, y)
+                print(f"DEBUG: Clicked contours: {clicked_contours}")
+                
+                if clicked_contours:
+                    # Get the first clicked contour as the primary
+                    clicked_region_id = clicked_contours[0]
+                    
+                    # Check if clicking on already selected contour (and not holding Ctrl)
+                    if clicked_region_id in self.selected_contours and not ctrl_held:
+                        # Start dragging selected contours
+                        self.dragging_contours = True
+                        self.drag_start_point = (x, y)
+                        # Backup original positions for collision detection
+                        self.original_contours = {
+                            cid: list(self.base_contours[cid]) 
+                            for cid in self.selected_contours 
+                            if cid in self.base_contours
+                        }
+                        self.setCursor(Qt.ClosedHandCursor)
+                        print(f"DEBUG: Started dragging {len(self.selected_contours)} contours")
+                        self.update()
+                        return
+                    elif ctrl_held:
+                        # Multi-select with Ctrl - ADD all overlapping contours at this point to selection
+                        # Don't clear existing selection, just add more
+                        for contour_id in clicked_contours:
+                            self.selected_contours.add(contour_id)
+                            print(f"DEBUG: Added contour {contour_id} to selection")
+                        print(f"DEBUG: Selected contours now: {self.selected_contours}")
+                        self.update()
+                        return
+                    else:
+                        # Single select - select ALL overlapping contours at this point
+                        # Clear previous selection first
+                        self.selected_contours.clear()
+                        for contour_id in clicked_contours:
+                            self.selected_contours.add(contour_id)
+                        self.selected_contour_region_id = clicked_region_id
+                        print(f"DEBUG: Selected {len(clicked_contours)} overlapping contours: {clicked_contours}")
+                        self.update()
+                        return
+                else:
+                    # Clicked on empty space - clear selection if not holding Ctrl
+                    if not ctrl_held:
+                        self.selected_contours.clear()
+                        self.selected_contour_region_id = None
+                        print(f"DEBUG: Cleared contour selection")
+                        self.update()
                     return
             
             if self.interaction_mode == 'place_grid':
@@ -835,7 +957,9 @@ class MapWidget(QWidget):
             elif self.interaction_mode == 'select_cells' and self.grid_enabled:
                 # Check for modifiers
                 modifiers = QApplication.keyboardModifiers()
-                ctrl_held = modifiers & Qt.ControlModifier
+                ctrl_held = bool(modifiers & Qt.ControlModifier)
+                
+                print(f"DEBUG: Click at ({x:.1f}, {y:.1f}), Ctrl held: {ctrl_held}")
                 
                 # Find clicked cell
                 clicked_cell = None
@@ -844,29 +968,42 @@ class MapWidget(QWidget):
                         clicked_cell = cell_id
                         break
                 
+                print(f"DEBUG: Clicked cell: {clicked_cell}, Selected cells: {self.selected_cells}")
+                
                 if clicked_cell:
-                    # If clicking on a selected cell, start dragging
-                    if clicked_cell in self.selected_cells:
+                    # Check if clicking on already selected cell
+                    if clicked_cell in self.selected_cells and not ctrl_held:
+                        # Start dragging selected cells
                         self.dragging_grid_cells = True
                         self.grid_drag_start = (x, y)
                         # Backup original positions
                         self.original_grid_cells = {cid: QRectF(rect) for cid, rect in self.grid_cells.items()}
                         self.grid_drag_offsets = {cid: (0, 0) for cid in self.selected_cells}
                         self.setCursor(Qt.ClosedHandCursor)
-                    else:
-                        # Multi-select with Ctrl, or single select without
-                        if ctrl_held:
+                        print(f"DEBUG: Started dragging {len(self.selected_cells)} cells")
+                    elif ctrl_held:
+                        # Multi-select with Ctrl - toggle selection
+                        if clicked_cell in self.selected_cells:
+                            # Deselect
+                            self.selected_cells.remove(clicked_cell)
+                            if clicked_cell not in self.cell_mappings:
+                                self.cell_colors.pop(clicked_cell, None)
+                            print(f"DEBUG: Deselected {clicked_cell}")
+                        else:
                             # Add to selection
                             self.selected_cells.add(clicked_cell)
                             self.cell_colors[clicked_cell] = QColor(0, 255, 0, 100)
-                        else:
-                            # Clear selection and select only this cell
-                            self.selected_cells.clear()
-                            self.cell_colors = {cid: color for cid, color in self.cell_colors.items() 
-                                              if cid in self.cell_mappings}
-                            self.selected_cells.add(clicked_cell)
-                            self.cell_colors[clicked_cell] = QColor(0, 255, 0, 100)
+                            print(f"DEBUG: Added {clicked_cell} to selection")
                         self.cellClicked.emit(clicked_cell)
+                    else:
+                        # Single select (clear previous selection)
+                        self.selected_cells.clear()
+                        self.cell_colors = {cid: color for cid, color in self.cell_colors.items() 
+                                          if cid in self.cell_mappings}
+                        self.selected_cells.add(clicked_cell)
+                        self.cell_colors[clicked_cell] = QColor(0, 255, 0, 100)
+                        self.cellClicked.emit(clicked_cell)
+                        print(f"DEBUG: Single selected {clicked_cell}")
                     self.update()
                 else:
                     # Clicked on empty space - clear selection if not holding Ctrl
@@ -875,6 +1012,7 @@ class MapWidget(QWidget):
                         self.cell_colors = {cid: color for cid, color in self.cell_colors.items() 
                                           if cid in self.cell_mappings}
                         self.update()
+                        print("DEBUG: Cleared selection")
                         
             elif self.interaction_mode == 'draw_contour':
                 self.current_contour.append((x, y))
@@ -914,6 +1052,43 @@ class MapWidget(QWidget):
         if event.button() == Qt.RightButton and self.panning:
             self.panning = False
             self.setCursor(Qt.ArrowCursor)
+        elif event.button() == Qt.LeftButton and self.dragging_contours:
+            # End multi-contour dragging - apply offsets to base_contours
+            for region_id in self.selected_contours:
+                if region_id in self.contour_offsets and region_id in self.base_contours:
+                    offset_x, offset_y = self.contour_offsets[region_id]
+                    if offset_x != 0 or offset_y != 0:
+                        # Apply offset to base_contours
+                        points = self.base_contours[region_id]
+                        updated_points = [(x + offset_x, y + offset_y) for x, y in points]
+                        self.base_contours[region_id] = updated_points
+                        # Clear the offset
+                        self.contour_offsets[region_id] = (0, 0)
+                        print(f"DEBUG: Applied offset ({offset_x:.1f}, {offset_y:.1f}) to contour {region_id}")
+            
+            self.dragging_contours = False
+            self.drag_start_point = None
+            self.original_contours.clear()
+            self.setCursor(Qt.ArrowCursor)
+            print(f"DEBUG: Ended multi-contour drag for {len(self.selected_contours)} contours")
+            self.update()
+        elif event.button() == Qt.LeftButton and self.resizing_contour:
+            # End contour resizing
+            self.resizing_contour = False
+            self.resize_handle = None
+            self.drag_start_point = None
+            self.setCursor(Qt.ArrowCursor)
+            print(f"DEBUG: Ended contour resize for {self.selected_contour_region_id}")
+            self.update()
+        elif event.button() == Qt.LeftButton and self.dragging_grid_cells:
+            # End grid cell dragging (works in both select_cells and adjust_contours modes)
+            self.dragging_grid_cells = False
+            self.grid_drag_start = None
+            self.grid_drag_offsets.clear()
+            self.original_grid_cells.clear()
+            self.setCursor(Qt.ArrowCursor)
+            print("DEBUG: Ended grid cell drag")
+            self.update()
         elif event.button() == Qt.LeftButton and self.dragging_contour:
             self.dragging_contour = False
             self.drag_start_point = None
@@ -921,14 +1096,6 @@ class MapWidget(QWidget):
             # Notify parent that contour was moved
             if hasattr(self, 'gui_parent') and hasattr(self.gui_parent, '_on_contour_moved'):
                 self.gui_parent._on_contour_moved(self.selected_contour_region_id)
-        elif event.button() == Qt.LeftButton and self.dragging_grid_cells:
-            # End grid cell dragging
-            self.dragging_grid_cells = False
-            self.grid_drag_start = None
-            self.grid_drag_offsets.clear()
-            self.original_grid_cells.clear()
-            self.setCursor(Qt.ArrowCursor)
-            self.update()
     
     def eventFilter(self, obj, event):
         """Filter events from parent widgets to capture wheel events."""
@@ -1004,10 +1171,9 @@ class MapWidget(QWidget):
             offset_x = x - self.grid_drag_start[0]
             offset_y = y - self.grid_drag_start[1]
             
-            # Try to apply offset to all selected cells
-            collision_detected = False
-            new_cells = {}
+            print(f"DEBUG: Dragging, offset: ({offset_x:.1f}, {offset_y:.1f})")
             
+            # Apply offset to all selected cells (no collision detection for now)
             for cell_id in self.selected_cells:
                 if cell_id not in self.original_grid_cells:
                     continue
@@ -1019,24 +1185,43 @@ class MapWidget(QWidget):
                     orig_rect.width(),
                     orig_rect.height()
                 )
-                
-                # Check for collision
-                if self._check_grid_collision(cell_id, new_rect):
-                    collision_detected = True
-                    break
-                
-                new_cells[cell_id] = new_rect
+                self.grid_cells[cell_id] = new_rect
+                self.grid_drag_offsets[cell_id] = (offset_x, offset_y)
             
-            # Apply movement if no collision
-            if not collision_detected:
-                for cell_id, new_rect in new_cells.items():
-                    self.grid_cells[cell_id] = new_rect
-                    self.grid_drag_offsets[cell_id] = (offset_x, offset_y)
-                self.setCursor(Qt.ClosedHandCursor)
-            else:
-                # Collision detected - show warning cursor
-                self.setCursor(Qt.ForbiddenCursor)
+            self.setCursor(Qt.ClosedHandCursor)
+            self.update()
+            return
+        
+        # Handle contour resizing in adjustment mode
+        if self.resizing_contour and self.resize_handle and self.selected_contour_region_id:
+            # Convert to image coordinates
+            x = (event.x() - self.offset_x) / self.scale_factor
+            y = (event.y() - self.offset_y) / self.scale_factor
             
+            handle_type, handle_index = self.resize_handle
+            self._resize_contour(self.selected_contour_region_id, handle_type, handle_index, x, y)
+            print(f"DEBUG: Resizing contour {self.selected_contour_region_id} to ({x:.1f}, {y:.1f})")
+            self.update()
+            return
+        
+        # Handle multi-contour dragging in adjustment mode
+        if self.dragging_contours and self.drag_start_point:
+            # Convert to image coordinates
+            x = (event.x() - self.offset_x) / self.scale_factor
+            y = (event.y() - self.offset_y) / self.scale_factor
+            
+            # Calculate offset from drag start
+            offset_x = x - self.drag_start_point[0]
+            offset_y = y - self.drag_start_point[1]
+            
+            print(f"DEBUG: Dragging contours, offset: ({offset_x:.1f}, {offset_y:.1f})")
+            
+            # Apply offset to all selected contours (no collision detection for now)
+            for region_id in self.selected_contours:
+                # Store offset for rendering (paintEvent uses contour_offsets)
+                self.contour_offsets[region_id] = (offset_x, offset_y)
+            
+            self.setCursor(Qt.ClosedHandCursor)
             self.update()
             return
         
@@ -1279,17 +1464,18 @@ class MapWidget(QWidget):
         painter.setFont(font)
         painter.setPen(QPen(color, 1))
         
-    def _find_contour_at_point(self, x: float, y: float) -> Optional[str]:
-        """Find which contour (if any) contains the given point.
+    def _find_all_contours_at_point(self, x: float, y: float) -> List[str]:
+        """Find all contours that contain the given point.
         
         Args:
             x, y: Point coordinates in image space
             
         Returns:
-            region_id of the contour containing the point, or None
+            List of region_ids of all contours containing the point
         """
         from PyQt5.QtGui import QPainterPath
         point = QPointF(x, y)
+        found_contours = []
         
         # Check contours from completed_contours list
         for contour_data in self.completed_contours:
@@ -1314,7 +1500,7 @@ class MapWidget(QWidget):
                 
                 # Check if point is inside contour
                 if path.contains(point):
-                    return region_id
+                    found_contours.append(region_id)
         
         # Also check mapping regions if available
         if (hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and 
@@ -1328,7 +1514,12 @@ class MapWidget(QWidget):
                     for region in regions:
                         if isinstance(region, ContourRegion):
                             region_id = region.region_id
-                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                            
+                            # In adjustment mode, use base_contours if available (for resized contours)
+                            if self.adjustment_mode and region_id in self.base_contours:
+                                points = self.base_contours[region_id]
+                            else:
+                                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
                             
                             # Apply offset if in adjustment mode
                             offset = self.contour_offsets.get(region_id, (0, 0))
@@ -1342,7 +1533,7 @@ class MapWidget(QWidget):
                             path.closeSubpath()
                             
                             if path.contains(point):
-                                return region_id
+                                found_contours.append(region_id)
                 
                 # Check edge regions
                 for edge in self.gui_parent.mapping.get_mapped_edges():
@@ -1350,7 +1541,12 @@ class MapWidget(QWidget):
                     for region in regions:
                         if isinstance(region, ContourRegion):
                             region_id = region.region_id
-                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                            
+                            # In adjustment mode, use base_contours if available (for resized contours)
+                            if self.adjustment_mode and region_id in self.base_contours:
+                                points = self.base_contours[region_id]
+                            else:
+                                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
                             
                             # Apply offset if in adjustment mode
                             offset = self.contour_offsets.get(region_id, (0, 0))
@@ -1364,11 +1560,137 @@ class MapWidget(QWidget):
                             path.closeSubpath()
                             
                             if path.contains(point):
-                                return region_id
+                                found_contours.append(region_id)
             except Exception as e:
                 print(f"Error checking mapping regions: {e}")
         
+        return found_contours
+    
+    def _find_contour_at_point(self, x: float, y: float) -> Optional[str]:
+        """Find which contour (if any) contains the given point.
+        
+        Args:
+            x, y: Point coordinates in image space
+            
+        Returns:
+            region_id of the first contour containing the point, or None
+        """
+        contours = self._find_all_contours_at_point(x, y)
+        return contours[0] if contours else None
+    
+    def _get_contour_bounds(self, points):
+        """Get bounding box of contour points.
+        
+        Args:
+            points: List of (x, y) tuples
+            
+        Returns:
+            QRectF representing the bounding box
+        """
+        if not points:
+            return QRectF()
+        xs = [p[0] for p in points]
+        ys = [p[1] for p in points]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+        return QRectF(x_min, y_min, x_max - x_min, y_max - y_min)
+    
+    def _check_contour_collision(self, region_id, new_points):
+        """Check if contour would collide with non-selected contours.
+        
+        Args:
+            region_id: ID of the contour being moved
+            new_points: New position of the contour points
+            
+        Returns:
+            True if collision detected, False otherwise
+        """
+        new_bounds = self._get_contour_bounds(new_points)
+        
+        # Check against all contours in base_contours (not in selected set)
+        for other_id in self.base_contours.keys():
+            if other_id == region_id or other_id in self.selected_contours:
+                continue
+            
+            other_points = self.base_contours[other_id]
+            other_bounds = self._get_contour_bounds(other_points)
+            if new_bounds.intersects(other_bounds):
+                return True
+        
+        return False
+    
+    def _get_resize_handle_at_point(self, region_id, x, y):
+        """Check if point is over a resize handle for the given contour.
+        
+        Args:
+            region_id: ID of the contour to check
+            x, y: Point in image coordinates
+            
+        Returns:
+            Tuple of (handle_type, handle_index) or None
+            - For 4-point rectangles: ('corner', corner_index) where index is 0-3
+            - For other contours: ('point', point_index)
+        """
+        if region_id not in self.base_contours:
+            return None
+        
+        points = self.base_contours[region_id]
+        offset = self.contour_offsets.get(region_id, (0, 0))
+        adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+        
+        # Handle size in image coordinates (account for zoom)
+        handle_size = self.resize_handle_size / self.scale_factor
+        
+        # Check each point
+        for i, (px, py) in enumerate(adjusted_points):
+            if abs(x - px) <= handle_size and abs(y - py) <= handle_size:
+                # Determine handle type
+                if len(points) == 4:
+                    return ('corner', i)
+                else:
+                    return ('point', i)
+        
         return None
+    
+    def _resize_contour(self, region_id, handle_type, handle_index, new_x, new_y):
+        """Resize a contour by moving a handle.
+        
+        Args:
+            region_id: ID of the contour to resize
+            handle_type: Type of handle ('corner' or 'point')
+            handle_index: Index of the handle
+            new_x, new_y: New position for the handle in image coordinates
+        """
+        if region_id not in self.base_contours:
+            return
+        
+        points = list(self.base_contours[region_id])
+        
+        if handle_type == 'corner' and len(points) == 4:
+            # For rectangles, adjust opposite corners appropriately
+            points[handle_index] = (new_x, new_y)
+            
+            # Maintain rectangle shape by adjusting adjacent corners
+            if handle_index == 0:  # Top-left
+                points[1] = (points[1][0], new_y)  # Top-right Y
+                points[3] = (new_x, points[3][1])  # Bottom-left X
+            elif handle_index == 1:  # Top-right
+                points[0] = (points[0][0], new_y)  # Top-left Y
+                points[2] = (new_x, points[2][1])  # Bottom-right X
+            elif handle_index == 2:  # Bottom-right
+                points[3] = (points[3][0], new_y)  # Bottom-left Y
+                points[1] = (new_x, points[1][1])  # Top-right X
+            elif handle_index == 3:  # Bottom-left
+                points[2] = (points[2][0], new_y)  # Bottom-right Y
+                points[0] = (new_x, points[0][1])  # Top-left X
+        else:
+            # For arbitrary polygons, just move the point
+            if 0 <= handle_index < len(points):
+                points[handle_index] = (new_x, new_y)
+        
+        self.base_contours[region_id] = points
+        # Clear offset since we're directly modifying base_contours
+        self.contour_offsets[region_id] = (0, 0)
     
     def get_adjusted_contour_points(self, region_id: str) -> Optional[List[Tuple[float, float]]]:
         """Get the adjusted points for a contour.
@@ -1401,14 +1723,18 @@ class MapWidget(QWidget):
         Args:
             mapping: The base spatial mapping to load
         """
+        print(f"DEBUG load_base_mapping: Loading mapping with {len(mapping._regions)} regions")
+        
         self.base_contours.clear()
         self.contour_offsets.clear()
         self.completed_contours.clear()
+        self.selected_contours.clear()
         
-        # Store all regions from the mapping as base contours
+        # Load all regions as contours for uniform adjustment
+        from .regions import RectangleRegion, ContourRegion
+        
         for region_id, region in mapping._regions.items():
-            from .regions import ContourRegion
-            if isinstance(region, ContourRegion):
+            if isinstance(region, (RectangleRegion, ContourRegion)):
                 points = [(float(p[0]), float(p[1])) for p in region.contour_points]
                 self.base_contours[region_id] = points
                 
@@ -1425,6 +1751,7 @@ class MapWidget(QWidget):
                     # Add to completed contours for display
                     self.completed_contours.append((points, region_id, color, elem_type, elem_id))
         
+        print(f"DEBUG: Loaded {len(self.base_contours)} contours for adjustment")
         self.update()
     
     def apply_all_offsets(self):
@@ -1627,18 +1954,35 @@ class GraphWidget(QWidget):
             
             # Get appropriate sizing based on graph size - increased for better visibility
             node_count = len(self.graph.nodes)
-            if node_count > 100:
-                node_size, font_size = 400, 9  # Increased from 250, 7
-            elif node_count > 50:
-                node_size, font_size = 600, 10  # Increased from 400, 8
-            elif node_count > 20:
-                node_size, font_size = 800, 12  # Increased from 600, 10
-            else:
-                node_size, font_size = 1000, 14  # Increased from 800, 12
             
-            # Calculate figsize based on graph type
-            # For binary trees, width should scale with tree height (number of leaf nodes)
-            if hasattr(self.graph.builder, 'height'):
+            # Check if this is a dual root tree - needs special handling for large trees
+            is_dual_root_tree = hasattr(self.graph.builder, 'left_height') and hasattr(self.graph.builder, 'right_height')
+            
+            if is_dual_root_tree:
+                # For dual root trees, use much smaller nodes and larger canvas
+                max_height = max(self.graph.builder.left_height, self.graph.builder.right_height)
+                max_leaves = 2 ** (max_height - 1)
+                # Scale figure size with number of leaves
+                width = max(20, min(50, max_leaves * 0.8))
+                height = max(15, max_height * 2.5)
+                figsize = (width, height)
+                node_size = 50  # Very small nodes
+                font_size = 5   # Very small font
+            elif node_count > 100:
+                node_size, font_size = 100, 6  # Much smaller for large graphs
+                figsize = (20, 15)
+            elif node_count > 50:
+                node_size, font_size = 200, 8
+                figsize = (16, 12)
+            elif node_count > 20:
+                node_size, font_size = 400, 10
+                figsize = (14, 10)
+            else:
+                node_size, font_size = 600, 12
+                figsize = (12, 8)
+            
+            # Calculate figsize based on graph type (for non-dual-root trees)
+            if not is_dual_root_tree and hasattr(self.graph.builder, 'height'):
                 # Binary tree: width scales with 2^height leaf nodes
                 tree_height = self.graph.builder.height
                 width = max(8, min(25, 2.5 * tree_height))  # Scale: height 7 ≈ 17.5 width
@@ -2595,6 +2939,10 @@ class GraphSetupWindow(QMainWindow):
         
         # Control buttons
         control_layout = QHBoxLayout()
+        
+        self.test_load_image_button = QPushButton("Load Image")
+        self.test_load_image_button.clicked.connect(self._on_load_test_image)
+        control_layout.addWidget(self.test_load_image_button)
         
         self.test_load_button = QPushButton("Load Mapping")
         self.test_load_button.clicked.connect(self._on_load_intermediate_mapping)
@@ -3642,6 +3990,9 @@ class GraphSetupWindow(QMainWindow):
         )
         
         if file_path:
+            # Add .pkl extension if no extension provided
+            if not file_path.endswith(('.pkl', '.json')):
+                file_path += '.pkl'
             try:
                 from pathlib import Path
                 self.mapping.save_with_builder_info(Path(file_path))
@@ -3986,13 +4337,27 @@ class GraphSetupWindow(QMainWindow):
         )
         
         if file_path:
+            # Add .pkl extension if no extension provided
+            if not file_path.endswith(('.pkl', '.json')):
+                file_path += '.pkl'
             try:
                 from pathlib import Path
                 
-                # Apply all offsets to base contours
-                for region_id, offset in self.map_widget.contour_offsets.items():
+                # Update regions with base_contours (which have all adjustments applied)
+                # base_contours contains the actual adjusted positions after dragging/resizing
+                for region_id, adjusted_points in self.map_widget.base_contours.items():
                     # Find the region in the mapping and update its points
                     if region_id in self.mapping._regions:
+                        from .regions import ContourRegion
+                        region = self.mapping._regions[region_id]
+                        if isinstance(region, ContourRegion):
+                            # Use the adjusted points from base_contours
+                            region.contour_points = np.array(adjusted_points, dtype=np.float32)
+                            print(f"DEBUG: Updated region {region_id} with adjusted points")
+                
+                # Also apply any remaining offsets (shouldn't be any after proper drag end, but just in case)
+                for region_id, offset in self.map_widget.contour_offsets.items():
+                    if offset != (0, 0) and region_id in self.mapping._regions:
                         from .regions import ContourRegion
                         region = self.mapping._regions[region_id]
                         if isinstance(region, ContourRegion):
@@ -4002,6 +4367,7 @@ class GraphSetupWindow(QMainWindow):
                                 for p in region.contour_points
                             ]
                             region.contour_points = np.array(adjusted_points, dtype=np.float32)
+                            print(f"DEBUG: Applied remaining offset to region {region_id}: {offset}")
                 
                 # Save the mapping with adjusted contours
                 self.mapping.save_with_builder_info(Path(file_path))
@@ -4813,6 +5179,49 @@ class GraphSetupWindow(QMainWindow):
         """Clear all test mode markings."""
         self._clear_test_selections()
         self.test_info_label.setText("No selection")
+    
+    def _on_load_test_image(self):
+        """Load a new maze image for test mode."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Test Image", "",
+            "Image files (*.png *.jpg *.jpeg *.bmp *.tiff);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                import cv2
+                new_image = cv2.imread(file_path)
+                if new_image is None:
+                    raise ValueError("Failed to load image")
+                
+                # Apply calibration transformation if available
+                if self.calibration_matrix is not None:
+                    # Get reference image size (base map size)
+                    ref_height, ref_width = self.map_widget.original_image.shape[:2]
+                    
+                    # Apply perspective transformation
+                    transformed_image = cv2.warpPerspective(
+                        new_image,
+                        self.calibration_matrix,
+                        (ref_width, ref_height)
+                    )
+                    new_image = transformed_image
+                    self.status_bar.showMessage("Test image loaded and calibration applied")
+                else:
+                    self.status_bar.showMessage("Test image loaded (no calibration applied)")
+                
+                # Update the map image
+                self.map_image = new_image
+                self.map_widget.map_image = new_image
+                self.map_widget.original_image = new_image.copy()
+                self.map_widget.update()
+                
+                # Update info label
+                filename = Path(file_path).name
+                self.test_info_label.setText(f"Image loaded: {filename}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load test image: {str(e)}")
         
     def _on_test_select_element(self):
         """Handle element selection from dropdown in test mode."""

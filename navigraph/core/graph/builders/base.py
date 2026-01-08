@@ -52,6 +52,7 @@ class GraphBuilder(ABC):
                               font_weight: str = 'normal',
                               font_color: str = 'black',
                               font_family: str = 'sans-serif',
+                              dpi: int = 300,
                               **kwargs) -> np.ndarray:
         """Default graph visualization implementation.
         
@@ -83,8 +84,8 @@ class GraphBuilder(ABC):
         try:
             graph = self.build_graph()
             
-            # Create figure and axis
-            fig, ax = plt.subplots(figsize=figsize)
+            # Create figure and axis with high DPI for better zoom quality
+            fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
             ax.set_aspect('equal')
             
             # Determine positions
