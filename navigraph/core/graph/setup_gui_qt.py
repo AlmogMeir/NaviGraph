@@ -6,6 +6,7 @@ contour drawing modes.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Set, List, Tuple, Dict, Any
 
 import cv2
@@ -87,6 +88,10 @@ class MapWidget(QWidget):
         self.offset_x = 0
         self.offset_y = 0
         
+        # Zoom constraints
+        self.min_zoom = 0.1  # Minimum zoom level (10%)
+        self.max_zoom = 10.0  # Maximum zoom level (1000%)
+        
         # Panning state
         self.panning = False
         self.last_pan_point = QPoint()
@@ -100,6 +105,12 @@ class MapWidget(QWidget):
         self.cell_colors: Dict[str, QColor] = {}  # cell_id -> QColor
         self.cell_mappings: Dict[str, Tuple[str, Any]] = {}  # cell_id -> (elem_type, elem_id) for mapped cells
         
+        # Grid dragging state
+        self.dragging_grid_cells = False
+        self.grid_drag_start = None
+        self.grid_drag_offsets: Dict[str, Tuple[float, float]] = {}  # cell_id -> (offset_x, offset_y)
+        self.original_grid_cells: Dict[str, QRectF] = {}  # Backup for collision detection
+        
         # Drawing state
         self.drawing_mode = False
         self.current_contour: List[Tuple[float, float]] = []
@@ -107,7 +118,7 @@ class MapWidget(QWidget):
         self.contour_mappings: Dict[str, Tuple[str, Any]] = {}  # region_id -> (elem_type, elem_id)
         
         # Interaction state
-        self.interaction_mode = 'none'  # 'place_grid', 'select_cells', 'draw_contour'
+        self.interaction_mode = 'none'  # 'place_grid', 'select_cells', 'draw_contour', 'adjust_contours'
         self.show_all_mappings = True  # Toggle for showing all mapped regions
         self.show_cell_labels = True  # Toggle for showing cell labels
         self.adaptive_font_size = True  # Toggle for adaptive font sizing
@@ -115,13 +126,24 @@ class MapWidget(QWidget):
         self.current_element_type = None
         self.current_element_id = None
         
+        # Adjustment mode state
+        self.adjustment_mode = False
+        self.selected_contour_region_id = None  # Currently selected contour for dragging
+        self.dragging_contour = False
+        self.drag_start_point = None
+        self.contour_offsets = {}  # region_id -> (offset_x, offset_y)
+        self.base_contours = {}  # region_id -> original contour points (before adjustment)
+        
         # Contour highlighting state
         self.highlighted_contour_id = None
         self.original_contour_colors: Dict[str, QColor] = {}  # Store original colors for unhighlighting
         
         self.setMouseTracking(True)
         # Remove minimum size to prevent window resizing
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Enable keyboard focus
+        self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)  # Enable wheel focus
+        
+        # Enable wheel events
+        self.setAttribute(Qt.WA_AcceptTouchEvents, False)  # Disable touch to avoid conflicts
         
         # Enable tooltips with faster response
         self.setToolTip("")
@@ -131,6 +153,15 @@ class MapWidget(QWidget):
         """Set the current interaction mode."""
         self.interaction_mode = mode
         self.current_contour = []
+        
+        # Enable adjustment mode if requested
+        if mode == 'adjust_contours':
+            self.adjustment_mode = True
+        else:
+            self.adjustment_mode = False
+            self.selected_contour_region_id = None
+            self.dragging_contour = False
+            
         try:
             self.update()
         except RuntimeError:
@@ -207,6 +238,27 @@ class MapWidget(QWidget):
         self.current_element_type = elem_type
         self.current_element_id = elem_id
     
+    def _check_grid_collision(self, cell_id: str, new_rect: QRectF) -> bool:
+        """Check if moving a cell would cause collision with other cells.
+        
+        Args:
+            cell_id: ID of cell being moved
+            new_rect: Proposed new position
+            
+        Returns:
+            True if collision detected, False otherwise
+        """
+        for other_id, other_rect in self.grid_cells.items():
+            if other_id == cell_id:
+                continue  # Don't check against self
+            if other_id in self.selected_cells:
+                continue  # Don't check against other selected cells being moved
+            
+            # Check for intersection
+            if new_rect.intersects(other_rect):
+                return True
+        return False
+    
     def add_cell_mapping(self, cell_id: str, elem_type: str, elem_id, color: QColor):
         """Add a mapping for a cell."""
         self.cell_mappings[cell_id] = (elem_type, elem_id)
@@ -217,6 +269,9 @@ class MapWidget(QWidget):
         """Add a completed contour to the map."""
         self.completed_contours.append((points, region_id, color, elem_type, elem_id))
         self.contour_mappings[region_id] = (elem_type, elem_id)
+        # Store base contour for adjustment mode
+        if region_id not in self.base_contours:
+            self.base_contours[region_id] = [(float(p[0]), float(p[1])) for p in points]
         self.update()
         
     def clear_contours(self):
@@ -307,9 +362,15 @@ class MapWidget(QWidget):
                 is_mapped = cell_id in self.cell_mappings
                 is_selected = cell_id in self.selected_cells
                 is_highlighted = cell_id in self.highlighted_cells
+                is_being_dragged = is_selected and self.dragging_grid_cells
                 
-                # Draw cell based on state (priority: selected > highlighted > mapped > empty)
-                if is_selected:
+                # Draw cell based on state (priority: dragging > selected > highlighted > mapped > empty)
+                if is_being_dragged:
+                    # Being dragged - yellow/orange with thicker border
+                    painter.fillRect(scaled_rect, QColor(255, 200, 0, 120))
+                    painter.setPen(QPen(QColor(255, 150, 0), 3))
+                    painter.drawRect(scaled_rect)
+                elif is_selected:
                     # Currently selected for mapping - bright green
                     painter.fillRect(scaled_rect, QColor(0, 255, 0, 100))
                     painter.setPen(QPen(QColor(0, 255, 0), 2))
@@ -333,18 +394,26 @@ class MapWidget(QWidget):
                     painter.drawRect(scaled_rect)
                 
         # Draw regions from mapping (single source of truth for all committed contours)
-        # Only draw if show_all_mappings is enabled
+        # Only draw if show_all_mappings is enabled OR in adjustment mode
         if (hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and 
-            self.gui_parent.mapping and hasattr(self, 'show_all_mappings') and self.show_all_mappings):
+            self.gui_parent.mapping and (hasattr(self, 'show_all_mappings') and self.show_all_mappings or self.adjustment_mode)):
             try:
                 from .regions import RectangleRegion, ContourRegion
                 
                 # Draw node regions in green
                 for node_id in self.gui_parent.mapping.get_mapped_nodes():
                     regions = self.gui_parent.mapping.get_node_regions(node_id)
-                    color = QColor(150, 255, 150, 100)  # Light green
+                    
+                    # Determine color and border based on adjustment mode
+                    if self.adjustment_mode:
+                        base_color = QColor(150, 255, 150, 80)  # Lighter green for base
+                        adjusted_color = QColor(100, 200, 100, 120)  # Darker green for adjusted
+                    else:
+                        base_color = QColor(150, 255, 150, 100)  # Light green
+                        adjusted_color = base_color
                     
                     for region in regions:
+                        region_id = region.region_id
                         # Extract points based on region type
                         if isinstance(region, RectangleRegion):
                             points = [
@@ -357,14 +426,31 @@ class MapWidget(QWidget):
                             points = [(float(p[0]), float(p[1])) for p in region.contour_points]
                         else:
                             continue
+                        
+                        # Apply offset if in adjustment mode
+                        offset = self.contour_offsets.get(region_id, (0, 0))
+                        has_offset = offset != (0, 0)
+                        adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+                        
+                        # Determine which color to use
+                        is_selected = (self.selected_contour_region_id == region_id)
+                        if self.adjustment_mode and has_offset:
+                            color = adjusted_color
+                            border_width = 3 if is_selected else 2
+                        elif self.adjustment_mode and is_selected:
+                            color = QColor(255, 255, 100, 140)  # Yellow highlight for selected
+                            border_width = 3
+                        else:
+                            color = base_color
+                            border_width = 2
                             
-                        if len(points) > 2:
+                        if len(adjusted_points) > 2:
                             poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
                                                  self.offset_y + p[1] * self.scale_factor) 
-                                         for p in points]
+                                         for p in adjusted_points]
                             polygon = QPolygonF(poly_points)
                             
-                            painter.setPen(QPen(color.darker(), 2))
+                            painter.setPen(QPen(color.darker(), border_width))
                             painter.setBrush(QBrush(color))
                             painter.drawPolygon(polygon)
                             
@@ -447,9 +533,17 @@ class MapWidget(QWidget):
                 # Draw edge regions in orange
                 for edge in self.gui_parent.mapping.get_mapped_edges():
                     regions = self.gui_parent.mapping.get_edge_regions(edge)
-                    color = QColor(255, 165, 0, 100)  # Orange
+                    
+                    # Determine color and border based on adjustment mode
+                    if self.adjustment_mode:
+                        base_color = QColor(255, 165, 0, 80)  # Lighter orange for base
+                        adjusted_color = QColor(255, 140, 0, 120)  # Darker orange for adjusted
+                    else:
+                        base_color = QColor(255, 165, 0, 100)  # Orange
+                        adjusted_color = base_color
                     
                     for region in regions:
+                        region_id = region.region_id
                         # Extract points based on region type
                         if isinstance(region, RectangleRegion):
                             points = [
@@ -462,14 +556,31 @@ class MapWidget(QWidget):
                             points = [(float(p[0]), float(p[1])) for p in region.contour_points]
                         else:
                             continue
+                        
+                        # Apply offset if in adjustment mode
+                        offset = self.contour_offsets.get(region_id, (0, 0))
+                        has_offset = offset != (0, 0)
+                        adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+                        
+                        # Determine which color to use
+                        is_selected = (self.selected_contour_region_id == region_id)
+                        if self.adjustment_mode and has_offset:
+                            color = adjusted_color
+                            border_width = 3 if is_selected else 2
+                        elif self.adjustment_mode and is_selected:
+                            color = QColor(255, 255, 100, 140)  # Yellow highlight for selected
+                            border_width = 3
+                        else:
+                            color = base_color
+                            border_width = 2
                             
-                        if len(points) > 2:
+                        if len(adjusted_points) > 2:
                             poly_points = [QPointF(self.offset_x + p[0] * self.scale_factor, 
                                                  self.offset_y + p[1] * self.scale_factor) 
-                                         for p in points]
+                                         for p in adjusted_points]
                             polygon = QPolygonF(poly_points)
                             
-                            painter.setPen(QPen(color.darker(), 2))
+                            painter.setPen(QPen(color.darker(), border_width))
                             painter.setBrush(QBrush(color))
                             painter.drawPolygon(polygon)
                             
@@ -704,25 +815,66 @@ class MapWidget(QWidget):
             x = (event.x() - self.offset_x) / self.scale_factor
             y = (event.y() - self.offset_y) / self.scale_factor
             
+            # Handle adjustment mode - select and drag contours
+            if self.adjustment_mode and self.interaction_mode == 'adjust_contours':
+                # Check if clicking on an existing contour
+                clicked_region_id = self._find_contour_at_point(x, y)
+                if clicked_region_id:
+                    self.selected_contour_region_id = clicked_region_id
+                    self.dragging_contour = True
+                    self.drag_start_point = (x, y)
+                    self.setCursor(Qt.ClosedHandCursor)
+                    self.update()
+                    return
+            
             if self.interaction_mode == 'place_grid':
                 self.enable_grid(x, y)
                 self.gridPlaced.emit(x, y)
                 self.interaction_mode = 'select_cells'
                 
             elif self.interaction_mode == 'select_cells' and self.grid_enabled:
+                # Check for modifiers
+                modifiers = QApplication.keyboardModifiers()
+                ctrl_held = modifiers & Qt.ControlModifier
+                
                 # Find clicked cell
+                clicked_cell = None
                 for cell_id, rect in self.grid_cells.items():
                     if rect.contains(QPointF(x, y)):
-                        if cell_id in self.selected_cells:
-                            self.selected_cells.remove(cell_id)
-                            if cell_id in self.cell_colors:
-                                del self.cell_colors[cell_id]
-                        else:
-                            self.selected_cells.add(cell_id)
-                            self.cell_colors[cell_id] = QColor(0, 255, 0, 100)
-                        self.cellClicked.emit(cell_id)
-                        self.update()
+                        clicked_cell = cell_id
                         break
+                
+                if clicked_cell:
+                    # If clicking on a selected cell, start dragging
+                    if clicked_cell in self.selected_cells:
+                        self.dragging_grid_cells = True
+                        self.grid_drag_start = (x, y)
+                        # Backup original positions
+                        self.original_grid_cells = {cid: QRectF(rect) for cid, rect in self.grid_cells.items()}
+                        self.grid_drag_offsets = {cid: (0, 0) for cid in self.selected_cells}
+                        self.setCursor(Qt.ClosedHandCursor)
+                    else:
+                        # Multi-select with Ctrl, or single select without
+                        if ctrl_held:
+                            # Add to selection
+                            self.selected_cells.add(clicked_cell)
+                            self.cell_colors[clicked_cell] = QColor(0, 255, 0, 100)
+                        else:
+                            # Clear selection and select only this cell
+                            self.selected_cells.clear()
+                            self.cell_colors = {cid: color for cid, color in self.cell_colors.items() 
+                                              if cid in self.cell_mappings}
+                            self.selected_cells.add(clicked_cell)
+                            self.cell_colors[clicked_cell] = QColor(0, 255, 0, 100)
+                        self.cellClicked.emit(clicked_cell)
+                    self.update()
+                else:
+                    # Clicked on empty space - clear selection if not holding Ctrl
+                    if not ctrl_held:
+                        self.selected_cells.clear()
+                        self.cell_colors = {cid: color for cid, color in self.cell_colors.items() 
+                                          if cid in self.cell_mappings}
+                        self.update()
                         
             elif self.interaction_mode == 'draw_contour':
                 self.current_contour.append((x, y))
@@ -762,6 +914,74 @@ class MapWidget(QWidget):
         if event.button() == Qt.RightButton and self.panning:
             self.panning = False
             self.setCursor(Qt.ArrowCursor)
+        elif event.button() == Qt.LeftButton and self.dragging_contour:
+            self.dragging_contour = False
+            self.drag_start_point = None
+            self.setCursor(Qt.ArrowCursor)
+            # Notify parent that contour was moved
+            if hasattr(self, 'gui_parent') and hasattr(self.gui_parent, '_on_contour_moved'):
+                self.gui_parent._on_contour_moved(self.selected_contour_region_id)
+        elif event.button() == Qt.LeftButton and self.dragging_grid_cells:
+            # End grid cell dragging
+            self.dragging_grid_cells = False
+            self.grid_drag_start = None
+            self.grid_drag_offsets.clear()
+            self.original_grid_cells.clear()
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+    
+    def eventFilter(self, obj, event):
+        """Filter events from parent widgets to capture wheel events."""
+        from PyQt5.QtCore import QEvent
+        if event.type() == QEvent.Wheel:
+            # Forward wheel event to this widget
+            self.wheelEvent(event)
+            return True  # Event handled
+        return super().eventFilter(obj, event)
+    
+    def wheelEvent(self, event):
+        """Handle mouse wheel for zooming."""
+        if self.map_image is None:
+            return
+        
+        # Get the mouse position in widget coordinates
+        mouse_pos = event.pos()
+        
+        # Convert mouse position to image coordinates BEFORE zoom
+        old_x = (mouse_pos.x() - self.offset_x) / self.scale_factor
+        old_y = (mouse_pos.y() - self.offset_y) / self.scale_factor
+        
+        # Calculate zoom factor from wheel delta
+        delta = event.angleDelta().y()
+        zoom_factor = 1.15 if delta > 0 else (1.0 / 1.15)  # 15% zoom per step
+        
+        # Calculate new zoom level
+        old_user_scale = self.user_scale_factor
+        new_user_scale = self.user_scale_factor * zoom_factor
+        
+        # Clamp zoom level to min/max
+        new_user_scale = max(self.min_zoom, min(self.max_zoom, new_user_scale))
+        
+        # Only update if zoom level changed
+        if new_user_scale != old_user_scale:
+            self.user_scale_factor = new_user_scale
+            
+            # Recalculate combined scale factor
+            old_scale = self.scale_factor
+            self.scale_factor = self.base_scale_factor * self.user_scale_factor
+            
+            # Adjust offsets to keep the point under the mouse cursor stationary
+            # New position of the same image point in widget coordinates
+            new_x = old_x * self.scale_factor + self.offset_x
+            new_y = old_y * self.scale_factor + self.offset_y
+            
+            # Adjust offset to keep point under cursor
+            self.offset_x += (mouse_pos.x() - new_x)
+            self.offset_y += (mouse_pos.y() - new_y)
+            
+            self.update()
+        
+        event.accept()
     
     def mouseMoveEvent(self, event):
         """Handle mouse move for panning and tooltips."""
@@ -771,6 +991,67 @@ class MapWidget(QWidget):
             self.offset_x += delta.x()
             self.offset_y += delta.y()
             self.last_pan_point = event.pos()
+            self.update()
+            return
+        
+        # Handle grid cell dragging
+        if self.dragging_grid_cells and self.grid_drag_start:
+            # Convert to image coordinates
+            x = (event.x() - self.offset_x) / self.scale_factor
+            y = (event.y() - self.offset_y) / self.scale_factor
+            
+            # Calculate offset from drag start
+            offset_x = x - self.grid_drag_start[0]
+            offset_y = y - self.grid_drag_start[1]
+            
+            # Try to apply offset to all selected cells
+            collision_detected = False
+            new_cells = {}
+            
+            for cell_id in self.selected_cells:
+                if cell_id not in self.original_grid_cells:
+                    continue
+                
+                orig_rect = self.original_grid_cells[cell_id]
+                new_rect = QRectF(
+                    orig_rect.x() + offset_x,
+                    orig_rect.y() + offset_y,
+                    orig_rect.width(),
+                    orig_rect.height()
+                )
+                
+                # Check for collision
+                if self._check_grid_collision(cell_id, new_rect):
+                    collision_detected = True
+                    break
+                
+                new_cells[cell_id] = new_rect
+            
+            # Apply movement if no collision
+            if not collision_detected:
+                for cell_id, new_rect in new_cells.items():
+                    self.grid_cells[cell_id] = new_rect
+                    self.grid_drag_offsets[cell_id] = (offset_x, offset_y)
+                self.setCursor(Qt.ClosedHandCursor)
+            else:
+                # Collision detected - show warning cursor
+                self.setCursor(Qt.ForbiddenCursor)
+            
+            self.update()
+            return
+        
+        # Handle contour dragging in adjustment mode
+        if self.dragging_contour and self.drag_start_point and self.selected_contour_region_id:
+            # Convert to image coordinates
+            x = (event.x() - self.offset_x) / self.scale_factor
+            y = (event.y() - self.offset_y) / self.scale_factor
+            
+            # Calculate offset from drag start
+            offset_x = x - self.drag_start_point[0]
+            offset_y = y - self.drag_start_point[1]
+            
+            # Update contour offset
+            self.contour_offsets[self.selected_contour_region_id] = (offset_x, offset_y)
             self.update()
             return
             
@@ -998,6 +1279,166 @@ class MapWidget(QWidget):
         painter.setFont(font)
         painter.setPen(QPen(color, 1))
         
+    def _find_contour_at_point(self, x: float, y: float) -> Optional[str]:
+        """Find which contour (if any) contains the given point.
+        
+        Args:
+            x, y: Point coordinates in image space
+            
+        Returns:
+            region_id of the contour containing the point, or None
+        """
+        from PyQt5.QtGui import QPainterPath
+        point = QPointF(x, y)
+        
+        # Check contours from completed_contours list
+        for contour_data in self.completed_contours:
+            if len(contour_data) >= 5:
+                points, region_id, color, elem_type, elem_id = contour_data[:5]
+            elif len(contour_data) >= 3:
+                points, region_id, color = contour_data[:3]
+            else:
+                continue
+                
+            if len(points) > 2:
+                # Apply offset if in adjustment mode
+                offset = self.contour_offsets.get(region_id, (0, 0))
+                adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+                
+                # Create path from contour points
+                path = QPainterPath()
+                path.moveTo(adjusted_points[0][0], adjusted_points[0][1])
+                for pt in adjusted_points[1:]:
+                    path.lineTo(pt[0], pt[1])
+                path.closeSubpath()
+                
+                # Check if point is inside contour
+                if path.contains(point):
+                    return region_id
+        
+        # Also check mapping regions if available
+        if (hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and 
+            self.gui_parent.mapping):
+            try:
+                from .regions import RectangleRegion, ContourRegion
+                
+                # Check node regions
+                for node_id in self.gui_parent.mapping.get_mapped_nodes():
+                    regions = self.gui_parent.mapping.get_node_regions(node_id)
+                    for region in regions:
+                        if isinstance(region, ContourRegion):
+                            region_id = region.region_id
+                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                            
+                            # Apply offset if in adjustment mode
+                            offset = self.contour_offsets.get(region_id, (0, 0))
+                            adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+                            
+                            # Create path from contour points
+                            path = QPainterPath()
+                            path.moveTo(adjusted_points[0][0], adjusted_points[0][1])
+                            for pt in adjusted_points[1:]:
+                                path.lineTo(pt[0], pt[1])
+                            path.closeSubpath()
+                            
+                            if path.contains(point):
+                                return region_id
+                
+                # Check edge regions
+                for edge in self.gui_parent.mapping.get_mapped_edges():
+                    regions = self.gui_parent.mapping.get_edge_regions(edge)
+                    for region in regions:
+                        if isinstance(region, ContourRegion):
+                            region_id = region.region_id
+                            points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                            
+                            # Apply offset if in adjustment mode
+                            offset = self.contour_offsets.get(region_id, (0, 0))
+                            adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+                            
+                            # Create path from contour points
+                            path = QPainterPath()
+                            path.moveTo(adjusted_points[0][0], adjusted_points[0][1])
+                            for pt in adjusted_points[1:]:
+                                path.lineTo(pt[0], pt[1])
+                            path.closeSubpath()
+                            
+                            if path.contains(point):
+                                return region_id
+            except Exception as e:
+                print(f"Error checking mapping regions: {e}")
+        
+        return None
+    
+    def get_adjusted_contour_points(self, region_id: str) -> Optional[List[Tuple[float, float]]]:
+        """Get the adjusted points for a contour.
+        
+        Args:
+            region_id: ID of the region/contour
+            
+        Returns:
+            List of adjusted (x, y) points, or None if not found
+        """
+        offset = self.contour_offsets.get(region_id, (0, 0))
+        
+        # Try to find in completed_contours
+        for contour_data in self.completed_contours:
+            if len(contour_data) >= 2:
+                points, rid = contour_data[0], contour_data[1]
+                if rid == region_id:
+                    return [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+        
+        # Try to find in base_contours
+        if region_id in self.base_contours:
+            points = self.base_contours[region_id]
+            return [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+        
+        return None
+    
+    def load_base_mapping_for_adjustment(self, mapping: SpatialMapping):
+        """Load a base mapping to be adjusted.
+        
+        Args:
+            mapping: The base spatial mapping to load
+        """
+        self.base_contours.clear()
+        self.contour_offsets.clear()
+        self.completed_contours.clear()
+        
+        # Store all regions from the mapping as base contours
+        for region_id, region in mapping._regions.items():
+            from .regions import ContourRegion
+            if isinstance(region, ContourRegion):
+                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+                self.base_contours[region_id] = points
+                
+                # Get element info
+                elem_info = mapping._region_to_element.get(region_id)
+                if elem_info:
+                    elem_type, elem_id = elem_info
+                    # Determine color based on type
+                    if elem_type == 'node':
+                        color = QColor(150, 255, 150, 100)  # Light green for nodes
+                    else:
+                        color = QColor(255, 165, 0, 100)  # Orange for edges
+                    
+                    # Add to completed contours for display
+                    self.completed_contours.append((points, region_id, color, elem_type, elem_id))
+        
+        self.update()
+    
+    def apply_all_offsets(self):
+        """Apply all accumulated offsets to base contours and reset offsets."""
+        for region_id, offset in self.contour_offsets.items():
+            if region_id in self.base_contours:
+                # Apply offset to base contour
+                adjusted = [(p[0] + offset[0], p[1] + offset[1]) for p in self.base_contours[region_id]]
+                self.base_contours[region_id] = adjusted
+        
+        # Clear offsets after applying
+        self.contour_offsets.clear()
+        self.update()
+        
         # Center the text
         from PyQt5.QtGui import QFontMetrics
         metrics = QFontMetrics(font)
@@ -1111,6 +1552,11 @@ class GraphWidget(QWidget):
         self.highlighted_nodes = set()
         self.highlighted_edges = set()
         
+        # Zoom state
+        self.zoom_level = 1.0
+        self.min_zoom = 0.1
+        self.max_zoom = 10.0
+        
         # Default colors and widths
         self.default_node_color = 'lightblue'
         self.default_edge_color = 'gray'
@@ -1129,6 +1575,9 @@ class GraphWidget(QWidget):
         self.image_label.setStyleSheet("border: 1px solid #ddd; background-color: white;")
         layout.addWidget(self.image_label)
         self.setLayout(layout)
+        
+        # Enable wheel events
+        self.setFocusPolicy(Qt.FocusPolicy.WheelFocus)
         
         # Set reasonable minimum size for stability
         self.setMinimumSize(300, 200)
@@ -1198,6 +1647,9 @@ class GraphWidget(QWidget):
                 # Default for other graph types
                 figsize = (12, 8)
             
+            # Note: We don't scale figsize here, instead we scale the final pixmap display
+            # This ensures the graph layout spacing is preserved
+            
             visualization_params = {
                 'figsize': figsize,
                 'node_size': node_size,
@@ -1243,8 +1695,12 @@ class GraphWidget(QWidget):
                 if hasattr(self, 'image_label') and self.image_label is not None:
                     self.image_label.isVisible()  # This will raise if deleted
                     if not self.image_label.size().isEmpty():
+                        # Calculate target size with zoom applied
+                        target_width = int(self.image_label.width() * self.zoom_level)
+                        target_height = int(self.image_label.height() * self.zoom_level)
+                        
                         scaled_pixmap = pixmap.scaled(
-                            self.image_label.size(),
+                            target_width, target_height,
                             Qt.KeepAspectRatio,
                             Qt.SmoothTransformation
                         )
@@ -1263,6 +1719,34 @@ class GraphWidget(QWidget):
             self.image_label.setText(f"Error displaying graph:\n{str(e)}")
         finally:
             self._drawing = False
+    
+    def eventFilter(self, obj, event):
+        """Filter events from parent widgets to capture wheel events."""
+        from PyQt5.QtCore import QEvent
+        if event.type() == QEvent.Wheel:
+            self.wheelEvent(event)
+            return True
+        return super().eventFilter(obj, event)
+    
+    def wheelEvent(self, event):
+        """Handle mouse wheel for zooming the graph visualization."""
+        # Calculate zoom factor from wheel delta
+        delta = event.angleDelta().y()
+        zoom_factor = 1.15 if delta > 0 else (1.0 / 1.15)
+        
+        # Calculate new zoom level
+        old_zoom = self.zoom_level
+        new_zoom = self.zoom_level * zoom_factor
+        
+        # Clamp to min/max
+        new_zoom = max(self.min_zoom, min(self.max_zoom, new_zoom))
+        
+        # Update if changed
+        if new_zoom != old_zoom:
+            self.zoom_level = new_zoom
+            self.draw_graph()  # Redraw with new zoom
+        
+        event.accept()
 
     def resizeEvent(self, event):
         """Handle widget resize."""
@@ -1323,12 +1807,22 @@ class GraphWidget(QWidget):
 class GraphSetupWindow(QMainWindow):
     """Main window for graph-space mapping setup."""
     
-    def __init__(self, graph: GraphStructure, map_image: np.ndarray):
+    def __init__(self, graph: GraphStructure, map_image: np.ndarray, 
+                 calibration_matrix_path: Optional[str] = None):
         super().__init__()
         
         self.graph = graph
         self.map_image = map_image
         self.mapping = SpatialMapping(graph)
+        self.calibration_matrix_path = calibration_matrix_path
+        self.calibration_matrix = None
+        
+        # Load calibration matrix if provided
+        if calibration_matrix_path and Path(calibration_matrix_path).exists():
+            try:
+                self.calibration_matrix = np.load(calibration_matrix_path)
+            except Exception as e:
+                print(f"Warning: Failed to load calibration matrix: {e}")
         
         # Setup state
         self.setup_mode = None  # 'grid' or 'manual'
@@ -1520,6 +2014,9 @@ class GraphSetupWindow(QMainWindow):
         # Remove size constraints to allow flexible splitter resizing
         graph_layout.addWidget(self.graph_widget)
         
+        # Install event filter to capture wheel events
+        graph_group.installEventFilter(self.graph_widget)
+        
         self.views_splitter.addWidget(graph_group)
         
         # Map view (bottom)
@@ -1532,6 +2029,10 @@ class GraphSetupWindow(QMainWindow):
         self.map_widget.gui_parent = self  # Allow map widget to access mapping
         # Remove minimum height to allow flexible splitter resizing
         map_layout.addWidget(self.map_widget)
+        
+        # Install event filter on parent widgets to capture wheel events
+        map_group.installEventFilter(self.map_widget)
+        self.views_splitter.installEventFilter(self.map_widget)
         
         self.views_splitter.addWidget(map_group)
         
@@ -1598,6 +2099,13 @@ class GraphSetupWindow(QMainWindow):
         self.manual_mode_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         button_layout.addWidget(self.manual_mode_button)
         
+        self.adjust_mode_button = QPushButton("Adjust Mapping")
+        self.adjust_mode_button.setCheckable(True)
+        self.adjust_mode_button.clicked.connect(self._on_adjust_mode)
+        self.adjust_mode_button.setFixedHeight(40)
+        self.adjust_mode_button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        button_layout.addWidget(self.adjust_mode_button)
+        
         self.test_mode_button = QPushButton("Test Mode")
         self.test_mode_button.setCheckable(True)
         self.test_mode_button.clicked.connect(self._on_test_mode)
@@ -1625,6 +2133,10 @@ class GraphSetupWindow(QMainWindow):
         # Manual mode page
         self.manual_controls = self._create_manual_controls()
         self.mode_stack.addWidget(self.manual_controls)
+        
+        # Adjust mode page
+        self.adjust_controls = self._create_adjust_controls()
+        self.mode_stack.addWidget(self.adjust_controls)
         
         # Test mode page
         self.test_controls = self._create_test_controls()
@@ -1960,6 +2472,90 @@ class GraphSetupWindow(QMainWindow):
         
         return widget
         
+    def _create_adjust_controls(self) -> QWidget:
+        """Create adjustment mode controls."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        
+        # Instructions
+        instructions = QLabel(
+            "Adjustment Mode:\n"
+            "1. Load a base mapping file\n"
+            "2. Optionally load a new session image\n"
+            "3. Click and drag contours to adjust positions\n"
+            "4. Save adjusted mapping when done"
+        )
+        instructions.setStyleSheet(
+            "background-color: #fff3cd; border: 1px solid #ffc107; "
+            "border-radius: 6px; padding: 8px; font-size: 11px;"
+        )
+        instructions.setWordWrap(True)
+        layout.addWidget(instructions)
+        
+        # Load base mapping
+        load_group = QGroupBox("1. Load Base Mapping")
+        load_layout = QVBoxLayout(load_group)
+        
+        self.adjust_load_mapping_button = QPushButton("Load Base Mapping")
+        self.adjust_load_mapping_button.clicked.connect(self._on_load_base_mapping_for_adjustment)
+        load_layout.addWidget(self.adjust_load_mapping_button)
+        
+        self.adjust_mapping_loaded_label = QLabel("No mapping loaded")
+        self.adjust_mapping_loaded_label.setStyleSheet("color: #666; font-size: 11px;")
+        load_layout.addWidget(self.adjust_mapping_loaded_label)
+        
+        layout.addWidget(load_group)
+        
+        # Load new image (optional)
+        image_group = QGroupBox("2. Update Session Image (Optional)")
+        image_layout = QVBoxLayout(image_group)
+        
+        self.adjust_load_image_button = QPushButton("Load New Image")
+        self.adjust_load_image_button.clicked.connect(self._on_load_new_session_image)
+        self.adjust_load_image_button.setEnabled(False)
+        image_layout.addWidget(self.adjust_load_image_button)
+        
+        self.adjust_image_loaded_label = QLabel("Using current image")
+        self.adjust_image_loaded_label.setStyleSheet("color: #666; font-size: 11px;")
+        image_layout.addWidget(self.adjust_image_loaded_label)
+        
+        layout.addWidget(image_group)
+        
+        # Adjustment status
+        status_group = QGroupBox("3. Adjust Contours")
+        status_layout = QVBoxLayout(status_group)
+        
+        self.adjust_status_label = QLabel(
+            "Click any contour to select it\n"
+            "Drag to move it to new position"
+        )
+        self.adjust_status_label.setStyleSheet("color: #666; font-size: 11px;")
+        status_layout.addWidget(self.adjust_status_label)
+        
+        # Reset adjustments button
+        self.adjust_reset_button = QPushButton("Reset All Adjustments")
+        self.adjust_reset_button.clicked.connect(self._on_reset_adjustments)
+        self.adjust_reset_button.setEnabled(False)
+        status_layout.addWidget(self.adjust_reset_button)
+        
+        layout.addWidget(status_group)
+        
+        # Save adjusted mapping
+        save_group = QGroupBox("4. Save Adjusted Mapping")
+        save_layout = QVBoxLayout(save_group)
+        
+        self.adjust_save_button = QPushButton("Save Adjusted Mapping")
+        self.adjust_save_button.clicked.connect(self._on_save_adjusted_mapping)
+        self.adjust_save_button.setEnabled(False)
+        save_layout.addWidget(self.adjust_save_button)
+        
+        layout.addWidget(save_group)
+        
+        # Add stretch to push everything to top
+        layout.addStretch()
+        
+        return widget
+        
     def _create_test_controls(self) -> QWidget:
         """Create simplified test mode controls."""
         widget = QWidget()
@@ -2033,6 +2629,7 @@ class GraphSetupWindow(QMainWindow):
                     self.grid_mode_button.setChecked(False)
                     return
                 self.manual_mode_button.setChecked(False)
+                self.adjust_mode_button.setChecked(False)
                 self.test_mode_button.setChecked(False)
                 self.setup_mode = 'grid'
                 self.mode_stack.setCurrentIndex(1)  # Grid controls
@@ -2079,6 +2676,7 @@ class GraphSetupWindow(QMainWindow):
                     self.manual_mode_button.setChecked(False)
                     return
                 self.grid_mode_button.setChecked(False)
+                self.adjust_mode_button.setChecked(False)
                 self.test_mode_button.setChecked(False)
                 self.setup_mode = 'manual'
                 self.mode_stack.setCurrentIndex(2)  # Manual controls
@@ -2124,6 +2722,33 @@ class GraphSetupWindow(QMainWindow):
             import traceback
             traceback.print_exc()
     
+    def _on_adjust_mode(self, checked: bool):
+        """Handle adjustment mode selection."""
+        try:
+            if checked:
+                # Check for unsaved progress before switching
+                if not self._confirm_mode_switch("Adjust Mapping"):
+                    self.adjust_mode_button.setChecked(False)
+                    return
+                self.grid_mode_button.setChecked(False)
+                self.manual_mode_button.setChecked(False)
+                self.test_mode_button.setChecked(False)
+                self.setup_mode = 'adjust'
+                self.mode_stack.setCurrentIndex(3)  # Adjust controls (index 3, after grid/manual/adjust)
+                
+                # Enable adjustment interaction mode
+                if hasattr(self.map_widget, 'set_interaction_mode'):
+                    self.map_widget.set_interaction_mode('adjust_contours')
+                    
+                self.status_bar.showMessage("Adjustment Mode - Load base mapping and drag contours to adjust")
+            else:
+                self.mode_stack.setCurrentIndex(0)  # Empty
+        except Exception as e:
+            self.status_bar.showMessage(f"Error switching to adjustment mode: {str(e)}")
+            print(f"Adjustment mode error: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def _on_test_mode(self, checked: bool):
         """Handle test mode selection."""
         try:
@@ -2135,8 +2760,9 @@ class GraphSetupWindow(QMainWindow):
                     return
                 self.grid_mode_button.setChecked(False)
                 self.manual_mode_button.setChecked(False)
+                self.adjust_mode_button.setChecked(False)
                 self.setup_mode = 'test'
-                self.mode_stack.setCurrentIndex(3)  # Test controls
+                self.mode_stack.setCurrentIndex(4)  # Test controls
                 
                 # Recreate UI fresh when entering test mode
                 self._recreate_fresh_ui()
@@ -3249,6 +3875,158 @@ class GraphSetupWindow(QMainWindow):
                 
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load mapping: {str(e)}")
+    
+    def _on_load_base_mapping_for_adjustment(self):
+        """Load a base mapping file for adjustment mode."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load Base Mapping", "",
+            "Mapping files (*.pkl *.json);;Pickle Files (*.pkl);;JSON Files (*.json);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                from pathlib import Path
+                # Load mapping with graph reconstruction
+                loaded_mapping = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+                
+                # Update the graph if it was reconstructed
+                if loaded_mapping.graph:
+                    self.graph = loaded_mapping.graph
+                    self.mapping = loaded_mapping
+                    
+                    # Update graph widget
+                    if hasattr(self, 'graph_widget'):
+                        self.graph_widget.graph = self.graph
+                        self.graph_widget.draw_graph()
+                
+                # Load contours into map widget for adjustment
+                self.map_widget.load_base_mapping_for_adjustment(loaded_mapping)
+                
+                # Update status labels
+                filename = Path(file_path).name
+                self.adjust_mapping_loaded_label.setText(f"Loaded: {filename}")
+                self.adjust_mapping_loaded_label.setStyleSheet("color: green; font-size: 11px;")
+                
+                # Enable other controls
+                self.adjust_load_image_button.setEnabled(True)
+                self.adjust_reset_button.setEnabled(True)
+                self.adjust_save_button.setEnabled(True)
+                
+                self.status_bar.showMessage(f"Base mapping loaded: {filename}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load base mapping: {str(e)}")
+                print(f"Load base mapping error: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    def _on_load_new_session_image(self):
+        """Load a new maze image for the current session."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Load New Session Image", "",
+            "Image files (*.png *.jpg *.jpeg *.bmp *.tiff);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                import cv2
+                new_image = cv2.imread(file_path)
+                if new_image is None:
+                    raise ValueError("Failed to load image")
+                
+                # Apply calibration transformation if available
+                if self.calibration_matrix is not None:
+                    # Get reference image size (base map size)
+                    ref_height, ref_width = self.map_widget.original_image.shape[:2]
+                    
+                    # Apply perspective transformation
+                    transformed_image = cv2.warpPerspective(
+                        new_image,
+                        self.calibration_matrix,
+                        (ref_width, ref_height)
+                    )
+                    new_image = transformed_image
+                    self.status_bar.showMessage("Image loaded and calibration applied")
+                else:
+                    self.status_bar.showMessage("Image loaded (no calibration applied - consider running calibration setup)")
+                
+                # Update the map image
+                self.map_image = new_image
+                self.map_widget.map_image = new_image
+                self.map_widget.original_image = new_image.copy()
+                self.map_widget.update()
+                
+                # Update status label
+                filename = Path(file_path).name
+                self.adjust_image_loaded_label.setText(f"Loaded: {filename}")
+                self.adjust_image_loaded_label.setStyleSheet("color: green; font-size: 11px;")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load image: {str(e)}")
+    
+    def _on_reset_adjustments(self):
+        """Reset all contour adjustments to original positions."""
+        reply = QMessageBox.question(
+            self, "Reset Adjustments",
+            "Reset all contour adjustments? This will move all contours back to their original positions.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.map_widget.contour_offsets.clear()
+            self.map_widget.selected_contour_region_id = None
+            self.map_widget.update()
+            self.status_bar.showMessage("All adjustments reset")
+    
+    def _on_save_adjusted_mapping(self):
+        """Save the adjusted mapping with updated contour positions."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Adjusted Mapping", "",
+            "Pickle files (*.pkl);;JSON files (*.json);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                from pathlib import Path
+                
+                # Apply all offsets to base contours
+                for region_id, offset in self.map_widget.contour_offsets.items():
+                    # Find the region in the mapping and update its points
+                    if region_id in self.mapping._regions:
+                        from .regions import ContourRegion
+                        region = self.mapping._regions[region_id]
+                        if isinstance(region, ContourRegion):
+                            # Apply offset to contour points
+                            adjusted_points = [
+                                (p[0] + offset[0], p[1] + offset[1]) 
+                                for p in region.contour_points
+                            ]
+                            region.contour_points = np.array(adjusted_points, dtype=np.float32)
+                
+                # Save the mapping with adjusted contours
+                self.mapping.save_with_builder_info(Path(file_path))
+                
+                # Clear offsets after saving (they're now in the base contours)
+                self.map_widget.contour_offsets.clear()
+                self.map_widget.update()
+                
+                QMessageBox.information(self, "Success", f"Adjusted mapping saved to {file_path}")
+                self.status_bar.showMessage(f"Adjusted mapping saved: {file_path}")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save adjusted mapping: {str(e)}")
+                print(f"Save adjusted mapping error: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    def _on_contour_moved(self, region_id: str):
+        """Called when a contour is moved in adjustment mode."""
+        if region_id:
+            offset = self.map_widget.contour_offsets.get(region_id, (0, 0))
+            self.adjust_status_label.setText(
+                f"Selected: {region_id}\n"
+                f"Offset: ({offset[0]:.1f}, {offset[1]:.1f})"
+            )
     
     def _restore_setup_mode_state(self, setup_mode_state: dict):
         """Restore GUI state from loaded setup mode configuration."""
@@ -4452,12 +5230,14 @@ class GraphSetupWindow(QMainWindow):
     
 
 
-def launch_setup_gui(graph: GraphStructure, map_image: np.ndarray) -> Optional[SpatialMapping]:
+def launch_setup_gui(graph: GraphStructure, map_image: np.ndarray, 
+                     calibration_matrix_path: Optional[str] = None) -> Optional[SpatialMapping]:
     """Launch the setup GUI and return the created mapping.
     
     Args:
         graph: Graph structure to map
         map_image: Map image as numpy array
+        calibration_matrix_path: Optional path to calibration transform matrix
         
     Returns:
         Created spatial mapping or None if cancelled
@@ -4466,7 +5246,7 @@ def launch_setup_gui(graph: GraphStructure, map_image: np.ndarray) -> Optional[S
     if app is None:
         app = QApplication([])
         
-    window = GraphSetupWindow(graph, map_image)
+    window = GraphSetupWindow(graph, map_image, calibration_matrix_path)
     window.show()
     
     app.exec_()

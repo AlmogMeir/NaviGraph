@@ -990,8 +990,13 @@ def setup_graph(config_path: Path):
         # Launch PyQt5 GUI
         click.echo("Launching mapping interface...")
         
+        # Get calibration matrix path if available
+        calibration_matrix_path = setup_config.get('calibration_matrix')
+        if calibration_matrix_path and not Path(calibration_matrix_path).is_absolute():
+            calibration_matrix_path = Path(config['_config_dir']) / calibration_matrix_path
+        
         try:
-            mapping = launch_setup_gui(graph, map_array)
+            mapping = launch_setup_gui(graph, map_array, calibration_matrix_path)
             
         except ImportError as e:
             click.echo(f"Error: PyQt5 is required but not installed: {e}", err=True)
