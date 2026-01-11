@@ -8,23 +8,37 @@ experiment_output_path: "{PROJECT_ROOT}/output"
 
 # Setup configuration for GUI tools
 setup:
+
   map_path: ./resources/maze_map.png  # Your experimental arena image
-  spatial_image_for_calibration: NPC2_2025_11_27_12_56_15_blackout.png
-  graph_mapping_output: ./resources/graph_mapping.pkl
+  spatial_image_for_calibration: ./resources/maze_images/NPC1_2025_08_24_11_35_08_blackout.png
+  graph_mapping_output: ./resources/maze_mappings/NPC1_2025_08_24_11.pkl
   calibration_matrix: ./resources/transform_matrix.npy
+
+# Video configuration
+video:
+  # Video path is now auto-discovered in session folder
+  # Or use file_pattern to specify naming pattern
+  file_pattern: ".*\\.mp4$"  # Finds any .mp4 file in session folder
+  start_frame: 0  # Optional: start from specific frame
+  end_frame: null  # Optional: process only up to this frame
 
 # Plugin configuration - customize based on your data sources
 plugins:
+  - name: calibration_data
+    type: calibration
+    file_pattern: "transform_matrix\\.npy$"
+    shared: true  # Calibration is in resources folder, not session folder
+    
   - name: pose_data
-    plugin_type: pose_tracking
-    pose_file_pattern: "*.h5"  # DeepLabCut or similar pose tracking files
+    type: pose_tracking
+    file_pattern: ".*\\.h5$"  # Finds .h5 files in session folder
     tracked_bodyparts: 
-      - centroid
-    likelihood_threshold: 0.5
+      - headstage
+    likelihood_threshold: 0.3
 
   - name: graph_position
-    plugin_type: graph_location
-    graph_mapping_file: ./resources/graph_mapping.pkl
+    type: graph_location
+    graph_mapping_file: ./resources/maze_mappings/NPC1_2025_08_24_11.pkl
     conflict_strategy: node_priority
 
 # Dual-rooted binary tree graph structure
@@ -35,45 +49,43 @@ graph:
       left_height: 6   # Height of left tree (number of levels)
       right_height: 6  # Height of right tree (can be different from left)
   
-  mapping_file: ./resources/graph_mapping.pkl
+  mapping_file: ./resources/maze_mappings/NPC1_2025_08_24_11.pkl
   conflict_strategy: node_priority
 
 # Analysis metrics
 analyze:
-  metrics:
-    # Track visits to each node
-    - name: node_visits
-      type: node_visit_count
-      
-    # Measure time spent in each tree
-    - name: tree_preference
-      type: custom
-      
-    # Track transitions between trees
-    - name: root_crossings
-      type: edge_transitions
-      filter_edges: 
-        edge_type: root_connection
+  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/NPC1_2025_08_24_analysis_results.pkl"  # Where to save results
+
+  metrics: {}  # Empty metrics - add custom metrics here if needed
+    # Example: measure time spent in specific regions
+    # time_in_region:
+    #   func_name: 'time_a_to_b'
+    #   args:
+    #     a: 0  # Start node
+    #     b: 63  # End node
   
   save_as_pkl: true
+  save_as_csv: true
 
 # Visualization pipeline
 visualizations:
   output:
-    directory: "{PROJECT_ROOT}/output/visualizations"
+    directory: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/visualizations"
     format: mp4
     fps: 40
     
-  layers:
+  pipeline:
     # Show the maze map
-    - type: map_overlay
-      params:
+    - name: maze_map
+      type: map_overlay
+      config:
         map_path: ./resources/maze_map.png
         alpha: 0.7
     
     # Overlay the dual-rooted tree structure
-    - type: graph_overlay
-      params:
+    - name: graph_structure
+      type: graph_overlay
+      config:
         show_nodes: true
         show_edges: true
         node_color_by: visits
@@ -81,18 +93,19 @@ visualizations:
         highlight_active_node: true
     
     # Show tracked position
-    - type: bodyparts
-      params:
+    - name: tracked_bodyparts
+      type: bodyparts
+      config:
         bodyparts:
-          - centroid
+          - headstage
         trail_length: 50
         marker_size: 5
     
     # Display metrics
-    - type: text_display
-      params:
-        metrics:
-          - node_visits
-          - current_node
-          - tree_preference
+    - name: session_info
+      type: text_display
+      config:
+        columns:
+          - frame
+          - current_node_headstage
         position: top_left
