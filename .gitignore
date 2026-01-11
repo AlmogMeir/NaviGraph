@@ -132,3 +132,10 @@ Desktop.ini
 # Lock files (except poetry.lock which should be committed)
 *.lock
 !poetry.lock
+/examples/dual_root_tree/session_NPC1_24_08_2025
+/examples/dual_root_tree/resources/maze_images
+/examples/dual_root_tree/resources/maze_mappings
+/examples/dual_root_tree/resources/maze_trackings
+/examples/dual_root_tree/resources/maze_videos
+examples/dual_root_tree/NPC2_2025_11_27_12_56_15_blackout.png
+examples/dual_root_tree/NPC2_2025_11_27_12_56_15_blackout.png
