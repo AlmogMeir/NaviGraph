@@ -132,3 +132,7 @@ Desktop.ini
 # Lock files (except poetry.lock which should be committed)
 *.lock
 !poetry.lock
+*.mp4
+*.png
+*.pkl
+*.h5
