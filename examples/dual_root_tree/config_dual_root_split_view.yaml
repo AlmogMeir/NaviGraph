@@ -1,0 +1,134 @@
+# Dual-Rooted Binary Tree Configuration - Split View Visualization
+# This configuration demonstrates the split_view visualizer
+
+# Logging and paths
+log_level: info
+experiment_path: .
+experiment_output_path: "{PROJECT_ROOT}/output"
+
+# Setup configuration for GUI tools
+setup:
+  map_path: ./resources/maze_map.png
+  spatial_image_for_calibration: ./resources/maze_images/NPC1_2025_08_12.png
+  graph_mapping_output: ./resources/maze_mappings/NPC1_2025_08_12.pkl
+  calibration_matrix: ./resources/transform_matrix/2025_08_12.npy
+
+# Video configuration
+video:
+  file_pattern: ".*\\.mp4$"
+  start_frame: 10000
+  end_frame: 12000
+
+# Plugin configuration
+plugins:
+  - name: calibration_data
+    type: calibration
+    file_pattern: "transform_matrix\\.npy$"
+    shared: true
+    
+  - name: pose_data
+    type: pose_tracking
+    file_pattern: ".*\\.h5$"
+    tracked_bodyparts: 
+      - headstage
+    likelihood_threshold: 0.3
+
+  - name: graph_position
+    type: graph_location
+    graph_mapping_file: ./resources/maze_mappings/NPC1_2025_08_12.pkl
+    conflict_strategy: node_priority
+
+# Graph structure
+graph:
+  builder:
+    type: dual_root_binary_tree
+    config:
+      left_height: 6
+      right_height: 6
+  
+  mapping_file: ./resources/maze_mappings/NPC1_2025_08_12.pkl
+  conflict_strategy: node_priority
+
+# Analysis metrics
+analyze:
+  save_raw_data_as_pkl: true
+  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/NPC1_2025_08_12_analysis_results.pkl"
+
+  metrics:
+    tracking_jumps:
+      func_name: 'detect_graph_jumps'
+      args:
+        bodypart: 'headstage'
+        min_jump_distance: 2
+    
+    transition_flow:
+      func_name: 'node_transition_flow'
+      args:
+        bodypart: 'headstage'
+    
+    full_path_reconstruction:
+      func_name: 'reconstruct_full_path'
+      args:
+        bodypart: 'headstage'
+        min_jump_distance: 2
+    
+    traversal_sequence:
+      func_name: 'traversal_sequence'
+      args:
+        bodypart: 'headstage'
+        min_jump_distance: 2
+  
+  save_as_pkl: true
+  save_as_csv: true
+
+# Visualization pipeline - Split View Configuration
+visualizations:
+  output:
+    directory: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/visualizations_split_view"
+    format: mp4
+    fps: 40
+    
+  pipeline:
+    # Split view: Video with mapping overlay (left) + Graph with position (right)
+    - name: split_visualization
+      type: split_view
+      config:
+        # Mapping overlay settings (left side - video)
+        mapping_file: ./resources/maze_mappings/NPC1_2025_08_12.pkl
+        mapping_alpha: 0.3  # Low transparency for subtle overlay
+        show_node_boxes: true  # Show node bounding boxes
+        show_edge_boxes: false  # Hide edge boxes to reduce clutter
+        node_box_color: [0, 255, 0]  # Green boxes for nodes
+        edge_box_color: [255, 0, 0]  # Red boxes for edges (if enabled)
+        
+        # Graph visualization settings (right side)
+        graph_bg_color: [40, 40, 40]  # Dark gray background
+        node_radius: 8  # Size of node circles
+        node_color: [200, 200, 200]  # Light gray for inactive nodes
+        current_node_color: [0, 255, 0]  # Bright green for current position
+        edge_color: [100, 100, 100]  # Medium gray for edges
+        edge_thickness: 1  # Thin edges
+        show_node_labels: true  # Show node IDs
+        label_font_scale: 0.4  # Small font for labels
+        label_color: [255, 255, 255]  # White text
+        
+        # Tracking settings
+        bodypart: headstage  # Which bodypart to track
+        
+        # Layout settings
+        graph_width_ratio: 0.5  # Graph takes 50% of total width
+        padding: 20  # Pixels of padding around graph
+    
+    # Optional: Add text overlay with frame info
+    - name: frame_info
+      type: text_display
+      config:
+        columns:
+          - frame
+          - headstage_graph_node
+        position: top_left
+        font_scale: 0.6
+        thickness: 2
+        color: [255, 255, 0]  # Yellow text
+        bg_color: [0, 0, 0]  # Black background
+        bg_alpha: 0.5
