@@ -10,8 +10,8 @@ experiment_output_path: "{PROJECT_ROOT}/output"
 setup:
 
   map_path: ./resources/maze_map.png  # Your experimental arena image
-  spatial_image_for_calibration: ./resources/maze_images/NPC1_2025_08_24_11_35_08_blackout.png
-  graph_mapping_output: ./resources/maze_mappings/NPC1_2025_08_24_11.pkl
+  spatial_image_for_calibration: ./resources/maze_images/NPC1_2025_08_24.png
+  graph_mapping_output: ./resources/maze_mappings/NPC1_2025_08_24.pkl
   calibration_matrix: ./resources/transform_matrix.npy
 
 # Video configuration
@@ -19,8 +19,8 @@ video:
   # Video path is now auto-discovered in session folder
   # Or use file_pattern to specify naming pattern
   file_pattern: ".*\\.mp4$"  # Finds any .mp4 file in session folder
-  start_frame: 0  # Optional: start from specific frame
-  end_frame: null  # Optional: process only up to this frame
+  start_frame: 10000  # Optional: start from specific frame
+  end_frame: 12000  # Optional: process only up to this frame
 
 # Plugin configuration - customize based on your data sources
 plugins:
@@ -38,7 +38,7 @@ plugins:
 
   - name: graph_position
     type: graph_location
-    graph_mapping_file: ./resources/maze_mappings/NPC1_2025_08_24_11.pkl
+    graph_mapping_file: ./resources/maze_mappings/NPC1_2025_08_24.pkl
     conflict_strategy: node_priority
 
 # Dual-rooted binary tree graph structure
@@ -49,20 +49,26 @@ graph:
       left_height: 6   # Height of left tree (number of levels)
       right_height: 6  # Height of right tree (can be different from left)
   
-  mapping_file: ./resources/maze_mappings/NPC1_2025_08_24_11.pkl
+  mapping_file: ./resources/maze_mappings/NPC1_2025_08_24.pkl
   conflict_strategy: node_priority
 
 # Analysis metrics
 analyze:
-  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/NPC1_2025_08_24_analysis_results.pkl"  # Where to save results
+  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/NPC1_2025_08_24_analysis_results.pkl"
 
-  metrics: {}  # Empty metrics - add custom metrics here if needed
-    # Example: measure time spent in specific regions
-    # time_in_region:
-    #   func_name: 'time_a_to_b'
-    #   args:
-    #     a: 0  # Start node
-    #     b: 63  # End node
+  metrics:
+    # Detect tracking jumps where animal skips nodes
+    tracking_jumps:
+      func_name: 'detect_graph_jumps'
+      args:
+        bodypart: 'headstage'
+        min_jump_distance: 2  # Skip at least 1 intermediate node
+    
+    # Analyze complete node-to-node transition flow
+    transition_flow:
+      func_name: 'node_transition_flow'
+      args:
+        bodypart: 'headstage'
   
   save_as_pkl: true
   save_as_csv: true
@@ -109,3 +115,32 @@ visualizations:
           - frame
           - current_node_headstage
         position: top_left
+
+    # Alternative: Split view (video + mapping on left, graph on right)
+    # Uncomment to use split view instead of overlays
+    # - name: split_visualization
+    #   type: split_view
+    #   config:
+    #     # Mapping overlay settings (left side)
+    #     mapping_file: ./resources/maze_mappings/NPC1_2025_08_21.pkl
+    #     mapping_alpha: 0.3  # Transparency of mapping overlay
+    #     show_node_boxes: true
+    #     show_edge_boxes: false
+    #     node_box_color: [0, 255, 0]  # Green
+    #     
+    #     # Graph visualization settings (right side)
+    #     graph_bg_color: [40, 40, 40]  # Dark gray
+    #     node_radius: 8
+    #     node_color: [200, 200, 200]  # Light gray
+    #     current_node_color: [0, 255, 0]  # Green
+    #     edge_color: [100, 100, 100]  # Gray
+    #     edge_thickness: 1
+    #     show_node_labels: true
+    #     label_font_scale: 0.4
+    #     
+    #     # Tracking settings
+    #     bodypart: headstage
+    #     
+    #     # Layout
+    #     graph_width_ratio: 0.5  # Graph takes 50% of width
+    #     padding: 20

@@ -33,17 +33,18 @@ class PoseTrackingPlugin(NaviGraphPlugin):
         Args:
             dataframe: Current DataFrame (may be empty)
             shared_resources: Available shared resources
-            
         Returns:
             DataFrame with bodypart tracking columns added
         """
+        self.logger.debug(f"[DEBUG] augment_data called for PoseTrackingPlugin. Config: {self.config}")
+        self.logger.debug(f"[DEBUG] discovered_files: {self.discovered_files}")
         # Validate we have discovered files
         if not self.discovered_files:
+            self.logger.error(f"[DEBUG] No H5 files found. Searched with pattern: {self.config.get('file_pattern')}")
             raise NavigraphError(
                 f"PoseTrackingPlugin requires H5 file but none found. "
                 f"Check file_pattern in config: {self.config.get('file_pattern')}"
             )
-        
         h5_file = self.discovered_files[0]  # Use first discovered file
         self.logger.info(f"Loading pose data from: {h5_file.name}")
         

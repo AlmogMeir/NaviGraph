@@ -104,26 +104,25 @@ class FileDiscoveryEngine:
         Args:
             search_path: Directory to search in
             pattern: Regex pattern to match files/directories
-            
+        
         Returns:
             List of matching file/directory paths
         """
+        self.logger.debug(f"[DEBUG] discover_files_by_pattern called with search_path: {search_path} and pattern: {pattern}")
         if not search_path.exists():
             self.logger.warning(f"Search path does not exist: {search_path}")
             return []
-        
         try:
+            all_files = list(search_path.iterdir())
+            self.logger.debug(f"[DEBUG] All files in {search_path}: {[f.name for f in all_files]}")
             compiled_pattern = re.compile(pattern, re.IGNORECASE)
             matches = []
-            
-            for item in search_path.iterdir():
+            for item in all_files:
                 # Match both files and directories
                 if (item.is_file() or item.is_dir()) and compiled_pattern.search(item.name):
                     matches.append(item)
-            
-            self.logger.debug(f"Found {len(matches)} items matching pattern '{pattern}' in {search_path}")
+            self.logger.debug(f"[DEBUG] Found {len(matches)} items matching pattern '{pattern}' in {search_path}: {[m.name for m in matches]}")
             return matches
-            
         except re.error as e:
             self.logger.error(f"Invalid regex pattern '{pattern}': {e}")
             return []
