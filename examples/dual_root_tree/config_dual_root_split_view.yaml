@@ -9,9 +9,9 @@ experiment_output_path: "{PROJECT_ROOT}/output"
 # Setup configuration for GUI tools
 setup:
   map_path: ./resources/maze_map.png
-  spatial_image_for_calibration: ./resources/maze_images/NPC1_2025_08_12.png
-  graph_mapping_output: ./resources/maze_mappings/NPC1_2025_08_12.pkl
-  calibration_matrix: ./resources/transform_matrix/2025_08_12.npy
+  spatial_image_for_calibration: ./resources/maze_images/NPC1_2025_09_01.png
+  graph_mapping_output: ./resources/maze_mappings/NPC1_2025_09_01.pkl
+  calibration_matrix: ./resources/transform_matrix/2025_09_01.npy
 
 # Video configuration
 video:
@@ -35,7 +35,7 @@ plugins:
 
   - name: graph_position
     type: graph_location
-    graph_mapping_file: ./resources/maze_mappings/NPC1_2025_08_12.pkl
+    graph_mapping_file: ./resources/maze_mappings/NPC1_2025_09_01.pkl
     conflict_strategy: node_priority
 
 # Graph structure
@@ -46,13 +46,13 @@ graph:
       left_height: 6
       right_height: 6
   
-  mapping_file: ./resources/maze_mappings/NPC1_2025_08_12.pkl
+  mapping_file: ./resources/maze_mappings/NPC1_2025_09_01.pkl
   conflict_strategy: node_priority
 
 # Analysis metrics
 analyze:
   save_raw_data_as_pkl: true
-  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/NPC1_2025_08_12_analysis_results.pkl"
+  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/NPC1_2025_09_01_analysis_results.pkl"
 
   metrics:
     tracking_jumps:
@@ -94,7 +94,7 @@ visualizations:
       type: split_view
       config:
         # Mapping overlay settings (left side - video)
-        mapping_file: ./resources/maze_mappings/NPC1_2025_08_12.pkl
+        mapping_file: ./resources/maze_mappings/NPC1_2025_09_01.pkl
         mapping_alpha: 0.3  # Low transparency for subtle overlay
         show_node_boxes: true  # Show node bounding boxes
         show_edge_boxes: false  # Hide edge boxes to reduce clutter
