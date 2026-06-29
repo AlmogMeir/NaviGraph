@@ -4,13 +4,21 @@ Contains session-level and cross-session analysis functions.
 All functions are auto-discovered and registered via decorators.
 """
 
-from . import metrics  # Import to register metrics
-from .analyzer import Analyzer
+try:
+    from . import metrics  # Import to register metrics
+    from .analyzer import Analyzer
+except ImportError:
+    pass  # omegaconf / hydra not installed; traversal_builder is still importable
 from .speed_analysis import (
     compute_path_speed,
     compute_mean_path_speed,
     plot_speed,
     plot_mean_speed,
+)
+from .traversal_builder import (
+    fix_edge_bounces,
+    build_node_df,
+    build_node_edge_df,
 )
 
 __all__ = [
@@ -19,4 +27,7 @@ __all__ = [
     'compute_mean_path_speed',
     'plot_speed',
     'plot_mean_speed',
+    'fix_edge_bounces',
+    'build_node_df',
+    'build_node_edge_df',
 ]

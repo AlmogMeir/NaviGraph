@@ -8,7 +8,7 @@ version = "1.1.0"
 description = "Flexible graph-based analysis framework for behavioral research"
 authors = [{name = "PBLab", email = "pb@tauex.tau.ac.il"}]
 readme = "README.md"
-requires-python = ">=3.9,<3.13"
+requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
