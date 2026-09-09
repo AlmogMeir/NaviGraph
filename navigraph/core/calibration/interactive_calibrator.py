@@ -7,6 +7,7 @@ import numpy as np
 from loguru import logger
 
 from .point_selector import PointSelector, Point
+from .map_point_sets import MapPointSet
 from .transform_calculator import TransformCalculator, TransformMethod, CalibrationResult
 
 
@@ -29,29 +30,46 @@ class InteractiveCalibrator:
         map_image_path: Path,
         method: str = "homography_ransac",
         min_points: int = 4,
-        show_preview: bool = True
+        show_preview: bool = True,
+        map_point_set: Optional[MapPointSet] = None
     ) -> CalibrationResult:
         """Run interactive calibration workflow.
-        
+
         Args:
             camera_source: Camera index (int) or video file path
             map_image_path: Path to map image
             method: Transformation method ("affine", "homography", "homography_ransac")
             min_points: Minimum number of points required
             show_preview: Whether to show correspondence preview
-            
+            map_point_set: Preset map points to reuse. When given, the map side
+                is not clicked at all: the camera frame is matched against these
+                points, in their order.
+
         Returns:
             CalibrationResult with transformation matrix and metrics
-            
+
         Raises:
             ValueError: If calibration fails or user cancels
             FileNotFoundError: If files don't exist
         """
         self.logger.info("🎯 Starting interactive camera-to-map calibration")
-        
+
         # Load map image
         map_image = self._load_image(map_image_path)
-        
+
+        preset_points = None
+        preset_labels = None
+        if map_point_set is not None:
+            mismatch = map_point_set.size_mismatch(map_image.shape)
+            if mismatch:
+                self.logger.warning(f"⚠️  {mismatch}")
+            self.logger.info(
+                f"📌 Using preset map point set '{map_point_set.name}' "
+                f"({len(map_point_set.points)} points)"
+            )
+            preset_points = map_point_set.points
+            preset_labels = map_point_set.labels
+
         # Get camera frame
         camera_frame = self._capture_camera_frame(camera_source)
         
@@ -65,7 +83,9 @@ class InteractiveCalibrator:
                     source_image=camera_frame,
                     target_image=map_image,
                     min_points=min_points,
-                    window_title="NaviGraph Calibration"
+                    window_title="NaviGraph Calibration",
+                    preset_target_points=preset_points,
+                    preset_labels=preset_labels
                 )
                 
                 if len(source_points) < min_points:

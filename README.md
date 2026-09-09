@@ -189,6 +189,20 @@ When using setup or test commands, the GUI provides these controls:
 - **Mouse wheel**: Zoom in/out
 - **Click and drag**: Pan around image
 
+**Adjustment Mode** (realigning an existing mapping to a new session):
+- **Click**: Select the tiles under the cursor
+- **Ctrl+Click**: Add tiles to the selection, or remove already selected ones
+- **Click and drag on empty space**: Select every tile whose centre falls in the box
+- **Drag a selected tile**: Move the whole selection
+- **Shift+drag**: Rotate the selection around its centre (hold Ctrl to snap to 15°)
+- **Ctrl+C / Ctrl+V**: Copy tiles and paste extra ones for the same node or edge —
+  a node or edge may hold any number of tiles, so a shape one tile cannot follow
+  (an L-bend, a corridor around a corner) gets covered by several instead of one
+  stretched tile. The paste lands under the cursor and comes out selected, ready
+  to drag or rotate into place.
+- **Del**: Delete the selected tiles (asks first if that would leave an element unmapped)
+- **Esc**: Cancel the rotation or selection box in progress
+
 **Calibration Mode:**
 - **Click**: Place calibration points
 - **Right-click**: Remove points
@@ -206,6 +220,12 @@ NaviGraph uses YAML configuration files with a structured plugin system:
 log_level: info
 experiment_path: .
 experiment_output_path: "{PROJECT_ROOT}/output"
+
+# Which session to analyse, picked by date (optional)
+session:
+  date: "2026_06_18"                        # quote it: YAML reads 2026_06_18 as a number
+  subject: NPC4                             # only needed when a date has several subjects
+  sessions_dir: ./resources/prev_sessions   # holds session_<subject>_<DD>_<MM>_<YYYY>
 
 # Setup configuration for GUI tools
 setup:
@@ -241,6 +261,9 @@ analyze:
         b: 273  # Goal node
   save_as_csv: true
   save_as_pkl: true
+  # Copy the analysis outputs to <raw_data_root>/<subject>/<DD_MM_YYYY>/ as well,
+  # so they are addressable by session and not only by run timestamp (optional)
+  raw_data_root: /path/to/Navigraph_Raw_Data
 
 # Visualization pipeline
 visualizations:
@@ -795,6 +818,55 @@ This launches an interactive GUI where you:
 1. Click corresponding points in video and real-world coordinates
 2. Build transformation matrix
 3. Save calibration for use in experiments
+
+#### Reusable map point sets
+
+The map side of the calibration is the same picture every session, so its
+points can be saved once and reused. Then only the camera frame is clicked: a
+reference window shows the saved map points and highlights the one to match
+next.
+
+```bash
+# Save the map points you just picked by hand
+navigraph setup calibration config.yaml --save-point-set maze_corners
+
+# Reuse them - the map step is skipped entirely
+navigraph setup calibration config.yaml --point-set maze_corners
+
+# See what is available, or ignore the sets for this run
+navigraph setup calibration config.yaml --list-point-sets
+navigraph setup calibration config.yaml --manual-points
+```
+
+With saved sets present and no flag given, the command lists them and asks
+which to use (choose `0` to pick map points by hand).
+
+Sets are JSON files in `setup.map_point_sets` (default
+`./resources/map_point_sets`):
+
+```json
+{
+  "name": "maze_corners",
+  "description": "Four maze corners, clockwise from top-left",
+  "map_image": "maze_map.png",
+  "map_size": [1200, 900],
+  "labels": ["TL", "TR", "BR", "BL"],
+  "points": [[120, 95], [1080, 98], [1085, 810], [118, 805]]
+}
+```
+
+`map_size` is the map image the points were picked on; a map of a different
+size is flagged, since the coordinates are in pixels. `labels` is optional and
+just names the points in the reference window. Sets can also be declared
+inline under `calibrator_parameters.map_point_sets`:
+
+```yaml
+calibrator_parameters:
+  registration_method: homography_ransac
+  map_point_sets:
+    maze_corners:
+      points: [[120, 95], [1080, 98], [1085, 810], [118, 805]]
+```
 
 ### Graph Mapping
 

@@ -15,6 +15,12 @@ from .speed_analysis import (
     plot_speed,
     plot_mean_speed,
 )
+from .traversal_fixer import (
+    ImprovedMazeTraversalFixer,
+    load_maze_graph,
+    make_improved_traversal,
+    build_traversal_df,
+)
 from .traversal_builder import (
     fix_edge_bounces,
     build_node_df,
@@ -27,6 +33,10 @@ __all__ = [
     'compute_mean_path_speed',
     'plot_speed',
     'plot_mean_speed',
+    'ImprovedMazeTraversalFixer',
+    'load_maze_graph',
+    'make_improved_traversal',
+    'build_traversal_df',
     'fix_edge_bounces',
     'build_node_df',
     'build_node_edge_df',

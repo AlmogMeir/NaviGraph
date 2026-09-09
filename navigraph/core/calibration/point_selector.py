@@ -1,6 +1,6 @@
 """Interactive point selection UI for camera-to-map calibration."""
 
-from typing import List, Tuple, Optional, NamedTuple
+from typing import List, Sequence, Tuple, Optional, NamedTuple
 import cv2
 import numpy as np
 from loguru import logger
@@ -28,11 +28,14 @@ class PointSelector:
     
     # Colors (BGR format for OpenCV)
     COLOR_SOURCE_POINT = (255, 100, 0)    # Blue
-    COLOR_TARGET_POINT = (0, 200, 0)      # Green  
+    COLOR_TARGET_POINT = (0, 200, 0)      # Green
     COLOR_CONNECTION_LINE = (255, 255, 0) # Cyan
     COLOR_TEXT = (255, 255, 255)          # White
     COLOR_TEXT_BG = (0, 0, 0)             # Black
-    
+    COLOR_NEXT_POINT = (0, 200, 255)      # Orange - next preset point to match
+
+    REFERENCE_WINDOW_NAME = "Map Reference (preset points)"
+
     def __init__(self):
         """Initialize point selector."""
         self.source_points: List[Point] = []
@@ -42,25 +45,39 @@ class PointSelector:
         self.original_source = None
         self.original_target = None
         self.window_name = "Calibration Point Selection"
-        
+        # Active stage requirements, shared with the mouse callback
+        self.required_points = 0
+        self.exact_points = False
+        # Reference view of the preset map points, shown while clicking the camera frame
+        self.reference_image = None
+        self.reference_points: Sequence[Point] = ()
+        self.reference_labels: Sequence[str] = ()
+
     def select_corresponding_points(
         self,
         source_image: np.ndarray,
         target_image: np.ndarray,
         min_points: int = 4,
-        window_title: str = "NaviGraph Calibration"
+        window_title: str = "NaviGraph Calibration",
+        preset_target_points: Optional[Sequence[Point]] = None,
+        preset_labels: Optional[Sequence[str]] = None
     ) -> Tuple[List[Point], List[Point]]:
         """Select corresponding points between source and target images.
-        
+
         Args:
             source_image: Source image (camera frame)
             target_image: Target image (map)
             min_points: Minimum number of points required
             window_title: Window title for display
-            
+            preset_target_points: Map points to reuse instead of clicking them.
+                When given, only the source image is clicked, once per preset
+                point and in the preset's order.
+            preset_labels: Optional labels for the preset points, shown in the
+                reference view to identify the point being matched
+
         Returns:
             Tuple of (source_points, target_points)
-            
+
         Raises:
             ValueError: If user cancels or insufficient points selected
         """
@@ -69,28 +86,85 @@ class PointSelector:
         self.original_source = source_image.copy()
         self.original_target = target_image.copy()
         self.window_name = window_title
-        
-        logger.info(f"Starting interactive calibration with minimum {min_points} points")
+
         logger.info("Controls: Click to add point, Right-click to remove last, 'r' to reset, Enter to confirm, ESC to cancel")
-        
-        # First select points on source image  
+
+        if preset_target_points:
+            return self._select_against_preset(preset_target_points, preset_labels, min_points)
+
+        logger.info(f"Starting interactive calibration with minimum {min_points} points")
+
+        # First select points on source image
         self.current_stage = "source"
         self._select_points_on_image(self.original_source, "image (at least 4 points)", min_points)
-        
+
         if not self.source_points:
             raise ValueError("Calibration cancelled by user")
-            
+
         # Then select EXACTLY the same number of corresponding points on target image
-        self.current_stage = "target" 
+        self.current_stage = "target"
         actual_points_needed = len(self.source_points)
         self._select_points_on_image(self.original_target, f"map ({actual_points_needed} points to match)", actual_points_needed, exact_points=True)
-        
+
         if len(self.target_points) != len(self.source_points):
             raise ValueError("Calibration cancelled or point count mismatch")
-        
+
         logger.info(f"Successfully selected {len(self.source_points)} point pairs")
         return self.source_points, self.target_points
-    
+
+    def _select_against_preset(
+        self,
+        preset_target_points: Sequence[Point],
+        preset_labels: Optional[Sequence[str]],
+        min_points: int
+    ) -> Tuple[List[Point], List[Point]]:
+        """Click the camera frame against a fixed set of map points.
+
+        Args:
+            preset_target_points: Map points, in the order they must be matched
+            preset_labels: Optional labels for those points
+            min_points: Minimum number of points the calibration requires
+
+        Returns:
+            Tuple of (source_points, target_points)
+
+        Raises:
+            ValueError: If the preset is too small, or the user cancels
+        """
+        preset = [Point(float(p.x), float(p.y)) for p in preset_target_points]
+
+        if len(preset) < min_points:
+            raise ValueError(
+                f"Preset map points ({len(preset)}) are fewer than the required "
+                f"minimum ({min_points})"
+            )
+
+        logger.info(f"Using {len(preset)} preset map points; only the camera frame needs clicking")
+
+        self.target_points = preset
+        self.reference_image = self.original_target
+        self.reference_points = preset
+        self.reference_labels = tuple(preset_labels) if preset_labels else ()
+
+        self.current_stage = "source"
+        try:
+            self._select_points_on_image(
+                self.original_source,
+                f"image ({len(preset)} points to match the map reference)",
+                len(preset),
+                exact_points=True
+            )
+        finally:
+            self.reference_image = None
+            self.reference_points = ()
+            self.reference_labels = ()
+
+        if len(self.source_points) != len(preset):
+            raise ValueError("Calibration cancelled or point count mismatch")
+
+        logger.info(f"Successfully matched {len(self.source_points)} point pairs against preset")
+        return self.source_points, self.target_points
+
     def _select_points_on_image(self, image: np.ndarray, image_type: str, required_points: int, exact_points: bool = False) -> None:
         """Handle point selection on a single image.
         
@@ -101,20 +175,30 @@ class PointSelector:
             exact_points: If True, user must select exactly this many points (no more)
         """
         self.display_image = image.copy()
-        
+        self.required_points = required_points
+        self.exact_points = exact_points
+
         # Setup window
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
-        
+
+        if self.reference_image is not None:
+            cv2.namedWindow(self.REFERENCE_WINDOW_NAME, cv2.WINDOW_NORMAL)
+
         current_points = self.source_points if self.current_stage == "source" else self.target_points
-        
+
         while True:
             # Create display with current points and instructions
             display = self.display_image.copy()
             self._draw_points(display, current_points, self.current_stage)
             self._draw_instructions(display, image_type, required_points, len(current_points), exact_points)
-            
+
             cv2.imshow(self.window_name, display)
+
+            # Keep the map reference in step with the point being matched
+            if self.reference_image is not None:
+                cv2.imshow(self.REFERENCE_WINDOW_NAME, self._render_reference(len(current_points)))
+
             key = cv2.waitKey(1) & 0xFF
             
             if key == 27:  # ESC - Cancel
@@ -154,14 +238,11 @@ class PointSelector:
         current_points = self.source_points if self.current_stage == "source" else self.target_points
         
         if event == cv2.EVENT_LBUTTONDOWN:
-            # Check if we're in exact mode and already have enough points
-            exact_mode = self.current_stage == "target"  # Target stage requires exact points
-            if exact_mode:
-                target_count = len(self.source_points)  # Must match source count
-                if len(current_points) >= target_count:
-                    logger.debug(f"Already have {target_count} points, cannot add more")
-                    return
-            
+            # In exact mode the count is fixed, so refuse extra points
+            if self.exact_points and len(current_points) >= self.required_points:
+                logger.debug(f"Already have {self.required_points} points, cannot add more")
+                return
+
             # Add point
             new_point = Point(x, y)
             current_points.append(new_point)
@@ -179,6 +260,67 @@ class PointSelector:
                 else:
                     self.display_image = self.original_target.copy()
     
+    def _render_reference(self, next_index: int) -> np.ndarray:
+        """Render the preset map points, highlighting the one to match next.
+
+        Args:
+            next_index: Index of the preset point the user should click now
+
+        Returns:
+            Map image with the preset points drawn on it
+        """
+        display = self.reference_image.copy()
+        total = len(self.reference_points)
+
+        for i, point in enumerate(self.reference_points):
+            label = self.reference_labels[i] if self.reference_labels else str(i + 1)
+            is_next = (i == next_index)
+            done = (i < next_index)
+
+            color = self.COLOR_NEXT_POINT if is_next else self.COLOR_TARGET_POINT
+            radius = self.POINT_RADIUS * 2 if is_next else self.POINT_RADIUS
+            cv2.circle(display, point.as_tuple(), radius, color, self.POINT_THICKNESS)
+
+            if is_next:
+                # Crosshair so the point stays findable against a busy map
+                x, y = point.as_tuple()
+                cv2.line(display, (x - radius * 2, y), (x + radius * 2, y), color, 1)
+                cv2.line(display, (x, y - radius * 2), (x, y + radius * 2), color, 1)
+            elif done:
+                cv2.circle(display, point.as_tuple(), 3, color, -1)
+
+            text_x = point.as_tuple()[0] + radius + 5
+            text_y = point.as_tuple()[1] - radius - 5
+            text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, self.FONT_THICKNESS)[0]
+            cv2.rectangle(
+                display,
+                (text_x - 3, text_y - text_size[1] - 3),
+                (text_x + text_size[0] + 3, text_y + 3),
+                self.COLOR_TEXT_BG,
+                -1
+            )
+            cv2.putText(
+                display, label, (text_x, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX, self.FONT_SCALE, color, self.FONT_THICKNESS
+            )
+
+        if next_index < total:
+            next_label = self.reference_labels[next_index] if self.reference_labels else str(next_index + 1)
+            status = f"Now click point {next_index + 1}/{total} (map point '{next_label}') on the camera image"
+        else:
+            status = f"All {total} points matched - press Enter on the camera image"
+
+        text_size = cv2.getTextSize(status, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
+        overlay = display.copy()
+        cv2.rectangle(overlay, (0, 0), (display.shape[1], text_size[1] + 20), self.COLOR_TEXT_BG, -1)
+        cv2.addWeighted(overlay, 0.7, display, 0.3, 0, display)
+        cv2.putText(
+            display, status, (10, text_size[1] + 10),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.8, self.COLOR_TEXT, 2
+        )
+
+        return display
+
     def _draw_points(self, image: np.ndarray, points: List[Point], stage: str) -> None:
         """Draw points on image with numbering."""
         color = self.COLOR_SOURCE_POINT if stage == "source" else self.COLOR_TARGET_POINT

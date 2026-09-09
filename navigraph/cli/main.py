@@ -1018,10 +1018,169 @@ def setup_graph(config_path: Path):
         sys.exit(1)
 
 
+def _dated_calibration_path(config, setup_config):
+    """Per-session destination for a freshly computed calibration.
+
+    Calibration always lands on resources/transform_matrix.npy, but that single
+    file is overwritten by the next session, which is how a mapping and its
+    analysis can end up on different calibrations. The dated copy keeps each
+    session's calibration addressable.
+
+    The destination is setup.calibration_matrix, which the config already
+    updates per session alongside the other dated fields. There is deliberately
+    no fallback: guessing a date would risk writing one session's calibration
+    under another session's name.
+    """
+    configured = setup_config.get('calibration_matrix')
+    if not configured:
+        return None
+    path = Path(configured)
+    return path if path.is_absolute() else Path(config['_config_dir']) / path
+
+
+def _map_point_sets_dir(config, setup_config) -> Path:
+    """Directory holding reusable map point sets for this config."""
+    configured = setup_config.get('map_point_sets')
+    if not configured:
+        from ..core.calibration import DEFAULT_POINT_SETS_DIR
+        configured = DEFAULT_POINT_SETS_DIR
+
+    path = Path(configured)
+    return path if path.is_absolute() else Path(config['_config_dir']) / path
+
+
+def _load_map_point_sets(config, setup_config, calib_params):
+    """Collect the map point sets available to this config.
+
+    Sets come from files under setup.map_point_sets (a directory or a single
+    JSON file) and from calibrator_parameters.map_point_sets declared inline.
+    A file and an inline set with the same name are both listed; the inline
+    one wins on lookup because it is closer to the config being run.
+
+    Args:
+        config: Loaded configuration
+        setup_config: The 'setup' section
+        calib_params: The 'calibrator_parameters' section
+
+    Returns:
+        List of MapPointSet, sorted by name
+    """
+    from ..core.calibration import (
+        load_map_point_sets_from_config,
+        load_map_point_sets_from_path,
+    )
+
+    sets = load_map_point_sets_from_path(_map_point_sets_dir(config, setup_config))
+    inline = load_map_point_sets_from_config(calib_params.get('map_point_sets'))
+
+    inline_names = {point_set.name.lower() for point_set in inline}
+    merged = inline + [s for s in sets if s.name.lower() not in inline_names]
+    return sorted(merged, key=lambda point_set: point_set.name)
+
+
+def _describe_map_point_set(point_set) -> str:
+    """One-line description of a point set for CLI listings."""
+    origin = point_set.source_path.name if point_set.source_path else "config"
+    detail = f"{len(point_set.points)} points, from {origin}"
+    if point_set.description:
+        detail = f"{detail} - {point_set.description}"
+    return detail
+
+
+def _select_map_point_set(available, requested: Optional[str], manual: bool):
+    """Decide which preset map points to calibrate against.
+
+    Args:
+        available: Point sets found for this config
+        requested: Name passed with --point-set, if any
+        manual: True when --manual-points asks to click the map as before
+
+    Returns:
+        The chosen MapPointSet, or None to select map points by hand
+    """
+    from ..core.calibration import find_map_point_set
+
+    if manual:
+        return None
+
+    if requested:
+        # An explicit name must resolve; falling back to manual selection here
+        # would silently calibrate against different points than asked for.
+        return find_map_point_set(available, requested)
+
+    if not available:
+        return None
+
+    if not sys.stdin.isatty():
+        click.echo("ℹ️  Not an interactive terminal; selecting map points manually. "
+                   "Use --point-set NAME to reuse a saved set.")
+        return None
+
+    click.echo("\n📌 Saved map point sets:")
+    for index, point_set in enumerate(available, start=1):
+        click.echo(f"  {index}) {point_set.name} ({_describe_map_point_set(point_set)})")
+    click.echo("  0) Select map points manually")
+
+    choice = click.prompt(
+        "Choose map points",
+        type=click.IntRange(0, len(available)),
+        default=1
+    )
+    return None if choice == 0 else available[choice - 1]
+
+
+def _offer_to_save_map_point_set(config, setup_config, calibration_result, map_image_path,
+                                 map_shape, save_name: Optional[str]):
+    """Save the hand-picked map points as a reusable set.
+
+    Args:
+        config: Loaded configuration
+        setup_config: The 'setup' section
+        calibration_result: Result carrying the target (map) points
+        map_image_path: Map image the points were picked on
+        map_shape: Shape of that map image, recorded for later validation
+        save_name: Name from --save-point-set, or None to ask interactively
+    """
+    from ..core.calibration import MapPointSet, Point
+
+    if not save_name:
+        if not sys.stdin.isatty():
+            return
+        if not click.confirm("\n💾 Save these map points as a reusable set?", default=False):
+            return
+        save_name = click.prompt("Point set name", type=str).strip()
+        if not save_name:
+            return
+
+    points = tuple(Point(float(x), float(y)) for x, y in calibration_result.target_points)
+    point_set = MapPointSet(
+        name=save_name,
+        points=points,
+        description=f"Map points picked during calibration on {Path(map_image_path).name}",
+        map_image=Path(map_image_path).name,
+        map_size=(int(map_shape[1]), int(map_shape[0])),
+    )
+
+    destination = _map_point_sets_dir(config, setup_config)
+    saved_path = point_set.save(destination)
+    click.echo(f"📌 Map point set '{save_name}' saved: {saved_path}")
+    click.echo(f"   Reuse it with: --point-set {save_name}")
+
+
 @setup.command('calibration')
 @click.argument('config_path', type=click.Path(exists=True, path_type=Path))
 @click.option("--test", is_flag=True, help="Test existing calibration instead of creating new one")
-def setup_calibration(config_path: Path, test: bool):
+@click.option("--point-set", "-p", "point_set_name", default=None,
+              help="Name of a saved map point set to calibrate against (skips picking map points)")
+@click.option("--manual-points", is_flag=True,
+              help="Always pick map points by hand, without offering saved sets")
+@click.option("--list-point-sets", is_flag=True,
+              help="List the saved map point sets for this config and exit")
+@click.option("--save-point-set", "save_point_set_name", default=None,
+              help="Save the hand-picked map points as a reusable set under this name")
+def setup_calibration(config_path: Path, test: bool, point_set_name: Optional[str],
+                      manual_points: bool, list_point_sets: bool,
+                      save_point_set_name: Optional[str]):
     """Setup camera calibration for spatial coordinate transformation.
     
     Launch interactive calibration tool to establish correspondence between
@@ -1030,24 +1189,55 @@ def setup_calibration(config_path: Path, test: bool):
     
     CONFIG_PATH: Path to configuration file
     
+    The map side of the calibration is the same picture every session, so its
+    points can be saved once and reused: pick a saved set and only the camera
+    frame needs clicking.
+
     \b
     Example:
       navigraph setup calibration config.yaml
-    
+      navigraph setup calibration config.yaml --point-set maze_corners
+      navigraph setup calibration config.yaml --list-point-sets
+      navigraph setup calibration config.yaml --manual-points --save-point-set maze_corners
+
     \b
     Required config sections:
       map_path: Path to the map image
       calibrator_parameters: Calibration settings
+
+    \b
+    Optional config entries:
+      setup.map_point_sets: Directory of saved map point sets
+                            (default ./resources/map_point_sets)
+      calibrator_parameters.map_point_sets: Sets declared inline in the config
     """
     try:
+        if point_set_name and manual_points:
+            click.echo("Error: --point-set and --manual-points are mutually exclusive.", err=True)
+            sys.exit(1)
+
         click.echo(f"📋 Loading configuration from: {config_path}")
-        
+
         # Load configuration
         config = OmegaConf.load(config_path)
         config = process_config_path(config_path, OmegaConf.to_container(config))
-        
+
         # Get map path from config (check setup section first, then root for backward compatibility)
         setup_config = config.get('setup', {})
+
+        if list_point_sets:
+            available_sets = _load_map_point_sets(
+                config, setup_config, config.get('calibrator_parameters', {})
+            )
+            if not available_sets:
+                click.echo(f"No saved map point sets in: {_map_point_sets_dir(config, setup_config)}")
+                click.echo("💡 Create one with: --save-point-set NAME")
+                return
+            click.echo(f"📌 Map point sets ({len(available_sets)}):")
+            for point_set in available_sets:
+                click.echo(f"  • {point_set.name} ({_describe_map_point_set(point_set)})")
+            return
+
         map_path = setup_config.get('map_path') or config.get('map_path')
         if not map_path:
             click.echo("Error: map_path not found in config. Add it to the setup section or root level.", err=True)
@@ -1122,23 +1312,46 @@ def setup_calibration(config_path: Path, test: bool):
             
         else:
             # Create mode - interactive calibration
+            # Resolve the dated destination BEFORE calibrating, so an incomplete
+            # config is reported now rather than after picking all the points.
+            dated_path = _dated_calibration_path(config, setup_config)
+            if dated_path is None:
+                click.echo("Error: setup.calibration_matrix not found in config.", err=True)
+                click.echo("Add the dated destination for this session, e.g.", err=True)
+                click.echo("  setup.calibration_matrix: ./resources/transform_matrix/2026_05_10.npy",
+                           err=True)
+                sys.exit(1)
+            click.echo(f"🗓️  Dated destination: {dated_path}")
+
+            # Resolve the map points before opening any window, so a bad
+            # --point-set name is reported before the user starts clicking.
+            available_sets = _load_map_point_sets(config, setup_config, calib_params)
+            selected_set = _select_map_point_set(available_sets, point_set_name, manual_points)
+
             click.echo(f"🎯 Method: {method}")
-            click.echo(f"🎯 Minimum points: {min_points}")
-            
+            if selected_set:
+                click.echo(f"📌 Map points: preset '{selected_set.name}' "
+                           f"({len(selected_set.points)} points)")
+                click.echo(f"🎯 Points to click on the camera image: {len(selected_set.points)}")
+            else:
+                click.echo("📌 Map points: selected manually")
+                click.echo(f"🎯 Minimum points: {min_points}")
+
             # Import and run interactive calibration
             from ..core.calibration import InteractiveCalibrator
-            
+
             calibrator = InteractiveCalibrator()
-            
+
             # Run calibration
             calibration_result = calibrator.calibrate_camera_to_map(
                 camera_source=spatial_image_path,
                 map_image_path=map_path,
                 method=method,
                 min_points=min_points,
-                show_preview=True
+                show_preview=True,
+                map_point_set=selected_set
             )
-            
+
             # Determine output directory (save to resources by default)
             output_dir = Path(config['_config_dir']) / 'resources'
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -1146,7 +1359,31 @@ def setup_calibration(config_path: Path, test: bool):
             # Save transformation matrix
             matrix_path = output_dir / 'transform_matrix.npy'
             calibration_result.save(matrix_path)
-            
+            click.echo(f"💾 Calibration saved: {matrix_path}")
+
+            # Keep a dated copy so this session's calibration is not lost when
+            # the next calibration overwrites transform_matrix.npy.
+            if dated_path.resolve() == matrix_path.resolve():
+                click.echo("ℹ️  setup.calibration_matrix points at transform_matrix.npy; "
+                           "no separate dated copy to make.")
+            else:
+                existed = dated_path.exists()
+                calibration_result.save(dated_path)
+                click.echo(f"🗓️  Dated copy {'overwritten' if existed else 'saved'}: {dated_path}")
+
+            # Hand-picked map points are worth keeping: the same picture is
+            # calibrated again every session.
+            if selected_set is None:
+                import cv2
+                map_shape = cv2.imread(str(map_path)).shape
+                _offer_to_save_map_point_set(
+                    config, setup_config, calibration_result,
+                    map_path, map_shape, save_point_set_name
+                )
+            elif save_point_set_name:
+                click.echo(f"ℹ️  --save-point-set ignored: map points came from "
+                           f"preset '{selected_set.name}'.")
+
             click.echo("✅ Interactive calibration completed successfully!")
         
     except Exception as e:

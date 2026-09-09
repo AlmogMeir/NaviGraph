@@ -5,6 +5,7 @@ between graph nodes/edges and regions on a map, with both grid-based and manual
 contour drawing modes.
 """
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Set, List, Tuple, Dict, Any
@@ -136,10 +137,30 @@ class MapWidget(QWidget):
         self.resize_handle = None  # Which handle is being dragged: 'corner', 'edge', index
         self.drag_start_point = None
         self.contour_offsets = {}  # region_id -> (offset_x, offset_y)
-        self.base_contours = {}  # region_id -> original contour points (before adjustment)
+        self.base_contours = {}  # region_id -> current contour points (with adjustments applied)
+        self.pristine_contours = {}  # region_id -> points as loaded, for resetting
         self.original_contours = {}  # Backup for collision detection during drag
         self.resize_handle_size = 8  # Size of resize handles in pixels
-        
+
+        # Rubber-band selection state (drag on empty space to select tiles)
+        self.rubber_band_active = False
+        self.rubber_band_start = None  # (x, y) in image coordinates
+        self.rubber_band_end = None    # (x, y) in image coordinates
+        self.rubber_band_additive = False  # True when Ctrl was held at press
+        self.rubber_band_min_drag = 4  # Screen pixels before a drag counts as a band
+
+        # Rotation state (Shift + drag rotates the selected tiles)
+        self.rotating_contours = False
+        self.rotation_center = None      # (x, y) the selection turns around
+        self.rotation_start_angle = 0.0  # Angle of the cursor when rotation began
+        self.rotation_angle = 0.0        # Current rotation, radians
+        self.rotation_originals = {}     # region_id -> points before this rotation
+        self.rotation_snap_degrees = 15  # Snap step while Ctrl is also held
+
+        # Copy/paste of tiles: entries are {'points', 'elem_type', 'elem_id', 'source'}
+        self.tile_clipboard: List[Dict[str, Any]] = []
+        self.last_mouse_image_pos = None  # (x, y) in image coordinates
+
         # Contour highlighting state
         self.highlighted_contour_id = None
         self.original_contour_colors: Dict[str, QColor] = {}  # Store original colors for unhighlighting
@@ -279,6 +300,7 @@ class MapWidget(QWidget):
         # Store base contour for adjustment mode
         if region_id not in self.base_contours:
             self.base_contours[region_id] = [(float(p[0]), float(p[1])) for p in points]
+            self.pristine_contours[region_id] = list(self.base_contours[region_id])
         self.update()
         
     def clear_contours(self):
@@ -836,9 +858,9 @@ class MapWidget(QWidget):
             self._draw_node_labels(painter)
             self._draw_edge_labels(painter)
         
-        # Draw resize handles for selected contours in adjustment mode
-        if self.adjustment_mode and len(self.selected_contours) == 1:
-            region_id = list(self.selected_contours)[0]
+        # Draw resize handles for the primary selected contour in adjustment mode
+        region_id = self.get_primary_selected_contour()
+        if region_id is not None:
             if region_id in self.base_contours:
                 points = self.base_contours[region_id]
                 offset = self.contour_offsets.get(region_id, (0, 0))
@@ -859,7 +881,35 @@ class MapWidget(QWidget):
                         self.resize_handle_size
                     )
                     painter.drawRect(handle_rect)
-                
+
+        # Draw the rubber band being dragged over the tiles
+        if self.rubber_band_active and self.rubber_band_start and self.rubber_band_end:
+            start_x = self.offset_x + self.rubber_band_start[0] * self.scale_factor
+            start_y = self.offset_y + self.rubber_band_start[1] * self.scale_factor
+            end_x = self.offset_x + self.rubber_band_end[0] * self.scale_factor
+            end_y = self.offset_y + self.rubber_band_end[1] * self.scale_factor
+            band_rect = QRectF(QPointF(start_x, start_y), QPointF(end_x, end_y)).normalized()
+
+            painter.setPen(QPen(QColor(0, 120, 255), 1, Qt.DashLine))
+            painter.setBrush(QBrush(QColor(0, 120, 255, 40)))
+            painter.drawRect(band_rect)
+
+        # Draw the rotation pivot and the current angle
+        if self.rotating_contours and self.rotation_center is not None:
+            centre_x = self.offset_x + self.rotation_center[0] * self.scale_factor
+            centre_y = self.offset_y + self.rotation_center[1] * self.scale_factor
+            centre = QPointF(centre_x, centre_y)
+
+            painter.setPen(QPen(QColor(255, 0, 128), 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(centre, 6, 6)
+            painter.drawLine(QPointF(centre_x - 12, centre_y), QPointF(centre_x + 12, centre_y))
+            painter.drawLine(QPointF(centre_x, centre_y - 12), QPointF(centre_x, centre_y + 12))
+
+            degrees = math.degrees(self.rotation_angle)
+            painter.setPen(QPen(QColor(255, 0, 128), 1))
+            painter.drawText(QPointF(centre_x + 14, centre_y - 14), f"{degrees:+.1f}°")
+
     def mousePressEvent(self, event):
         """Handle mouse press events."""
         if event.button() == Qt.RightButton:
@@ -879,14 +929,26 @@ class MapWidget(QWidget):
                 # Check for modifiers
                 modifiers = QApplication.keyboardModifiers()
                 ctrl_held = bool(modifiers & Qt.ControlModifier)
-                
-                print(f"DEBUG: Adjust mode click at ({x:.1f}, {y:.1f}), Ctrl: {ctrl_held}")
+                shift_held = bool(modifiers & Qt.ShiftModifier)
+
+                print(f"DEBUG: Adjust mode click at ({x:.1f}, {y:.1f}), Ctrl: {ctrl_held}, Shift: {shift_held}")
                 print(f"DEBUG: num base_contours={len(self.base_contours)}, num selected={len(self.selected_contours)}")
-                
-                # First check if clicking on a resize handle (only for single selected contour and NOT holding Ctrl)
-                # Check this BEFORE checking if clicking inside contour
-                if not ctrl_held and len(self.selected_contours) == 1:
-                    region_id = list(self.selected_contours)[0]
+
+                # Shift turns the drag into a rotation of the whole selection,
+                # so it takes precedence over dragging, resizing and selecting.
+                if shift_held:
+                    if self.selected_contours:
+                        self._start_rotation(x, y)
+                    else:
+                        print("DEBUG: Shift held but nothing selected - nothing to rotate")
+                    return
+
+                # First check if clicking on a resize handle of the primary selected
+                # contour (not while holding Ctrl, which extends the selection).
+                # Check this BEFORE checking if clicking inside contour.
+                primary_id = None if ctrl_held else self.get_primary_selected_contour()
+                if primary_id is not None:
+                    region_id = primary_id
                     handle = self._get_resize_handle_at_point(region_id, x, y)
                     if handle:
                         self.resizing_contour = True
@@ -922,11 +984,11 @@ class MapWidget(QWidget):
                         self.update()
                         return
                     elif ctrl_held:
-                        # Multi-select with Ctrl - ADD all overlapping contours at this point to selection
-                        # Don't clear existing selection, just add more
-                        for contour_id in clicked_contours:
-                            self.selected_contours.add(contour_id)
-                            print(f"DEBUG: Added contour {contour_id} to selection")
+                        # Multi-select with Ctrl - toggle the contours at this point.
+                        # Clicking an already selected tile takes it back out of
+                        # the selection, which is the only way to correct a
+                        # mis-click without starting the selection over.
+                        self._toggle_contour_selection(clicked_contours)
                         print(f"DEBUG: Selected contours now: {self.selected_contours}")
                         self.update()
                         return
@@ -941,12 +1003,18 @@ class MapWidget(QWidget):
                         self.update()
                         return
                 else:
-                    # Clicked on empty space - clear selection if not holding Ctrl
+                    # Clicked on empty space - start a rubber band. A press that
+                    # never turns into a drag still behaves as before: it clears
+                    # the selection unless Ctrl is held.
+                    self.rubber_band_active = True
+                    self.rubber_band_start = (x, y)
+                    self.rubber_band_end = (x, y)
+                    self.rubber_band_additive = ctrl_held
                     if not ctrl_held:
                         self.selected_contours.clear()
                         self.selected_contour_region_id = None
                         print(f"DEBUG: Cleared contour selection")
-                        self.update()
+                    self.update()
                     return
             
             if self.interaction_mode == 'place_grid':
@@ -1052,6 +1120,10 @@ class MapWidget(QWidget):
         if event.button() == Qt.RightButton and self.panning:
             self.panning = False
             self.setCursor(Qt.ArrowCursor)
+        elif event.button() == Qt.LeftButton and self.rotating_contours:
+            self._finish_rotation()
+        elif event.button() == Qt.LeftButton and self.rubber_band_active:
+            self._finish_rubber_band()
         elif event.button() == Qt.LeftButton and self.dragging_contours:
             # End multi-contour dragging - apply offsets to base_contours
             for region_id in self.selected_contours:
@@ -1161,6 +1233,23 @@ class MapWidget(QWidget):
             self.update()
             return
         
+        # Handle rotation of the selected contours (Shift + drag)
+        if self.rotating_contours:
+            x = (event.x() - self.offset_x) / self.scale_factor
+            y = (event.y() - self.offset_y) / self.scale_factor
+            snap = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)
+            self._update_rotation(x, y, snap=snap)
+            self.update()
+            return
+
+        # Handle rubber-band selection
+        if self.rubber_band_active and self.rubber_band_start:
+            x = (event.x() - self.offset_x) / self.scale_factor
+            y = (event.y() - self.offset_y) / self.scale_factor
+            self.rubber_band_end = (x, y)
+            self.update()
+            return
+
         # Handle grid cell dragging
         if self.dragging_grid_cells and self.grid_drag_start:
             # Convert to image coordinates
@@ -1243,6 +1332,7 @@ class MapWidget(QWidget):
         # Convert to image coordinates
         x = (event.x() - self.offset_x) / self.scale_factor
         y = (event.y() - self.offset_y) / self.scale_factor
+        self.last_mouse_image_pos = (x, y)  # where a paste lands
         tooltip_text = ""
         
         if self.grid_enabled:
@@ -1342,7 +1432,16 @@ class MapWidget(QWidget):
     
     def keyPressEvent(self, event):
         """Handle key press events."""
-        if event.key() == Qt.Key_R:
+        # Ctrl+C / Ctrl+V / Delete are window-level shortcuts (_setup_shortcuts),
+        # so they never reach this handler and are not repeated here.
+        if event.key() == Qt.Key_Escape and (self.rotating_contours or self.rubber_band_active):
+            # Back out of a rotation or rubber band without committing it
+            self.cancel_rotation()
+            self.rubber_band_active = False
+            self.rubber_band_start = None
+            self.rubber_band_end = None
+            self.update()
+        elif event.key() == Qt.Key_R:
             # Reset zoom and center image
             self.reset_zoom()
         else:
@@ -1463,109 +1562,49 @@ class MapWidget(QWidget):
         font.setPointSize(font_size)
         painter.setFont(font)
         painter.setPen(QPen(color, 1))
-        
+
+        # Center the text
+        from PyQt5.QtGui import QFontMetrics
+        metrics = QFontMetrics(font)
+        text_rect = metrics.boundingRect(label_text)
+        text_x = centroid.x() - text_rect.width() / 2
+        text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
+
+        painter.drawText(int(text_x), int(text_y), label_text)
+
     def _find_all_contours_at_point(self, x: float, y: float) -> List[str]:
         """Find all contours that contain the given point.
-        
+
+        Geometry comes from get_adjusted_contour_points(), so a contour that
+        has been moved, resized or rotated is hit where it is drawn now rather
+        than where it was created.
+
         Args:
             x, y: Point coordinates in image space
-            
+
         Returns:
             List of region_ids of all contours containing the point
         """
         from PyQt5.QtGui import QPainterPath
         point = QPointF(x, y)
         found_contours = []
-        
-        # Check contours from completed_contours list
-        for contour_data in self.completed_contours:
-            if len(contour_data) >= 5:
-                points, region_id, color, elem_type, elem_id = contour_data[:5]
-            elif len(contour_data) >= 3:
-                points, region_id, color = contour_data[:3]
-            else:
+
+        for region_id in self._iter_adjustable_region_ids():
+            points = self.get_adjusted_contour_points(region_id)
+            if not points or len(points) < 3:
                 continue
-                
-            if len(points) > 2:
-                # Apply offset if in adjustment mode
-                offset = self.contour_offsets.get(region_id, (0, 0))
-                adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
-                
-                # Create path from contour points
-                path = QPainterPath()
-                path.moveTo(adjusted_points[0][0], adjusted_points[0][1])
-                for pt in adjusted_points[1:]:
-                    path.lineTo(pt[0], pt[1])
-                path.closeSubpath()
-                
-                # Check if point is inside contour
-                if path.contains(point):
-                    found_contours.append(region_id)
-        
-        # Also check mapping regions if available
-        if (hasattr(self, 'gui_parent') and hasattr(self.gui_parent, 'mapping') and 
-            self.gui_parent.mapping):
-            try:
-                from .regions import RectangleRegion, ContourRegion
-                
-                # Check node regions
-                for node_id in self.gui_parent.mapping.get_mapped_nodes():
-                    regions = self.gui_parent.mapping.get_node_regions(node_id)
-                    for region in regions:
-                        if isinstance(region, ContourRegion):
-                            region_id = region.region_id
-                            
-                            # In adjustment mode, use base_contours if available (for resized contours)
-                            if self.adjustment_mode and region_id in self.base_contours:
-                                points = self.base_contours[region_id]
-                            else:
-                                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
-                            
-                            # Apply offset if in adjustment mode
-                            offset = self.contour_offsets.get(region_id, (0, 0))
-                            adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
-                            
-                            # Create path from contour points
-                            path = QPainterPath()
-                            path.moveTo(adjusted_points[0][0], adjusted_points[0][1])
-                            for pt in adjusted_points[1:]:
-                                path.lineTo(pt[0], pt[1])
-                            path.closeSubpath()
-                            
-                            if path.contains(point):
-                                found_contours.append(region_id)
-                
-                # Check edge regions
-                for edge in self.gui_parent.mapping.get_mapped_edges():
-                    regions = self.gui_parent.mapping.get_edge_regions(edge)
-                    for region in regions:
-                        if isinstance(region, ContourRegion):
-                            region_id = region.region_id
-                            
-                            # In adjustment mode, use base_contours if available (for resized contours)
-                            if self.adjustment_mode and region_id in self.base_contours:
-                                points = self.base_contours[region_id]
-                            else:
-                                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
-                            
-                            # Apply offset if in adjustment mode
-                            offset = self.contour_offsets.get(region_id, (0, 0))
-                            adjusted_points = [(p[0] + offset[0], p[1] + offset[1]) for p in points]
-                            
-                            # Create path from contour points
-                            path = QPainterPath()
-                            path.moveTo(adjusted_points[0][0], adjusted_points[0][1])
-                            for pt in adjusted_points[1:]:
-                                path.lineTo(pt[0], pt[1])
-                            path.closeSubpath()
-                            
-                            if path.contains(point):
-                                found_contours.append(region_id)
-            except Exception as e:
-                print(f"Error checking mapping regions: {e}")
-        
+
+            path = QPainterPath()
+            path.moveTo(points[0][0], points[0][1])
+            for pt in points[1:]:
+                path.lineTo(pt[0], pt[1])
+            path.closeSubpath()
+
+            if path.contains(point):
+                found_contours.append(region_id)
+
         return found_contours
-    
+
     def _find_contour_at_point(self, x: float, y: float) -> Optional[str]:
         """Find which contour (if any) contains the given point.
         
@@ -1692,29 +1731,388 @@ class MapWidget(QWidget):
         # Clear offset since we're directly modifying base_contours
         self.contour_offsets[region_id] = (0, 0)
     
+    def _iter_adjustable_region_ids(self) -> List[str]:
+        """Every contour id that can be selected, in hit-test priority order.
+
+        Contours drawn in this session come first, then the ones loaded for
+        adjustment, then anything else the mapping holds. Ids are deduplicated
+        because the same contour is usually present in more than one of those.
+        """
+        ordered: List[str] = []
+        seen = set()
+
+        def add(region_id):
+            if region_id is not None and region_id not in seen:
+                seen.add(region_id)
+                ordered.append(region_id)
+
+        for contour_data in self.completed_contours:
+            if len(contour_data) >= 2:
+                add(contour_data[1])
+
+        for region_id in self.base_contours:
+            add(region_id)
+
+        if hasattr(self, 'gui_parent') and getattr(self.gui_parent, 'mapping', None):
+            for region_id in self.gui_parent.mapping._regions:
+                add(region_id)
+
+        return ordered
+
+    def _toggle_contour_selection(self, region_ids: List[str]) -> None:
+        """Toggle a group of contours in the selection.
+
+        A Ctrl+click hits every contour under the cursor at once. Toggling them
+        as a group (deselect only when they are *all* already selected) keeps a
+        repeated Ctrl+click on overlapping node/edge tiles flipping between
+        selected and not, instead of getting stuck half-selected.
+
+        Args:
+            region_ids: Contours under the cursor
+        """
+        if not region_ids:
+            return
+
+        if all(region_id in self.selected_contours for region_id in region_ids):
+            for region_id in region_ids:
+                self.selected_contours.discard(region_id)
+                print(f"DEBUG: Deselected contour {region_id}")
+            if self.selected_contour_region_id not in self.selected_contours:
+                self.selected_contour_region_id = (
+                    next(iter(self.selected_contours)) if self.selected_contours else None
+                )
+        else:
+            for region_id in region_ids:
+                self.selected_contours.add(region_id)
+                print(f"DEBUG: Added contour {region_id} to selection")
+            self.selected_contour_region_id = region_ids[0]
+
+    def _finish_rubber_band(self) -> None:
+        """Complete a rubber-band drag by selecting the tiles inside it."""
+        start, end = self.rubber_band_start, self.rubber_band_end
+        additive = self.rubber_band_additive
+
+        self.rubber_band_active = False
+        self.rubber_band_start = None
+        self.rubber_band_end = None
+        self.rubber_band_additive = False
+
+        if start is None or end is None:
+            self.update()
+            return
+
+        # A press with no real drag is a plain click on empty space, which has
+        # already cleared the selection - don't also select the whole map.
+        drag_px = max(abs(end[0] - start[0]), abs(end[1] - start[1])) * self.scale_factor
+        if drag_px < self.rubber_band_min_drag:
+            self.update()
+            return
+
+        rect = QRectF(QPointF(*start), QPointF(*end)).normalized()
+        inside = self._contours_in_rect(rect)
+
+        if not additive:
+            self.selected_contours.clear()
+            self.selected_contour_region_id = None
+
+        for region_id in inside:
+            self.selected_contours.add(region_id)
+
+        if inside and self.selected_contour_region_id not in self.selected_contours:
+            self.selected_contour_region_id = inside[0]
+
+        print(f"DEBUG: Rubber band selected {len(inside)} contours "
+              f"({'added to' if additive else 'replacing'} selection); "
+              f"total selected: {len(self.selected_contours)}")
+        self.update()
+
+    def _contours_in_rect(self, rect: QRectF) -> List[str]:
+        """Contours whose centre lies inside a rectangle.
+
+        Centre-inside rather than any-overlap: a band drawn across a row of
+        tiles then takes the tiles it actually covers, instead of also taking
+        every neighbour it happens to clip.
+
+        Args:
+            rect: Selection rectangle in image coordinates
+
+        Returns:
+            Region ids of the contours inside the rectangle
+        """
+        inside = []
+        for region_id in self._iter_adjustable_region_ids():
+            points = self.get_adjusted_contour_points(region_id)
+            if not points or len(points) < 3:
+                continue
+            centre_x = sum(p[0] for p in points) / len(points)
+            centre_y = sum(p[1] for p in points) / len(points)
+            if rect.contains(QPointF(centre_x, centre_y)):
+                inside.append(region_id)
+        return inside
+
+    @staticmethod
+    def element_color(elem_type: str) -> QColor:
+        """Fill colour a tile gets from the element it is mapped to."""
+        if elem_type == 'node':
+            return QColor(150, 255, 150, 100)  # Light green for nodes
+        return QColor(255, 165, 0, 100)        # Orange for edges
+
+    def element_for_region(self, region_id: str) -> Optional[Tuple[str, Any]]:
+        """The (elem_type, elem_id) a tile is mapped to, or None."""
+        if hasattr(self, 'gui_parent') and getattr(self.gui_parent, 'mapping', None):
+            element = self.gui_parent.mapping._region_to_element.get(region_id)
+            if element:
+                return element
+        return self.contour_mappings.get(region_id)
+
+    def copy_selected_tiles(self) -> int:
+        """Put the selected tiles on the clipboard.
+
+        The element each tile is mapped to travels with it, so a paste makes
+        another tile for that same node or edge - which is how one edge gets
+        covered by more than one tile.
+
+        Returns:
+            Number of tiles copied
+        """
+        clipboard = []
+        for region_id in self.selected_contours:
+            points = self.get_adjusted_contour_points(region_id)
+            element = self.element_for_region(region_id)
+            if not points or not element:
+                continue
+            clipboard.append({
+                'points': [(float(px), float(py)) for px, py in points],
+                'elem_type': element[0],
+                'elem_id': element[1],
+                'source': region_id,
+            })
+
+        if clipboard:
+            self.tile_clipboard = clipboard
+            print(f"DEBUG: Copied {len(clipboard)} tiles to the clipboard")
+        return len(clipboard)
+
+    def paste_offset(self, fallback: float = 20.0) -> Tuple[float, float]:
+        """Offset to apply to the clipboard so a paste lands where expected.
+
+        Under the cursor when the pointer is over the map - a pasted tile is
+        almost always wanted somewhere specific - and otherwise a small step
+        off the original, so a paste from the button is still visible.
+
+        Args:
+            fallback: Step used when the pointer is elsewhere
+
+        Returns:
+            (dx, dy) to add to every clipboard point
+        """
+        all_points = [p for entry in self.tile_clipboard for p in entry['points']]
+        if not all_points:
+            return (0.0, 0.0)
+
+        if self.last_mouse_image_pos is not None and self.underMouse():
+            centre_x = sum(p[0] for p in all_points) / len(all_points)
+            centre_y = sum(p[1] for p in all_points) / len(all_points)
+            return (self.last_mouse_image_pos[0] - centre_x,
+                    self.last_mouse_image_pos[1] - centre_y)
+
+        return (fallback, fallback)
+
+    def add_tile(self, region_id: str, points: List[Tuple[float, float]],
+                 elem_type: str, elem_id) -> None:
+        """Register a tile created during adjustment, so it draws and hit-tests.
+
+        Args:
+            region_id: Id of the new region, already added to the mapping
+            points: Polygon of the new tile
+            elem_type: 'node' or 'edge'
+            elem_id: Element the tile is mapped to
+        """
+        points = [(float(px), float(py)) for px, py in points]
+        self.base_contours[region_id] = points
+        self.pristine_contours[region_id] = list(points)
+        self.contour_offsets.pop(region_id, None)
+        self.contour_mappings[region_id] = (elem_type, elem_id)
+        self.completed_contours.append(
+            (points, region_id, self.element_color(elem_type), elem_type, elem_id)
+        )
+        self.update()
+
+    def remove_tile(self, region_id: str) -> None:
+        """Forget a tile that was removed from the mapping."""
+        self.base_contours.pop(region_id, None)
+        self.pristine_contours.pop(region_id, None)
+        self.contour_offsets.pop(region_id, None)
+        self.contour_mappings.pop(region_id, None)
+        self.selected_contours.discard(region_id)
+        if self.selected_contour_region_id == region_id:
+            self.selected_contour_region_id = None
+        self.completed_contours = [
+            data for data in self.completed_contours
+            if not (len(data) >= 2 and data[1] == region_id)
+        ]
+        self.update()
+
+    def _start_rotation(self, x: float, y: float) -> None:
+        """Begin rotating the selected contours around their common centre.
+
+        Args:
+            x, y: Cursor position in image coordinates
+        """
+        originals = {}
+        for region_id in self.selected_contours:
+            points = self.get_adjusted_contour_points(region_id)
+            if points and len(points) >= 3:
+                originals[region_id] = [(float(px), float(py)) for px, py in points]
+
+        if not originals:
+            print("DEBUG: Rotation not started - no geometry for the selection")
+            return
+
+        all_points = [p for points in originals.values() for p in points]
+        centre_x = sum(p[0] for p in all_points) / len(all_points)
+        centre_y = sum(p[1] for p in all_points) / len(all_points)
+
+        self.rotating_contours = True
+        self.rotation_originals = originals
+        self.rotation_center = (centre_x, centre_y)
+        self.rotation_start_angle = math.atan2(y - centre_y, x - centre_x)
+        self.rotation_angle = 0.0
+        self.setCursor(Qt.CrossCursor)
+        print(f"DEBUG: Started rotating {len(originals)} contours around "
+              f"({centre_x:.1f}, {centre_y:.1f})")
+        self.update()
+
+    def _update_rotation(self, x: float, y: float, snap: bool = False) -> None:
+        """Rotate the selection to follow the cursor.
+
+        Args:
+            x, y: Cursor position in image coordinates
+            snap: Snap the angle to whole steps of rotation_snap_degrees
+        """
+        if not self.rotating_contours or self.rotation_center is None:
+            return
+
+        centre_x, centre_y = self.rotation_center
+        angle = math.atan2(y - centre_y, x - centre_x) - self.rotation_start_angle
+
+        if snap:
+            step = math.radians(self.rotation_snap_degrees)
+            angle = round(angle / step) * step
+
+        self.rotation_angle = angle
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+
+        # Always rotate the pre-rotation points, so dragging back and forth
+        # returns the tiles to where they started instead of accumulating.
+        for region_id, points in self.rotation_originals.items():
+            rotated = []
+            for px, py in points:
+                dx, dy = px - centre_x, py - centre_y
+                rotated.append((centre_x + dx * cos_a - dy * sin_a,
+                                centre_y + dx * sin_a + dy * cos_a))
+            self.base_contours[region_id] = rotated
+            # base_contours now holds the final geometry, as after a resize
+            self.contour_offsets[region_id] = (0, 0)
+
+    def _finish_rotation(self) -> None:
+        """End a rotation, keeping the rotated geometry."""
+        degrees = math.degrees(self.rotation_angle)
+        count = len(self.rotation_originals)
+
+        self.rotating_contours = False
+        self.rotation_originals = {}
+        self.rotation_center = None
+        self.rotation_angle = 0.0
+        self.setCursor(Qt.ArrowCursor)
+
+        print(f"DEBUG: Rotated {count} contours by {degrees:.1f} degrees")
+        if hasattr(self, 'gui_parent') and hasattr(self.gui_parent, '_on_contours_rotated'):
+            self.gui_parent._on_contours_rotated(count, degrees)
+        self.update()
+
+    def cancel_rotation(self) -> None:
+        """Abort the rotation in progress, restoring the original geometry."""
+        if not self.rotating_contours:
+            return
+
+        for region_id, points in self.rotation_originals.items():
+            self.base_contours[region_id] = list(points)
+
+        self.rotating_contours = False
+        self.rotation_originals = {}
+        self.rotation_center = None
+        self.rotation_angle = 0.0
+        self.setCursor(Qt.ArrowCursor)
+        print("DEBUG: Rotation cancelled")
+        self.update()
+
+    def get_primary_selected_contour(self) -> Optional[str]:
+        """Region id the resize handles belong to, or None.
+
+        A plain click selects every contour overlapping that point, so the
+        selection is usually larger than one. The handles belong to the
+        primary of that selection — the contour that was clicked — which is
+        what makes resizing possible where node and edge tiles overlap.
+        """
+        if not self.adjustment_mode or not self.selected_contours:
+            return None
+        if self.selected_contour_region_id in self.selected_contours:
+            return self.selected_contour_region_id
+        if len(self.selected_contours) == 1:
+            return next(iter(self.selected_contours))
+        return None
+
     def get_adjusted_contour_points(self, region_id: str) -> Optional[List[Tuple[float, float]]]:
         """Get the adjusted points for a contour.
-        
+
         Args:
             region_id: ID of the region/contour
-            
+
         Returns:
             List of adjusted (x, y) points, or None if not found
         """
         offset = self.contour_offsets.get(region_id, (0, 0))
-        
-        # Try to find in completed_contours
+
+        # base_contours holds the current geometry: _resize_contour writes the
+        # resized points there, while completed_contours keeps the points the
+        # contour was created/loaded with. Check base_contours first so a
+        # resized contour does not report its pre-resize shape.
+        if region_id in self.base_contours:
+            points = self.base_contours[region_id]
+            return [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+
+        # Fall back to completed_contours for contours drawn in this session.
         for contour_data in self.completed_contours:
             if len(contour_data) >= 2:
                 points, rid = contour_data[0], contour_data[1]
                 if rid == region_id:
                     return [(p[0] + offset[0], p[1] + offset[1]) for p in points]
-        
-        # Try to find in base_contours
-        if region_id in self.base_contours:
-            points = self.base_contours[region_id]
-            return [(p[0] + offset[0], p[1] + offset[1]) for p in points]
-        
+
+        # Last, the mapping itself - covers regions that were never loaded for
+        # adjustment, including rectangles and grid cells.
+        if hasattr(self, 'gui_parent') and getattr(self.gui_parent, 'mapping', None):
+            region = self.gui_parent.mapping.get_region_by_id(region_id)
+            points = self._region_polygon(region)
+            if points:
+                return [(p[0] + offset[0], p[1] + offset[1]) for p in points]
+
+        return None
+
+    @staticmethod
+    def _region_polygon(region) -> Optional[List[Tuple[float, float]]]:
+        """Polygon of a region as stored in the mapping, or None if it has none."""
+        if region is None:
+            return None
+        if isinstance(region, ContourRegion):
+            return [(float(p[0]), float(p[1])) for p in region.contour_points]
+        if isinstance(region, RectangleRegion):  # also covers GridCell
+            return [
+                (region.x, region.y),
+                (region.x + region.width, region.y),
+                (region.x + region.width, region.y + region.height),
+                (region.x, region.y + region.height),
+            ]
         return None
     
     def load_base_mapping_for_adjustment(self, mapping: SpatialMapping):
@@ -1724,8 +2122,9 @@ class MapWidget(QWidget):
             mapping: The base spatial mapping to load
         """
         print(f"DEBUG load_base_mapping: Loading mapping with {len(mapping._regions)} regions")
-        
+
         self.base_contours.clear()
+        self.pristine_contours.clear()
         self.contour_offsets.clear()
         self.completed_contours.clear()
         self.selected_contours.clear()
@@ -1734,10 +2133,13 @@ class MapWidget(QWidget):
         from .regions import RectangleRegion, ContourRegion
         
         for region_id, region in mapping._regions.items():
-            if isinstance(region, (RectangleRegion, ContourRegion)):
-                points = [(float(p[0]), float(p[1])) for p in region.contour_points]
+            points = self._region_polygon(region)
+            if points:
                 self.base_contours[region_id] = points
-                
+                # Keep an untouched copy so "Reset All Adjustments" can undo
+                # resizes and rotations, not only pending drag offsets.
+                self.pristine_contours[region_id] = list(points)
+
                 # Get element info
                 elem_info = mapping._region_to_element.get(region_id)
                 if elem_info:
@@ -1754,6 +2156,26 @@ class MapWidget(QWidget):
         print(f"DEBUG: Loaded {len(self.base_contours)} contours for adjustment")
         self.update()
     
+    def restore_pristine_contours(self) -> int:
+        """Put every contour back to the geometry it was loaded with.
+
+        Covers resizes and rotations too, which are written straight into
+        base_contours and so are not undone by dropping the drag offsets.
+
+        Returns:
+            Number of contours restored
+        """
+        for region_id, points in self.pristine_contours.items():
+            self.base_contours[region_id] = list(points)
+
+        self.contour_offsets.clear()
+        self.rotating_contours = False
+        self.rotation_originals = {}
+        self.rotation_center = None
+        self.rotation_angle = 0.0
+        self.update()
+        return len(self.pristine_contours)
+
     def apply_all_offsets(self):
         """Apply all accumulated offsets to base contours and reset offsets."""
         for region_id, offset in self.contour_offsets.items():
@@ -1765,16 +2187,7 @@ class MapWidget(QWidget):
         # Clear offsets after applying
         self.contour_offsets.clear()
         self.update()
-        
-        # Center the text
-        from PyQt5.QtGui import QFontMetrics
-        metrics = QFontMetrics(font)
-        text_rect = metrics.boundingRect(label_text)
-        text_x = centroid.x() - text_rect.width() / 2
-        text_y = centroid.y() + text_rect.height() / 4  # Adjust for baseline
-        
-        painter.drawText(int(text_x), int(text_y), label_text)
-    
+
     def resizeEvent(self, event):
         """Handle widget resize by recalculating scale factors."""
         super().resizeEvent(event)
@@ -2827,7 +3240,17 @@ class GraphSetupWindow(QMainWindow):
             "1. Load a base mapping file\n"
             "2. Optionally load a new session image\n"
             "3. Click and drag contours to adjust positions\n"
-            "4. Save adjusted mapping when done"
+            "4. Save adjusted mapping when done\n"
+            "\n"
+            "Selecting tiles:\n"
+            "• Click - select the tiles under the cursor\n"
+            "• Ctrl+Click - add tiles, or remove already selected ones\n"
+            "• Drag on empty space - select every tile inside the box\n"
+            "• Shift+Drag - rotate the selection (add Ctrl to snap to 15°)\n"
+            "• Ctrl+C / Ctrl+V - copy tiles, paste extra ones for the same\n"
+            "   node or edge (for shapes one tile cannot cover)\n"
+            "• Del - delete the selected tiles\n"
+            "• Esc - cancel the rotation or box in progress"
         )
         instructions.setStyleSheet(
             "background-color: #fff3cd; border: 1px solid #ffc107; "
@@ -2871,11 +3294,31 @@ class GraphSetupWindow(QMainWindow):
         
         self.adjust_status_label = QLabel(
             "Click any contour to select it\n"
-            "Drag to move it to new position"
+            "Drag to move, Shift+Drag to rotate"
         )
         self.adjust_status_label.setStyleSheet("color: #666; font-size: 11px;")
         status_layout.addWidget(self.adjust_status_label)
         
+        # Tile clipboard: an element can hold several tiles, which is how a
+        # complex edge gets covered without stretching one tile over it.
+        clipboard_row = QHBoxLayout()
+        self.adjust_copy_button = QPushButton("Copy (Ctrl+C)")
+        self.adjust_copy_button.setToolTip("Copy the selected tiles, keeping their node/edge")
+        self.adjust_copy_button.clicked.connect(self._on_copy_tiles)
+        clipboard_row.addWidget(self.adjust_copy_button)
+
+        self.adjust_paste_button = QPushButton("Paste (Ctrl+V)")
+        self.adjust_paste_button.setToolTip(
+            "Paste copied tiles as extra tiles for the same node/edge, under the cursor")
+        self.adjust_paste_button.clicked.connect(self._on_paste_tiles)
+        clipboard_row.addWidget(self.adjust_paste_button)
+        status_layout.addLayout(clipboard_row)
+
+        self.adjust_delete_button = QPushButton("Delete Selected Tiles (Del)")
+        self.adjust_delete_button.setToolTip("Remove the selected tiles from the mapping")
+        self.adjust_delete_button.clicked.connect(self._on_delete_selected_tiles)
+        status_layout.addWidget(self.adjust_delete_button)
+
         # Reset adjustments button
         self.adjust_reset_button = QPushButton("Reset All Adjustments")
         self.adjust_reset_button.clicked.connect(self._on_reset_adjustments)
@@ -4319,16 +4762,196 @@ class GraphSetupWindow(QMainWindow):
         """Reset all contour adjustments to original positions."""
         reply = QMessageBox.question(
             self, "Reset Adjustments",
-            "Reset all contour adjustments? This will move all contours back to their original positions.",
+            "Reset all contour adjustments? This undoes every move, resize and "
+            "rotation, putting the contours back where the base mapping had them.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
-        
+
         if reply == QMessageBox.Yes:
-            self.map_widget.contour_offsets.clear()
+            restored = self.map_widget.restore_pristine_contours()
             self.map_widget.selected_contour_region_id = None
             self.map_widget.update()
-            self.status_bar.showMessage("All adjustments reset")
+            self.adjust_status_label.setText("All adjustments reset")
+            self.status_bar.showMessage(f"All adjustments reset ({restored} contours)")
     
+    def _calibration_provenance(self) -> dict:
+        """Describe the calibration the tiles were aligned against.
+
+        Tiles are positioned on the session image *after* it has been warped
+        by this matrix, so a mapping is only meaningful together with it. The
+        analysis loads its calibration separately; recording the matrix here
+        lets a mismatch be detected instead of silently shifting every node.
+        """
+        import hashlib
+
+        if self.calibration_matrix is None:
+            return {'path': None, 'md5': None, 'matrix': None,
+                    'warning': 'mapping made with no calibration applied'}
+        matrix = np.asarray(self.calibration_matrix, dtype=np.float64)
+        return {
+            'path': str(self.calibration_matrix_path),
+            'md5': hashlib.md5(matrix.tobytes()).hexdigest(),
+            'matrix': matrix.tolist(),
+        }
+
+    @staticmethod
+    def _is_axis_aligned_rectangle(points, tolerance: float = 0.5) -> bool:
+        """True when a 4-point polygon is an upright rectangle.
+
+        A rotated tile is not, which is what tells the save path that the
+        shape can no longer be stored as x/y/width/height.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        if pts.shape != (4, 2):
+            return False
+
+        x0, y0 = pts[:, 0].min(), pts[:, 1].min()
+        x1, y1 = pts[:, 0].max(), pts[:, 1].max()
+        corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+        # Every polygon point must sit on a distinct corner of its own bounds
+        unmatched = list(corners)
+        for px, py in pts:
+            for i, (cx, cy) in enumerate(unmatched):
+                if abs(px - cx) <= tolerance and abs(py - cy) <= tolerance:
+                    unmatched.pop(i)
+                    break
+            else:
+                return False
+        return not unmatched
+
+    def _apply_points_to_region(self, region_id: str, points) -> bool:
+        """Write adjusted polygon points back into a region, whatever its type.
+
+        Contour regions store the polygon directly. Rectangle and grid-cell
+        regions store x/y/width/height, which can only hold an upright box, so
+        a rotated tile is promoted to a contour region rather than being
+        flattened back to its bounding box. Returns False for region types
+        that cannot be updated, so the caller can warn rather than silently
+        drop the edit.
+
+        Args:
+            region_id: Region to update in self.mapping
+            points: Adjusted polygon points
+
+        Returns:
+            True if the region now holds these points
+        """
+        from .regions import ContourRegion, RectangleRegion
+
+        region = self.mapping._regions.get(region_id)
+        if region is None:
+            return False
+
+        pts = np.array(points, dtype=np.float32)
+        if isinstance(region, ContourRegion):
+            region.contour_points = pts
+            # Keep the cached array used by contains_point() in sync.
+            region.contour = pts
+            return True
+
+        if isinstance(region, RectangleRegion):  # also covers GridCell
+            if self._is_axis_aligned_rectangle(pts):
+                x0, y0 = float(pts[:, 0].min()), float(pts[:, 1].min())
+                x1, y1 = float(pts[:, 0].max()), float(pts[:, 1].max())
+                region.x, region.y = x0, y0
+                region.width, region.height = x1 - x0, y1 - y0
+                return True
+
+            # Rotated or otherwise non-upright: swap in a contour region under
+            # the same id, so every index keyed by region_id stays valid.
+            self.mapping._regions[region_id] = ContourRegion(
+                region_id=region_id,
+                contour_points=[(float(p[0]), float(p[1])) for p in pts],
+                metadata=dict(region.metadata),
+            )
+            print(f"DEBUG: Region {region_id} is no longer upright; "
+                  f"stored as a contour to keep its shape")
+            return True
+
+        return False
+
+    @staticmethod
+    def _element_key(elem_type, elem_id) -> str:
+        """Stable key for a mapped element, matching the saved edge format."""
+        if elem_type == 'node':
+            return f"node:{elem_id}"
+        if isinstance(elem_id, tuple):
+            return f"edge:{elem_id[0]}_{elem_id[1]}"
+        return f"edge:{elem_id}"
+
+    @staticmethod
+    def _polygon_signature(points) -> tuple:
+        """Order-independent fingerprint of a polygon, rounded to 0.1 px."""
+        return tuple(sorted(
+            (round(float(p[0]), 1), round(float(p[1]), 1)) for p in points
+        ))
+
+    def _element_polygons(self, mapping, geometry_override=None) -> Dict[str, list]:
+        """Polygon signatures per mapped element.
+
+        Args:
+            mapping: Mapping to read regions from
+            geometry_override: Optional region_id -> points taking precedence,
+                used to describe what the GUI intends to save
+
+        Returns:
+            element key -> sorted list of polygon signatures
+        """
+        from collections import defaultdict
+
+        polygons = defaultdict(list)
+        for region_id, region in mapping._regions.items():
+            element = mapping._region_to_element.get(region_id)
+            if not element:
+                continue
+
+            points = None
+            if geometry_override and region_id in geometry_override:
+                points = geometry_override[region_id]
+            if points is None:
+                points = MapWidget._region_polygon(region)
+            if not points:
+                continue
+
+            polygons[self._element_key(*element)].append(self._polygon_signature(points))
+
+        return {key: sorted(sigs) for key, sigs in polygons.items()}
+
+    def _verify_saved_adjustments(self, file_path: Path) -> Tuple[int, List[str]]:
+        """Re-read a saved mapping and check it holds the adjusted geometry.
+
+        The saved file is the only thing the analysis ever sees, and regions
+        are rewritten as contours on the way through it, so this reads the
+        file back and compares it against what was on screen.
+
+        Args:
+            file_path: The mapping file that was just written
+
+        Returns:
+            (number of elements checked, list of human-readable mismatches)
+        """
+        saved = SpatialMapping.load_with_builder_reconstruction(Path(file_path))
+
+        expected = self._element_polygons(
+            self.mapping, geometry_override=self.map_widget.base_contours
+        )
+        actual = self._element_polygons(saved)
+
+        problems = []
+        for key in sorted(set(expected) | set(actual)):
+            if key not in actual:
+                problems.append(f"{key}: missing from the saved file")
+            elif key not in expected:
+                problems.append(f"{key}: unexpectedly present in the saved file")
+            elif expected[key] != actual[key]:
+                problems.append(
+                    f"{key}: {len(expected[key])} region(s) on screen, "
+                    f"{len(actual[key])} saved with different geometry"
+                )
+
+        return len(expected), problems
+
     def _on_save_adjusted_mapping(self):
         """Save the adjusted mapping with updated contour positions."""
         file_path, _ = QFileDialog.getSaveFileName(
@@ -4342,49 +4965,204 @@ class GraphSetupWindow(QMainWindow):
                 file_path += '.pkl'
             try:
                 from pathlib import Path
-                
-                # Update regions with base_contours (which have all adjustments applied)
-                # base_contours contains the actual adjusted positions after dragging/resizing
+
+                # Fold any offset from a drag that is still pending into
+                # base_contours, so there is a single geometry to save from.
+                self.map_widget.apply_all_offsets()
+
+                # Update regions with base_contours, which hold every
+                # adjustment: moves, resizes and rotations.
+                updated = skipped = 0
+                skipped_ids = []
                 for region_id, adjusted_points in self.map_widget.base_contours.items():
-                    # Find the region in the mapping and update its points
                     if region_id in self.mapping._regions:
-                        from .regions import ContourRegion
-                        region = self.mapping._regions[region_id]
-                        if isinstance(region, ContourRegion):
-                            # Use the adjusted points from base_contours
-                            region.contour_points = np.array(adjusted_points, dtype=np.float32)
-                            print(f"DEBUG: Updated region {region_id} with adjusted points")
-                
-                # Also apply any remaining offsets (shouldn't be any after proper drag end, but just in case)
-                for region_id, offset in self.map_widget.contour_offsets.items():
-                    if offset != (0, 0) and region_id in self.mapping._regions:
-                        from .regions import ContourRegion
-                        region = self.mapping._regions[region_id]
-                        if isinstance(region, ContourRegion):
-                            # Apply offset to contour points
-                            adjusted_points = [
-                                (p[0] + offset[0], p[1] + offset[1]) 
-                                for p in region.contour_points
-                            ]
-                            region.contour_points = np.array(adjusted_points, dtype=np.float32)
-                            print(f"DEBUG: Applied remaining offset to region {region_id}: {offset}")
-                
-                # Save the mapping with adjusted contours
-                self.mapping.save_with_builder_info(Path(file_path))
+                        if self._apply_points_to_region(region_id, adjusted_points):
+                            updated += 1
+                        else:
+                            skipped += 1
+                            skipped_ids.append(region_id)
+                            region = self.mapping._regions[region_id]
+                            print(f"WARNING: region {region_id} is a "
+                                  f"{type(region).__name__}; adjustments not saved")
+                print(f"DEBUG: Updated {updated} regions with adjusted points"
+                      + (f", skipped {skipped}" if skipped else ""))
+
+                # Region geometry changed, so any cached point lookups from
+                # test mode now describe the old positions.
+                self.mapping._clear_cache()
+
+                # Save the mapping together with the calibration it was
+                # aligned against, so the analysis can detect a mismatch.
+                self.mapping.save_with_builder_info(
+                    Path(file_path),
+                    setup_mode_state={'calibration': self._calibration_provenance()},
+                )
                 
                 # Clear offsets after saving (they're now in the base contours)
                 self.map_widget.contour_offsets.clear()
                 self.map_widget.update()
-                
-                QMessageBox.information(self, "Success", f"Adjusted mapping saved to {file_path}")
-                self.status_bar.showMessage(f"Adjusted mapping saved: {file_path}")
-                
+
+                # Read the file back and confirm it holds what was on screen,
+                # rather than trusting the write.
+                checked, problems = self._verify_saved_adjustments(Path(file_path))
+
+                summary = f"Adjusted mapping saved to {file_path}\n\n" \
+                          f"Verified {checked} mapped elements ({updated} regions written"
+                summary += f", {skipped} skipped)" if skipped else ")"
+
+                if skipped_ids:
+                    summary += ("\n\nNot saved (unsupported region type): "
+                                + ", ".join(skipped_ids[:5])
+                                + (" ..." if len(skipped_ids) > 5 else ""))
+
+                if problems:
+                    detail = "\n".join(f"• {p}" for p in problems[:10])
+                    if len(problems) > 10:
+                        detail += f"\n• ... and {len(problems) - 10} more"
+                    QMessageBox.warning(
+                        self, "Saved with differences",
+                        summary + "\n\nThe saved file does not match the map for:\n" + detail
+                    )
+                    self.status_bar.showMessage(
+                        f"Adjusted mapping saved with {len(problems)} mismatches: {file_path}"
+                    )
+                else:
+                    QMessageBox.information(self, "Success", summary + "\nAll adjustments verified.")
+                    self.status_bar.showMessage(f"Adjusted mapping saved and verified: {file_path}")
+
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save adjusted mapping: {str(e)}")
                 print(f"Save adjusted mapping error: {e}")
                 import traceback
                 traceback.print_exc()
     
+    def _unique_region_id(self, source_region_id: str) -> str:
+        """A region id derived from another one that no region is using yet."""
+        base = f"{source_region_id}_copy"
+        candidate, index = base, 1
+        while candidate in self.mapping._regions:
+            index += 1
+            candidate = f"{base}{index}"
+        return candidate
+
+    def _on_copy_tiles(self):
+        """Copy the selected tiles, keeping the element each is mapped to."""
+        if not self.map_widget.adjustment_mode:
+            return
+
+        count = self.map_widget.copy_selected_tiles()
+        if count:
+            self.adjust_status_label.setText(
+                f"Copied {count} tile(s) - Ctrl+V pastes them under the cursor"
+            )
+            self.status_bar.showMessage(f"Copied {count} tile(s)")
+        else:
+            self.status_bar.showMessage("Nothing to copy - select a tile first")
+
+    def _on_paste_tiles(self):
+        """Paste the clipboard as new tiles for the same elements.
+
+        A node or edge can hold any number of regions, so this is how an edge
+        whose shape one tile cannot follow - an L-bend, a corridor around a
+        corner - gets covered by a second tile instead of a stretched one.
+        """
+        if not self.map_widget.adjustment_mode:
+            return
+
+        clipboard = self.map_widget.tile_clipboard
+        if not clipboard:
+            self.status_bar.showMessage("Clipboard is empty - copy a tile first (Ctrl+C)")
+            return
+
+        dx, dy = self.map_widget.paste_offset()
+        pasted = []
+        for entry in clipboard:
+            region_id = self._unique_region_id(entry['source'])
+            points = [(px + dx, py + dy) for px, py in entry['points']]
+
+            region = ContourRegion(region_id=region_id, contour_points=points)
+            try:
+                if entry['elem_type'] == 'node':
+                    self.mapping.add_node_region(region, entry['elem_id'], allow_multiple=True)
+                else:
+                    self.mapping.add_edge_region(region, entry['elem_id'], allow_multiple=True)
+            except ValueError as exc:
+                # The element is gone from the graph, or the region conflicts
+                print(f"WARNING: could not paste tile for "
+                      f"{entry['elem_type']} {entry['elem_id']}: {exc}")
+                continue
+
+            self.map_widget.add_tile(region_id, points, entry['elem_type'], entry['elem_id'])
+            pasted.append(region_id)
+
+        if not pasted:
+            QMessageBox.warning(self, "Paste failed",
+                                "None of the copied tiles could be pasted; see the log.")
+            return
+
+        # Select what was just pasted, so it can be dragged or rotated at once
+        self.map_widget.selected_contours = set(pasted)
+        self.map_widget.selected_contour_region_id = pasted[0]
+        self.map_widget.update()
+
+        elements = {self._element_key(e['elem_type'], e['elem_id']) for e in clipboard}
+        self.adjust_status_label.setText(
+            f"Pasted {len(pasted)} tile(s) for {', '.join(sorted(elements))}\n"
+            f"Drag to place, Shift+Drag to rotate"
+        )
+        self.status_bar.showMessage(f"Pasted {len(pasted)} tile(s)")
+        self._update_progress_display()
+
+    def _on_delete_selected_tiles(self):
+        """Delete the selected tiles from the mapping.
+
+        Mostly for taking back a paste, but it deletes original tiles too, so
+        it asks first when a deletion would leave an element with no tiles at
+        all - that unmaps the element rather than just reshaping it.
+        """
+        if not self.map_widget.adjustment_mode:
+            return
+
+        selected = sorted(self.map_widget.selected_contours)
+        if not selected:
+            self.status_bar.showMessage("Nothing to delete - select a tile first")
+            return
+
+        # Which elements would lose their last region?
+        remaining = {}
+        for region_id, element in self.mapping._region_to_element.items():
+            key = self._element_key(*element)
+            remaining[key] = remaining.get(key, 0) + (0 if region_id in selected else 1)
+        orphaned = sorted(key for key, count in remaining.items() if count == 0)
+
+        if orphaned:
+            listed = ", ".join(orphaned[:8]) + (" ..." if len(orphaned) > 8 else "")
+            reply = QMessageBox.question(
+                self, "Delete tiles",
+                f"Delete {len(selected)} tile(s)?\n\n"
+                f"This leaves {len(orphaned)} element(s) with no tile at all: {listed}",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        for region_id in selected:
+            self.mapping.remove_region(region_id)
+            self.map_widget.remove_tile(region_id)
+
+        self.map_widget.update()
+        self.adjust_status_label.setText(f"Deleted {len(selected)} tile(s)")
+        self.status_bar.showMessage(f"Deleted {len(selected)} tile(s)")
+        self._update_progress_display()
+
+    def _on_contours_rotated(self, count: int, degrees: float):
+        """Called when a Shift+drag rotation of the selection finishes."""
+        if count:
+            self.adjust_status_label.setText(
+                f"Rotated {count} tile(s) by {degrees:+.1f}°"
+            )
+            self.status_bar.showMessage(f"Rotated {count} tile(s) by {degrees:+.1f}°")
+
     def _on_contour_moved(self, region_id: str):
         """Called when a contour is moved in adjustment mode."""
         if region_id:
@@ -5575,6 +6353,16 @@ class GraphSetupWindow(QMainWindow):
         
         right_shortcut = QShortcut("Right", self)
         right_shortcut.activated.connect(self._on_next_element)
+
+        # Tile clipboard in adjustment mode (the handlers ignore other modes)
+        copy_shortcut = QShortcut("Ctrl+C", self)
+        copy_shortcut.activated.connect(self._on_copy_tiles)
+
+        paste_shortcut = QShortcut("Ctrl+V", self)
+        paste_shortcut.activated.connect(self._on_paste_tiles)
+
+        delete_shortcut = QShortcut("Delete", self)
+        delete_shortcut.activated.connect(self._on_delete_selected_tiles)
     
     def toggle_maximize(self):
         """Toggle between maximized and normal window state."""

@@ -35,7 +35,11 @@ class Session:
         self.session_id = session_configuration.get('session_id', 'unknown_session')
         self.config = session_configuration
         self.experiment_path = Path(session_configuration.get('experiment_path', '.'))
-        self.session_path = self.experiment_path / self.session_id
+        # session_path is given explicitly when the folder lives outside the
+        # experiment directory, as it does when session.date selects it.
+        session_path = session_configuration.get('session_path')
+        self.session_path = (Path(session_path) if session_path
+                             else self.experiment_path / self.session_id)
         self.logger = logger_instance
         
         # Plugin specifications from config
@@ -136,9 +140,10 @@ class Session:
             with open(mapping_path, 'rb') as f:
                 mapping_data = pickle.load(f)
             
-            # Check if mapping file has builder info and validate it matches config
-            if 'builder' in mapping_data:
-                file_builder = mapping_data['builder']
+            # Check if mapping file has builder info and validate it matches config.
+            # Format 3.0 stores it as 'graph_builder'; older files as 'builder'.
+            file_builder = mapping_data.get('graph_builder') or mapping_data.get('builder')
+            if file_builder:
                 file_builder_type = file_builder.get('type')
                 file_builder_config = file_builder.get('config', {})
                 

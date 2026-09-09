@@ -32,9 +32,24 @@ class AnalyzeConfig(BaseModel):
     save_as_csv: bool = Field(True, description="Save results as CSV")
     save_as_pkl: bool = Field(True, description="Save results as pickle")
     save_raw_data_as_pkl: bool = Field(False, description="Save raw session data")
+    raw_data_root: Optional[str] = Field(
+        None,
+        description=("Extra destination for the analysis outputs; they are also "
+                     "copied to <raw_data_root>/<subject>/<DD_MM_YYYY>/")
+    )
     metrics: Dict[str, AnalyzeMetricSpec] = Field(
         default_factory=dict, 
         description="Metrics to compute"
+    )
+
+
+class SessionSelection(BaseModel):
+    """Which session folder to analyse, chosen by date rather than by scanning."""
+    date: str = Field(..., description="Session date: DD_MM_YYYY, YYYY_MM_DD, DD/MM/YYYY or YYYY-MM-DD")
+    subject: Optional[str] = Field(None, description="Subject, needed only when a date has several")
+    sessions_dir: str = Field(
+        "./resources/prev_sessions",
+        description="Directory holding session_<subject>_<DD>_<MM>_<YYYY> folders"
     )
 
 
@@ -97,6 +112,10 @@ class ExperimentConfig(BaseModel):
     analyze: AnalyzeConfig = Field(
         default_factory=AnalyzeConfig,
         description="Analysis configuration"
+    )
+    session: Optional[SessionSelection] = Field(
+        None,
+        description="Session to analyse, selected by date (omit to scan experiment_path)"
     )
     visualizations: Union[List[VisualizationSpec], Dict[str, Any]] = Field(
         default_factory=list,

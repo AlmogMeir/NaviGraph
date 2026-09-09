@@ -55,8 +55,15 @@ class ExperimentRunner:
             # Default to analyze mode when no system modes provided (backward compatibility)
             self.system_modes = {SystemMode.ANALYZE}
         
-        # Resolve relative paths using config directory
-        config_dir = getattr(config, '_config_dir', None)
+        # Resolve relative paths using config directory. The CLI hands over a
+        # plain dict, where _config_dir is a key and not an attribute, so read
+        # it both ways - otherwise every relative path silently falls back to
+        # the current working directory.
+        config_dir = None
+        if hasattr(config, 'get'):
+            config_dir = config.get('_config_dir')
+        if not config_dir:
+            config_dir = getattr(config, '_config_dir', None)
         self.config_dir = config_dir
         
         # Create timestamped experiment folder with flexible path resolution
@@ -155,16 +162,54 @@ class ExperimentRunner:
             # Fallback to current working directory
             return os.getcwd()
     
+    def _configured_session(self) -> Optional[SessionInfo]:
+        """The session named by the config's `session` block, if there is one.
+
+        Without it, whichever session folder happens to sit in the experiment
+        directory is analysed - which is how a run can pair one day's tracking
+        with another day's mapping and calibration without complaining.
+
+        Returns:
+            SessionInfo for the configured date, or None if no date is configured
+
+        Raises:
+            SessionDiscoveryError: If the configured date has no session folder
+        """
+        from .file_discovery import find_session_folder
+
+        session_config = self.config.get(ConfigKeys.SESSION) or {}
+        date = session_config.get('date')
+        if not date:
+            return None
+
+        # Relative to the config, or to the experiment directory when the
+        # config's location is unknown - never to the current directory.
+        sessions_dir = Path(str(session_config.get('sessions_dir', Defaults.SESSIONS_DIR))).expanduser()
+        if not sessions_dir.is_absolute():
+            base = Path(self.config_dir) if self.config_dir else self.experiment_path
+            sessions_dir = (base / sessions_dir).resolve()
+
+        folder = find_session_folder(Path(sessions_dir), date, session_config.get('subject'))
+        logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.DISCOVERY)} "
+                    f"Session for {date}: {folder}")
+        return SessionInfo(name=folder.name, path=folder)
+
     def discover_sessions(self) -> List[SessionInfo]:
         """Discover session directories in the experiment.
-        
+
         Returns:
             List of SessionInfo objects
         """
         from .file_discovery import FileDiscoveryEngine
-        
+
         logger.info(f"{LogFormats.PHASE_PREFIX.format(phase=LogFormats.DISCOVERY)} Discovering sessions")
-        
+
+        # An explicitly configured session is a hard requirement: if the date
+        # has no folder, stop rather than fall back to scanning.
+        configured = self._configured_session()
+        if configured is not None:
+            return [configured]
+
         try:
             discovery_engine = FileDiscoveryEngine(str(self.experiment_path), logger)
             session_folder_names = discovery_engine.discover_session_folders()
@@ -198,6 +243,9 @@ class ExperimentRunner:
                     session_config = dict(self.config)
                     session_config[ConfigKeys.SESSION_ID] = session_info.name
                     session_config[ConfigKeys.EXPERIMENT_PATH] = str(self.experiment_path)
+                    # The folder may live outside the experiment directory
+                    # (session.date resolves it under sessions_dir).
+                    session_config[ConfigKeys.SESSION_PATH] = str(session_info.path)
                     
                     # Transform data_sources to data_source_specifications for Session compatibility
                     if ConfigKeys.DATA_SOURCES in session_config:

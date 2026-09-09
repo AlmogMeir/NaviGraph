@@ -34,6 +34,122 @@ class FileDiscoveryError(NavigraphError):
     pass
 
 
+#: Session folders are named session_<subject>_<DD>_<MM>_<YYYY>.
+SESSION_FOLDER_PATTERN = re.compile(
+    r"^session_(?P<subject>.+)_(?P<day>\d{2})_(?P<month>\d{2})_(?P<year>\d{4})$"
+)
+
+
+def normalize_session_date(date: str) -> str:
+    """Normalize a session date to the DD_MM_YYYY used by session folders.
+
+    Accepts the forms that appear across the configs and resource names:
+    DD_MM_YYYY, YYYY_MM_DD, DD/MM/YYYY, YYYY-MM-DD.
+
+    Args:
+        date: Date in any of the accepted forms
+
+    Returns:
+        The date as DD_MM_YYYY
+
+    Raises:
+        SessionDiscoveryError: If the date cannot be understood
+    """
+    text = str(date).strip().replace('/', '_').replace('-', '_').replace('.', '_')
+
+    # YAML reads an unquoted 2026_06_18 as the integer 20260618, so accept the
+    # digits-only form as well rather than making the quoting a trap.
+    if text.isdigit() and len(text) == 8:
+        if 1900 <= int(text[:4]) <= 2999:
+            text = f"{text[:4]}_{text[4:6]}_{text[6:]}"      # YYYYMMDD
+        elif 1900 <= int(text[4:]) <= 2999:
+            text = f"{text[:2]}_{text[2:4]}_{text[4:]}"      # DDMMYYYY
+
+    parts = text.split('_')
+
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        if len(parts[0]) == 4:                       # YYYY_MM_DD
+            year, month, day = parts
+        elif len(parts[2]) == 4:                     # DD_MM_YYYY
+            day, month, year = parts
+        else:
+            year = month = day = None
+        if year and 1 <= int(month) <= 12 and 1 <= int(day) <= 31:
+            return f"{int(day):02d}_{int(month):02d}_{int(year):04d}"
+
+    raise SessionDiscoveryError(
+        f"Could not read session date {date!r}. Use DD_MM_YYYY, YYYY_MM_DD, "
+        f"DD/MM/YYYY or YYYY-MM-DD."
+    )
+
+
+def parse_session_folder(folder_name: str) -> Optional[Tuple[str, str]]:
+    """Split a session folder name into (subject, DD_MM_YYYY), or None."""
+    match = SESSION_FOLDER_PATTERN.match(folder_name)
+    if not match:
+        return None
+    return (match.group('subject'),
+            f"{match.group('day')}_{match.group('month')}_{match.group('year')}")
+
+
+def find_session_folder(sessions_dir: Path, date: str,
+                        subject: Optional[str] = None) -> Path:
+    """Find the one session folder for a date, or fail saying what is there.
+
+    Picking the session by date rather than by whatever folder happens to sit
+    in the experiment directory is what keeps a run from silently analysing a
+    different day's recording than the one its mapping and calibration are for.
+
+    Args:
+        sessions_dir: Directory holding session_<subject>_<DD>_<MM>_<YYYY> folders
+        date: Session date, in any form normalize_session_date() accepts
+        subject: Optional subject, required only when a date has several
+
+    Returns:
+        Path to the matching session folder
+
+    Raises:
+        SessionDiscoveryError: If the directory, the date, or a unique match is missing
+    """
+    sessions_dir = Path(sessions_dir)
+    wanted = normalize_session_date(date)
+
+    if not sessions_dir.is_dir():
+        raise SessionDiscoveryError(
+            f"Session directory does not exist: {sessions_dir}. "
+            f"Set session.sessions_dir to the folder holding the session_* folders."
+        )
+
+    available = {}
+    for folder in sorted(sessions_dir.iterdir()):
+        if not folder.is_dir():
+            continue
+        parsed = parse_session_folder(folder.name)
+        if parsed:
+            available.setdefault(parsed[1], []).append((parsed[0], folder))
+
+    matches = available.get(wanted, [])
+    if subject:
+        matches = [(subj, folder) for subj, folder in matches if subj == subject]
+
+    if len(matches) == 1:
+        return matches[0][1]
+
+    if not matches:
+        known = ", ".join(sorted(available)) or "none"
+        for_subject = f" for subject {subject}" if subject else ""
+        raise SessionDiscoveryError(
+            f"No session folder{for_subject} for {wanted} in {sessions_dir}. "
+            f"Expected session_<subject>_{wanted}. Dates present: {known}"
+        )
+
+    subjects = ", ".join(sorted(subj for subj, _ in matches))
+    raise SessionDiscoveryError(
+        f"{len(matches)} session folders match {wanted} in {sessions_dir} "
+        f"(subjects: {subjects}). Set session.subject to choose one."
+    )
+
+
 class FileDiscoveryEngine:
     """Handles regex-based file discovery for experimental sessions."""
     

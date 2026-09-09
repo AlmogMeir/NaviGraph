@@ -6,7 +6,7 @@ based on configuration and applies them to session data.
 
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import pickle
 from datetime import datetime
 from loguru import logger
@@ -40,7 +40,11 @@ class Analyzer:
             Complete analysis results including session and cross-session metrics
         """
         logger.info(f"Starting analysis of {len(sessions)} sessions")
-        
+
+        # Remembered for _mirror_outputs(), which files results per session
+        self._session_ids = [getattr(s, 'session_id', f'session_{i}')
+                             for i, s in enumerate(sessions, 1)]
+
         # Process each session
         session_results = []
         raw_data_collection = {}
@@ -199,15 +203,17 @@ class Analyzer:
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
+        written = []
+
         # Export to CSV if configured
         if self.analysis_config.get('save_as_csv', True):
             csv_path = output_dir / f'session_metrics_{timestamp}.csv'
             self._export_csv(session_results, csv_path)
-            
-        # Export to PKL if configured  
+            written.append(csv_path)
+
+        # Export to PKL if configured
         if self.analysis_config.get('save_as_pkl', True):
             pkl_path = output_dir / f'session_metrics_{timestamp}.pkl'
             all_results = {
@@ -217,12 +223,61 @@ class Analyzer:
                 'timestamp': timestamp
             }
             self._export_pickle(all_results, pkl_path)
-        
+            written.append(pkl_path)
+
         # Export raw session data if configured
         if self.analysis_config.get('save_raw_data_as_pkl', False) and raw_data_collection:
-            self._export_raw_data(raw_data_collection, output_dir, timestamp)
-        
+            raw_path = self._export_raw_data(raw_data_collection, output_dir, timestamp)
+            if raw_path:
+                written.append(raw_path)
+
         logger.info(f"Results exported to: {output_dir}")
+
+        # Also drop them next to the session they describe, if configured
+        session_ids = getattr(self, '_session_ids', None) or list(raw_data_collection or {})
+        self._mirror_outputs(written, session_ids)
+
+    def _mirror_outputs(self, written: List[Path], session_ids: List[str]) -> None:
+        """Copy the analysis outputs into a per-session folder as well.
+
+        The timestamped experiment folder is not addressable by session, so the
+        outputs are also written to <raw_data_root>/<subject>/<DD_MM_YYYY>/,
+        which is where downstream notebooks look them up by date.
+
+        Args:
+            written: Files just written to the experiment output directory
+            session_ids: Sessions these outputs describe
+        """
+        import shutil
+        from ..core.file_discovery import parse_session_folder
+
+        root = self.analysis_config.get('raw_data_root')
+        if not root or not written:
+            return
+
+        root = Path(str(root)).expanduser()
+        config_dir = self.config.get('_config_dir')
+        if config_dir and not root.is_absolute():
+            root = Path(config_dir) / root
+
+        if not session_ids:
+            logger.warning("raw_data_root is set but no session was identified; "
+                           "outputs not mirrored")
+            return
+
+        for session_id in session_ids:
+            parsed = parse_session_folder(session_id)
+            # Unparseable ids still get a folder of their own rather than being dropped
+            destination = root / parsed[0] / parsed[1] if parsed else root / session_id
+            try:
+                destination.mkdir(parents=True, exist_ok=True)
+                for path in written:
+                    shutil.copy2(path, destination / path.name)
+                logger.info(f"Analysis outputs mirrored to: {destination} "
+                            f"({len(written)} files)")
+            except OSError as e:
+                # The primary copies are already safe in the experiment folder
+                logger.error(f"Failed to mirror analysis outputs to {destination}: {e}")
     
     def _export_csv(self, session_results: List[Dict[str, Any]], filepath: Path) -> None:
         """Save session results as CSV with metrics as columns."""
@@ -254,18 +309,21 @@ class Analyzer:
             pickle.dump(results, f)
         logger.info(f"Pickle exported: {filepath}")
     
-    def _export_raw_data(self, raw_data_collection: Dict[str, Dict], 
-                         output_dir: Path, timestamp: str) -> None:
+    def _export_raw_data(self, raw_data_collection: Dict[str, Dict],
+                         output_dir: Path, timestamp: str) -> Optional[Path]:
         """Export raw session dataframes to pickle file.
         
         Args:
             raw_data_collection: Dict mapping session_id to session data
             output_dir: Directory where file will be saved
             timestamp: Timestamp for the filename
+
+        Returns:
+            Path written, or None if there was nothing to write
         """
         if not raw_data_collection:
             logger.warning("No raw data to export")
-            return
+            return None
         
         raw_data_export = {
             **raw_data_collection,  # Session data keyed by session_id
@@ -281,6 +339,8 @@ class Analyzer:
             
             total_sessions = len(raw_data_collection)
             logger.info(f"Raw session data exported: {filepath} ({total_sessions} sessions)")
-            
+            return filepath
+
         except Exception as e:
             logger.error(f"Failed to export raw session data: {e}")
+            return None

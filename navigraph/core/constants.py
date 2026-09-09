@@ -14,6 +14,8 @@ class ConfigKeys:
     MAP_PATH = 'map_path'
     VERBOSE = 'verbose'
     SESSION_ID = 'session_id'
+    SESSION = 'session'
+    SESSION_PATH = 'session_path'
     SESSION_SETTINGS = 'session_settings'
     GRAPH = 'graph'
 
@@ -128,3 +130,5 @@ class Defaults:
     ACTIVITY_THRESHOLD = 0.1
     OUTPUT_PATH = "{PROJECT_ROOT}/output"
     RUNNING_MODE = "analyze"
+    # Where session_<subject>_<DD>_<MM>_<YYYY> folders are kept
+    SESSIONS_DIR = "./resources/prev_sessions"
