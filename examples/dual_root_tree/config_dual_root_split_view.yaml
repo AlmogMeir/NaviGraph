@@ -13,7 +13,7 @@ experiment_output_path: "{PROJECT_ROOT}/output"
 # subject and date are the only things to change per session: every per-session
 # file name below is built from them via ${session.subject} / ${session.date}.
 session:
-  date: "2025_12_02"
+  date: "2025_12_12"
   subject: 3L
   sessions_dir: ./resources/prev_sessions
 
