@@ -144,4 +144,5 @@ examples/dual_root_tree/NPC2_2025_11_27_12_56_15_blackout.png
 *.mp4
 *.h5
 *.csv
+*.csv#
 *.pkl
