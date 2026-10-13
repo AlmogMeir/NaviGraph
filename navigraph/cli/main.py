@@ -191,7 +191,7 @@ def _run_experiment_with_modes(config_path: Path, verbose: bool, modes: List[Sys
         
         # Load and process configuration
         config = OmegaConf.load(config_path)
-        config = process_config_path(config_path, OmegaConf.to_container(config))
+        config = process_config_path(config_path, OmegaConf.to_container(config, resolve=True))
         
         # Override verbose if specified
         if verbose:
@@ -272,7 +272,7 @@ def discover(data_path: Path, config: Optional[Path], format: str):
             
             # Load configuration
             config_data = OmegaConf.load(config)
-            config_data = process_config_path(config, OmegaConf.to_container(config_data))
+            config_data = process_config_path(config, OmegaConf.to_container(config_data, resolve=True))
             
             # Override experiment path to discovery location
             config_data.experiment_path = str(data_path)
@@ -558,7 +558,7 @@ def validate(config_path: Path):
         
         # Load configuration
         config = OmegaConf.load(config_path)
-        config = process_config_path(config_path, OmegaConf.to_container(config))
+        config = process_config_path(config_path, OmegaConf.to_container(config, resolve=True))
         issues = []
         warnings = []
         
@@ -697,7 +697,7 @@ def walk(config_path: Path, start: int, target: Optional[int], n_walks: int,
             click.echo(f"📋 Loading configuration: {config_path}")
 
         config = OmegaConf.load(config_path)
-        config = process_config_path(config_path, OmegaConf.to_container(config))
+        config = process_config_path(config_path, OmegaConf.to_container(config, resolve=True))
 
         # Import graph modules
         from ..core.graph.structures import GraphStructure
@@ -908,7 +908,7 @@ def setup_graph(config_path: Path):
         
         # Load configuration
         config = OmegaConf.load(config_path)
-        config = process_config_path(config_path, OmegaConf.to_container(config))
+        config = process_config_path(config_path, OmegaConf.to_container(config, resolve=True))
         
         # Import graph modules
         from ..core.graph.structures import GraphStructure
@@ -1220,7 +1220,7 @@ def setup_calibration(config_path: Path, test: bool, point_set_name: Optional[st
 
         # Load configuration
         config = OmegaConf.load(config_path)
-        config = process_config_path(config_path, OmegaConf.to_container(config))
+        config = process_config_path(config_path, OmegaConf.to_container(config, resolve=True))
 
         # Get map path from config (check setup section first, then root for backward compatibility)
         setup_config = config.get('setup', {})

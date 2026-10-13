@@ -10,19 +10,21 @@ experiment_output_path: "{PROJECT_ROOT}/output"
 # whichever session folder happens to sit in experiment_path is analysed, which
 # is how one day's tracking gets paired with another day's mapping. A date with
 # no session folder stops the run.
+# subject and date are the only things to change per session: every per-session
+# file name below is built from them via ${session.subject} / ${session.date}.
 session:
-  date: "2026_06_22"
-  subject: NPC4
+  date: "2025_12_02"
+  subject: 3L
   sessions_dir: ./resources/prev_sessions
 
 # Setup configuration for GUI tools
 setup:
   map_path: ./resources/maze_map.png
-  spatial_image_for_calibration: ./resources/maze_images/NPC4_2026_06_22.png
-  graph_mapping_output: ./resources/maze_mappings/NPC4_2026_06_22.pkl
+  spatial_image_for_calibration: ./resources/maze_images/${session.subject}_${session.date}.png
+  graph_mapping_output: ./resources/maze_mappings/${session.subject}_${session.date}.pkl
   # Must be the SAME file the calibration plugin loads below, or the tiles
   # get aligned to one warp and the tracking projected with another.
-  calibration_matrix: ./resources/transform_matrix/2026_06_22.npy
+  calibration_matrix: ./resources/transform_matrix/${session.date}.npy
 
 # Video configuration
 video:
@@ -38,7 +40,7 @@ plugins:
     # top-level resources/transform_matrix.npy regardless of which session
     # this config is for, which is how the mapping and the analysis drifted
     # onto different calibrations.
-    file_path: ./resources/transform_matrix/2026_06_22.npy
+    file_path: ./resources/transform_matrix/${session.date}.npy
     shared: true
     
   - name: pose_data
@@ -50,7 +52,7 @@ plugins:
 
   - name: graph_position
     type: graph_location
-    graph_mapping_file: ./resources/maze_mappings/NPC4_2026_06_22.pkl
+    graph_mapping_file: ./resources/maze_mappings/${session.subject}_${session.date}.pkl
     conflict_strategy: node_priority
 
 # Graph structure
@@ -61,7 +63,7 @@ graph:
       left_height: 6
       right_height: 6
   
-  mapping_file: ./resources/maze_mappings/NPC4_2026_06_22.pkl
+  mapping_file: ./resources/maze_mappings/${session.subject}_${session.date}.pkl
   conflict_strategy: node_priority
 
 # Analysis metrics
@@ -70,7 +72,7 @@ analyze:
   # The three analysis outputs are also copied to
   # <raw_data_root>/<subject>/<DD_MM_YYYY>/, where the notebooks look them up.
   raw_data_root: /var/home/almogmeir/Documents/M.Sc/Project/Input/Navigraph_Raw_Data
-  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/NPC4_2026_06_22_analysis_results.pkl"
+  output_file: "/var/home/almogmeir/Documents/GitHub/NaviGraph/examples/dual_root_tree/resources/outputs/${session.subject}_${session.date}_analysis_results.pkl"
 
   metrics:
     tracking_jumps:
@@ -112,7 +114,7 @@ visualizations:
       type: split_view
       config:
         # Mapping overlay settings (left side - video)
-        mapping_file: ./resources/maze_mappings/NPC4_2026_06_22.pkl
+        mapping_file: ./resources/maze_mappings/${session.subject}_${session.date}.pkl
         mapping_alpha: 0.3  # Low transparency for subtle overlay
         show_node_boxes: true  # Show node bounding boxes
         show_edge_boxes: false  # Hide edge boxes to reduce clutter

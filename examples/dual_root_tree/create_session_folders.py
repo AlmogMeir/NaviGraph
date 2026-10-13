@@ -4,6 +4,11 @@ Scans resources/maze_videos for <subject>_<YYYY>_<MM>_<DD>.mp4 files, matches ea
 to its <subject>_<YYYY>_<MM>_<DD>_corrected.h5 tracking in resources/maze_trackings,
 and copies both into resources/prev_sessions/session_<subject>_<DD>_<MM>_<YYYY>/.
 
+Newer videos also carry a start time and a suffix, e.g.
+3L_2025_12_08_14_43_53_stitched_blacked.mp4, while their tracking is still named by
+date only. When a date has several videos (a restarted session), the one whose frame
+count equals the tracking's row count is taken; if none matches, the date is skipped.
+
 Dates that already have a session folder are skipped, as are dates with no
 corrected tracking file yet.
 """
@@ -13,25 +18,57 @@ import os
 import re
 import shutil
 import sys
+from collections import defaultdict
+
+import cv2
+import pandas as pd
 
 RESOURCES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
 VIDEOS_DIR = os.path.join(RESOURCES, "maze_videos")
 TRACKINGS_DIR = os.path.join(RESOURCES, "maze_trackings")
 SESSIONS_DIR = os.path.join(RESOURCES, "prev_sessions")
 
-VIDEO_PATTERN = re.compile(r"^(?P<subject>[^_]+)_(?P<year>\d{4})_(?P<month>\d{2})_(?P<day>\d{2})\.mp4$")
+VIDEO_PATTERN = re.compile(
+    r"^(?P<subject>[^_]+)_(?P<year>\d{4})_(?P<month>\d{2})_(?P<day>\d{2})"
+    r"(?:_\d{2}_\d{2}_\d{2})?(?:_[^.]*)?\.mp4$"
+)
+
+
+def video_frame_count(video_path):
+    capture = cv2.VideoCapture(video_path)
+    try:
+        return int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    finally:
+        capture.release()
+
+
+def pick_video(video_paths, tracking_path):
+    """Return (video_path, None), or (None, reason) when no single video fits."""
+    if len(video_paths) == 1:
+        return video_paths[0], None
+
+    rows = len(pd.read_hdf(tracking_path))
+    matches = [path for path in video_paths if video_frame_count(path) == rows]
+    if len(matches) == 1:
+        return matches[0], None
+
+    names = ", ".join(os.path.basename(path) for path in video_paths)
+    return None, f"{len(matches)} of {len(video_paths)} videos ({names}) have {rows} frames like the tracking"
 
 
 def find_candidates():
     """Return (session_name, video_path, tracking_path) for each new, complete date."""
-    ready, missing_tracking, existing = [], [], []
+    ready, missing_tracking, ambiguous, existing = [], [], [], []
 
+    videos_by_date = defaultdict(list)
     for filename in sorted(os.listdir(VIDEOS_DIR)):
         match = VIDEO_PATTERN.match(filename)
         if match is None:
             continue
+        key = match.group("subject", "year", "month", "day")
+        videos_by_date[key].append(os.path.join(VIDEOS_DIR, filename))
 
-        subject, year, month, day = match.group("subject", "year", "month", "day")
+    for (subject, year, month, day), video_paths in sorted(videos_by_date.items()):
         session_name = f"session_{subject}_{day}_{month}_{year}"
         session_path = os.path.join(SESSIONS_DIR, session_name)
 
@@ -45,9 +82,14 @@ def find_candidates():
             missing_tracking.append((session_name, tracking_name))
             continue
 
-        ready.append((session_name, os.path.join(VIDEOS_DIR, filename), tracking_path))
+        video_path, reason = pick_video(video_paths, tracking_path)
+        if video_path is None:
+            ambiguous.append((session_name, reason))
+            continue
 
-    return ready, missing_tracking, existing
+        ready.append((session_name, video_path, tracking_path))
+
+    return ready, missing_tracking, ambiguous, existing
 
 
 def transfer(src, dst, link):
@@ -67,11 +109,13 @@ def main():
         if not os.path.isdir(directory):
             sys.exit(f"Missing directory: {directory}")
 
-    ready, missing_tracking, existing = find_candidates()
+    ready, missing_tracking, ambiguous, existing = find_candidates()
 
     print(f"{len(existing)} session folder(s) already present, skipped.")
     for session_name, tracking_name in missing_tracking:
         print(f"SKIP {session_name}: no tracking file {tracking_name}")
+    for session_name, reason in ambiguous:
+        print(f"SKIP {session_name}: can't tell which video the tracking belongs to; {reason}")
 
     if not ready:
         print("Nothing to create.")
